@@ -1,0 +1,64 @@
+# Local backing services (Technical Plan, Local development). Start with `just up`, which also
+# verifies them. Every port is published on 127.0.0.1 only. Values here are TEST-ONLY.
+name: voidforge
+
+services:
+  postgres:
+    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    environment:
+      POSTGRES_USER: voidforge
+      POSTGRES_PASSWORD: voidforge-local-test-password
+      POSTGRES_DB: voidforge
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # Postgres 18 images keep data under /var/lib/postgresql/<major>/docker.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "--host=127.0.0.1", "--username=voidforge", "--dbname=voidforge"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  dex:
+    build:
+      context: ./dex
+      args:
+        DEX_CONFIG: ${DEX_CONFIG:-config.yaml}
+    image: voidforge-dex:local
+    ports:
+      - "127.0.0.1:5556:5556"
+    healthcheck:
+      # Healthy means dex serves its discovery document.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5556/dex/.well-known/openid-configuration"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.36.0@sha256:57c04cbd8e7022f32bb84c4ac005d79baf8b08e2c5be44facf11f5f1f9944ba2
+    ports:
+      - "127.0.0.1:3000:3000"   # Grafana
+      - "127.0.0.1:4317:4317"   # OTLP gRPC
+      - "127.0.0.1:4318:4318"   # OTLP HTTP
+    healthcheck:
+      # Stricter than the image's own check, which skips components that are not listening:
+      # every component must answer, including the collector's health endpoint.
+      test:
+        - CMD-SHELL
+        - >-
+          test -f /tmp/ready
+          && curl -fsS -o /dev/null http://127.0.0.1:3000/api/health
+          && curl -fsS -o /dev/null http://127.0.0.1:13133/ready
+          && curl -fsS -o /dev/null http://127.0.0.1:3100/ready
+          && curl -fsS -o /dev/null http://127.0.0.1:3200/ready
+          && curl -fsS -o /dev/null http://127.0.0.1:9090/-/ready
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+volumes:
+  postgres-data:

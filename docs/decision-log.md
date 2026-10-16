@@ -135,3 +135,31 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Scope: library code of the three crates. Their test code is covered by the clippy bans, which run with `--all-targets`, but not by this check.
 - Proof: the `float_values/` fixtures in D-012 must be rejected in all three crates, naming exactly the expected items; that includes a promoted constant array, whose bytes sit in a skipped allocation. Integer code and "f64" in long, short and byte-string constants must pass, and a crate that does not compile must make the check exit 2.
 - Fixed in P0.4 review: QA found that a short string such as "f32 f64" was rejected, because MIR dumps it on one line without an address. Whole allocation blocks are now skipped, and skipping also stops at the next item header, so an unexpected format can never hide later code.
+
+### D-014: Local stack
+
+- Date and package: 2026-10-16, P0.5.
+- Decision: `deploy/compose.yaml` (Compose project `voidforge`) runs Postgres 18.6, dex v2.46.0 and otel-lgtm 0.36.0. Images are pinned by tag and digest, and each service has a real healthcheck:
+  - Postgres: `pg_isready`.
+  - dex: its discovery document answers.
+  - otel-lgtm: the ready file plus every component, collector included. This is stricter than the image's own check, which skips components that are not listening.
+
+  Every port is published on 127.0.0.1 only, and Postgres data lives in the `voidforge_postgres-data` volume.
+- dex configuration: `deploy/dex/config.yaml` (local) and `config.ci.yaml` (CI) are identical except that CI adds the password grant. The local config allows authorization code, refresh and device code. Client credentials are never allowed (Technical Plan, Decisions 8). Storage is in memory, there are two static test users, the confidential `voidforge-web` client redirects to `http://localhost:8081/callback`, and the public `voidforge-cli` client uses the device flow. All credentials are test-only.
+- Config injection: the dex config is baked into a small local image (`deploy/dex/Dockerfile`, selected by `DEX_CONFIG`) instead of bind-mounted. On the owner's machine the colima VM cannot read `~/Documents`, so bind mounts and Compose file `configs` both fail with "operation not permitted". A build context is sent through the Docker API, so this works on any host without changing machine settings.
+- `just up` runs `docker compose up --build --wait` and then `deploy/verify_stack.py`. The verifier checks every service by effect and exits 0 healthy, 1 a check failed, or 2 could not check (Docker or Compose missing). Its checks:
+  - Postgres: a TCP connection and `select 1`.
+  - dex from the host: discovery with exactly the expected grant types, PKCE S256 and JWKS keys. A device code is issued to the CLI client. The web client's PKCE request reaches the login page, and an unregistered redirect gets 400. Client credentials are refused. The password grant is refused locally, and with the CI config it issues an ID token with the right `iss` and `aud`.
+  - dex from a host-network container: the same issuer and key IDs (D-015).
+  - otel-lgtm: Grafana health, an OTLP/HTTP export accepted, and OTLP/gRPC listening.
+- The `justfile` has `up`, `status`, `down`, `logs`, and `lint`, `supply-chain` and `test`, which run the same commands as the CI jobs of those names. The plan's other recipes, `e2e` (P3.6), `replay` (P2.7), `seed` (P2.9) and `bless` (P2.6), are added by the packages that implement them rather than stubbed, so no recipe pretends to work.
+
+### D-015: One dex issuer for the browser, the host and containers
+
+- Date and package: 2026-10-16, P0.5. Agreed with orch-advisor; the Technical Plan's Local development paragraph was updated in the same pull request.
+- Decision: the issuer stays `http://localhost:5556/dex`. dex is published on `localhost:5556`, and containers that need the issuer use host networking. Today that is the discovery probe in `just up`; later the server and web images. A host-network container cannot use compose service names, so it reaches Postgres and the other services through their published `localhost` ports, as a binary run with cargo does. `just up` fails loudly with a hint if the host-network probe cannot reach dex. Docker Desktop needs its host-networking setting enabled; Linux and colima work as is.
+- Evidence (dex v2.46.0, Docker 29.5.2 with colima):
+  - The plan's "matching host alias" cannot redirect `localhost`. With `--add-host localhost:203.0.113.7`, `localhost` still resolves to loopback in the container.
+  - An issuer such as `http://dex.localhost:5556/dex` with a compose network alias works for glibc and musl resolvers, but curl in a container resolves `*.localhost` to loopback regardless of DNS, so it depends on the client.
+  - With host networking, curl and busybox in a container got the same discovery and issuer as the host, and a bridge-network container could not connect.
+- Fallback for the Phase 5 images, if host networking becomes painful: keep the issuer string `http://localhost:5556/dex`, and have the containers fetch discovery and keys from an internal URL such as `http://dex:5556/dex/...`. That is a configuration split, not an issuer change. It is not built now.

@@ -59,7 +59,20 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 | supply-chain | `cargo deny check`, which needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) |
 | test | `cargo nextest run --workspace --locked --no-tests=warn`, which needs [cargo-nextest](https://nexte.st) |
 
-`cargo build` builds everything.
+`cargo build` builds everything. The [`justfile`](justfile) has the same commands as `just lint`, `just supply-chain` and `just test`.
+
+### Local stack
+
+`just up` starts Postgres, dex and otel-lgtm ([`deploy/`](deploy/README.md)), waits until each is healthy, then verifies them by effect: Postgres answers a query; dex serves discovery and keys and accepts and refuses the right flows; a host-network container sees the same issuer; and otel-lgtm accepts OTLP. It fails loudly if anything is wrong. `just status` re-runs the verification and `just down` stops the stack, keeping Postgres data. Everything is published on `localhost` only:
+
+| Service | Address |
+| --- | --- |
+| Postgres | `postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge` |
+| dex | issuer `http://localhost:5556/dex` |
+| Grafana | `http://localhost:3000` |
+| OTLP | gRPC `localhost:4317`, HTTP `localhost:4318` |
+
+The credentials and the static dex users and clients are test-only values ([deploy/README.md](deploy/README.md)). Recipes for later packages (`e2e`, `replay`, `seed`, `bless`) are added by those packages, not stubbed ([D-014](docs/decision-log.md#d-014-local-stack)).
 
 The workspace has no tests yet, so plain `cargo nextest run` exits with nextest's no-tests code (4). Until the first real test lands (P1.1 at the latest), use `cargo nextest run --no-tests=warn` on the command line. Never add a repository-wide override such as `NEXTEST_NO_TESTS`, and never add placeholder tests to satisfy the runner ([decision log D-004](docs/decision-log.md#d-004-zero-test-runs-before-the-first-real-test)).
 
@@ -72,4 +85,4 @@ The workspace has no tests yet, so plain `cargo nextest run` exits with nextest'
 - `deny.toml` holds the dependency allowlist. A crate outside it fails `supply-chain`, so a new dependency means a new allowlist entry, its license and a decision-log entry ([D-008](docs/decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist)).
 - Agent-harness managed blocks never enter tracked files. The `lint` job rejects their markers ([D-009](docs/decision-log.md#d-009-managed-block-markers-rejected-in-tracked-files)).
 - `voidforge-web` may depend only on `voidforge-api-types` and `voidforge-telemetry` among workspace crates, directly or transitively, in any dependency kind. `tests/guardrails/check_web_deps.py` enforces this in CI ([D-011](docs/decision-log.md#d-011-web-dependency-isolation-check)).
-- These are not in the repository yet; each arrives with its package: `justfile` and `deploy/` (P0.5), `rules/` (P1.2), `tests/golden/` (P2.6) and `dockerfiles/` (P5.2).
+- These are not in the repository yet; each arrives with its package: `rules/` (P1.2), `tests/golden/` (P2.6) and `dockerfiles/` (P5.2).
