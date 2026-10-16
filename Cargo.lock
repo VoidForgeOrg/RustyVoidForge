@@ -45,6 +45,9 @@ version = "0.1.0"
 [[package]]
 name = "voidforge-web"
 version = "0.1.0"
+dependencies = [
+ "voidforge-core",
+]
 
 [[package]]
 name = "voidforge-worldgen"

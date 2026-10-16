@@ -9,3 +9,6 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+voidforge-core = { workspace = true }
