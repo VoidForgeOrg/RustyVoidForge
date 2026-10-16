@@ -6,8 +6,8 @@ Clippy's bans (crate clippy.toml, decision log D-010) catch named float types an
 operators, but not a float that is never named, such as `1.25f64.sqrt().to_bits()`,
 `let x = 2.5; x as i64`, or `Duration::as_secs_f64()`. This check is type-aware: it
 compiles each crate's library to MIR, where every local, constant and call carries its
-type, and rejects any f32 or f64 there. String literals and the byte dumps of constant data
-are ignored, so the text "f64" in a message is not a float.
+type, and rejects any f32 or f64 there. String literals and the allocation blocks that dump
+constant data as bytes are skipped, so the text "f64" in a message is not a float.
 
 Usage: check_no_floats.py [workspace-dir]
 Exit codes: 0 no floats, 1 floats found, 2 could not check (build failed or no MIR produced).
@@ -23,8 +23,8 @@ import tempfile
 CRATES = ["voidforge-core", "voidforge-rules", "voidforge-worldgen"]
 FLOAT = re.compile(r"\bf(?:32|64)\b")
 STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
-ITEM_HEADER = re.compile(r"^(?:(fn) (\S+?)\(|(const|static|static mut) (\S+?):)")
-ALLOC_DUMP = re.compile(r"^\s*0x[0-9a-f]+ \u2502")  # bytes of string and other constant data
+ITEM_HEADER = re.compile(r"^(?:(fn) (\S+?)\(|(const|static|static mut) (\S+?): )")
+ALLOC_BLOCK = re.compile(r"^alloc\d+ \(")  # "allocN (size: …) {" … "}": bytes of string and other constant data
 
 
 def error(message):
@@ -65,13 +65,24 @@ def main():
             error("empty MIR for " + crate)
         current = "item (unnamed)"
         found = {}
+        in_alloc = False
         for line in mir.splitlines():
+            if in_alloc:
+                # An allocation block ends at its "}". Stop early at the next item or allocation
+                # header too, so an unexpected format can never hide the rest of the MIR.
+                if line == "}":
+                    in_alloc = False
+                    continue
+                if not (ITEM_HEADER.match(line) or ALLOC_BLOCK.match(line)):
+                    continue
+                in_alloc = False
+            if ALLOC_BLOCK.match(line):
+                in_alloc = not line.rstrip().endswith("}")
+                continue
             header = ITEM_HEADER.match(line)
             if header:
                 kind, name = (header.group(1), header.group(2)) if header.group(1) else (header.group(3), header.group(4))
                 current = kind + " " + name
-            if ALLOC_DUMP.match(line):
-                continue
             if FLOAT.search(STRING.sub('""', line)):
                 found.setdefault(current, line.strip())
         for fn, line in sorted(found.items()):  # fn is "<kind> <name>", e.g. "fn halves"
