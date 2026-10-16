@@ -69,7 +69,7 @@ Twelve crates in three layers keep the deterministic core free of anything that 
 
 ![Workspace layering: 12 crates in 3 layers](Dependecies.png)
 
-Only `voidforge-host` calls the core's state-changing entry points, and only the binaries talk to the outside world. voidforge-web never links the server or the core: its only workspace dependencies are api-types and telemetry, and CI fails if that ever changes.
+Only `voidforge-host` changes the live `World`, and only the binaries talk to the outside world. Two offline callers also drive the core's state-changing entry points, never against live state: `voidforge-replay`, which rebuilds a world from a snapshot and the log, and tests. Host recovery and replay map a log record to `advance_to` or `apply` through one shared function, so they cannot drift apart; P2.5 adds it to a crate both may depend on, and P2.7 reuses it. voidforge-web never links the server or the core: its only workspace dependencies are api-types and telemetry, and CI fails if that ever changes.
 
 | Crate | Role | May depend on |
 | --- | --- | --- |
