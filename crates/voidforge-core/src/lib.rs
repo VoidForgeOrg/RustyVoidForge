@@ -7,3 +7,7 @@
     clippy::disallowed_types,
     clippy::float_arithmetic
 )]
+
+pub fn wall_clock_ms() -> u128 {
+    std::time::Instant::now().elapsed().as_millis()
+}
