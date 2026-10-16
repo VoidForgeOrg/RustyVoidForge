@@ -30,16 +30,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: No managed blocks in tracked files
         run: .github/scripts/check-no-managed-blocks.sh
-      - name: The managed-block check rejects a marker
-        run: |
-          tmp=$(mktemp -d)
-          git -C "$tmp" init -q
-          printf '<!-- BEGIN %s %s: example -->\n' "OpenRig MANAGED" "BLOCK" > "$tmp/AGENTS.md"
-          git -C "$tmp" add AGENTS.md
-          if .github/scripts/check-no-managed-blocks.sh "$tmp"; then
-            echo "::error::the managed-block check passed a file that contains a marker"
-            exit 1
-          fi
+      - name: Managed-block check regression cases
+        run: .github/scripts/test-check-no-managed-blocks.sh
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors

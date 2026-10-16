@@ -50,6 +50,7 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 | CI job | Command |
 | --- | --- |
 | lint | `.github/scripts/check-no-managed-blocks.sh` |
+| lint | `.github/scripts/test-check-no-managed-blocks.sh` |
 | lint | `cargo fmt --all --check` |
 | lint | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | supply-chain | `cargo deny check`, which needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) |

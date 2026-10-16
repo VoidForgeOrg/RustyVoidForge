@@ -14,7 +14,7 @@
 CI runs these as the required `lint`, `supply-chain` and `test` checks; they also run locally.
 
 - [ ] `cargo build`
-- [ ] `.github/scripts/check-no-managed-blocks.sh`
+- [ ] `.github/scripts/check-no-managed-blocks.sh` and `.github/scripts/test-check-no-managed-blocks.sh`
 - [ ] `cargo fmt --all --check`
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - [ ] `cargo deny check`

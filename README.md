@@ -24,6 +24,7 @@ Install [rustup](https://rustup.rs); `rust-toolchain.toml` selects the pinned to
 ```sh
 cargo build
 .github/scripts/check-no-managed-blocks.sh
+.github/scripts/test-check-no-managed-blocks.sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo deny check                    # needs cargo-deny

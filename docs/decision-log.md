@@ -53,7 +53,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 - Date and package: 2026-10-16, P0.3.
 - Decision: one GitHub Actions workflow, `.github/workflows/ci.yml`, runs on pull requests to main and on pushes to main. It has three jobs, each a required status check on main from the GitHub Actions app:
-  - `lint`: the managed-block check and a self-test that it rejects a marker, `cargo fmt --all --check`, and clippy with warnings as errors.
+  - `lint`: the managed-block check and its regression cases, `cargo fmt --all --check`, and clippy with warnings as errors.
   - `supply-chain`: `cargo deny check`.
   - `test`: `cargo nextest run --workspace --locked --no-tests=warn`, with the D-004 removal TODO.
 - Pins:
@@ -82,5 +82,5 @@ Each entry records its date, the package that made it, the decision, the reasons
 ### D-009: Managed-block markers rejected in tracked files
 
 - Date and package: 2026-10-16, P0.3.
-- Decision: the `lint` job runs `.github/scripts/check-no-managed-blocks.sh`. It fails if any tracked file contains the agent-harness managed-block marker. The script builds the marker from two halves so its own source never matches. A second step builds a throwaway repository with a marker and checks that the script rejects it.
+- Decision: the `lint` job runs `.github/scripts/check-no-managed-blocks.sh`. It fails if any tracked file contains the agent-harness managed-block marker. The script builds the marker from two halves so its own source never matches. It exits 0 when clean, 1 when markers are found, and 2 when it cannot check, such as a missing directory, a non-repository or a Git error. An error therefore fails the job instead of passing it (fixed after the P0.3 review found the first version failed open). `.github/scripts/test-check-no-managed-blocks.sh` runs regression cases in throwaway repositories on every CI run: clean, committed marker, staged marker, markers only in untracked or skip-worktree files, non-repository, Git failure and missing directory.
 - Why: the root `AGENTS.md` and `CLAUDE.md` may carry local managed blocks in an owner checkout (D-005), protected there by `skip-worktree` and a local exclude. This check is the mechanical backstop if either protection is lost.
