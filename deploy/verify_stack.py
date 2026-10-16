@@ -35,8 +35,8 @@ CI_CONFIG = os.environ.get("DEX_CONFIG", "config.yaml") == "config.ci.yaml"
 PROBE_IMAGE = "curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6"
 HOST_NETWORK_HINT = (
     "A host-network container could not reach dex on localhost:5556. Containers that consume the "
-    "issuer use host networking (decision log D-015). It works on Linux and colima; Docker Desktop "
-    "needs Settings > Resources > Network > 'Enable host networking'."
+    "issuer use host networking (decision log D-015), verified with colima. Docker Desktop needs "
+    "Settings > Resources > Network > 'Enable host networking'."
 )
 # TEST-ONLY values from deploy/dex/config.yaml.
 WEB_CLIENT, WEB_SECRET, WEB_REDIRECT = "voidforge-web", "voidforge-web-local-test-secret", "http://localhost:8081/callback"
