@@ -6,3 +6,6 @@
 .codex/
 .agents/
 .mcp.json
+
+# Cargo build output
+/target

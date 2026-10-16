@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+repository = "https://github.com/VoidForgeOrg/RustyVoidForge"
+
+[workspace.dependencies]
+voidforge-api-types = { path = "crates/voidforge-api-types", version = "0.1.0" }
+voidforge-bots = { path = "crates/voidforge-bots", version = "0.1.0" }
+voidforge-core = { path = "crates/voidforge-core", version = "0.1.0" }
+voidforge-host = { path = "crates/voidforge-host", version = "0.1.0" }
+voidforge-replay = { path = "crates/voidforge-replay", version = "0.1.0" }
+voidforge-rules = { path = "crates/voidforge-rules", version = "0.1.0" }
+voidforge-server = { path = "crates/voidforge-server", version = "0.1.0" }
+voidforge-store = { path = "crates/voidforge-store", version = "0.1.0" }
+voidforge-telemetry = { path = "crates/voidforge-telemetry", version = "0.1.0" }
+voidforge-testkit = { path = "crates/voidforge-testkit", version = "0.1.0" }
+voidforge-web = { path = "crates/voidforge-web", version = "0.1.0" }
+voidforge-worldgen = { path = "crates/voidforge-worldgen", version = "0.1.0" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
