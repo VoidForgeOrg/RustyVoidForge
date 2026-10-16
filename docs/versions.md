@@ -25,6 +25,18 @@ Pinned in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) ([D-007](dec
 | cargo-nextest | 0.9.148 | `tool: cargo-nextest@0.9.148` |
 | cargo-deny | 0.20.2 | `tool: cargo-deny@0.20.2` ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist)) |
 
+## Guardrail fixtures
+
+Used only by `tests/guardrails/run_fixtures.py`, inside a temporary copy of the workspace ([D-012](decision-log.md#d-012-guardrail-fixtures)). They are not workspace dependencies.
+
+| Item | Version | Why |
+| --- | --- | --- |
+| uuid | 1.28.0 (features v1, v3 to v8) | Proves the UUID-generation and `Timestamp::now` bans |
+| getrandom | 0.4.3 (feature sys_rng) | Proves the system-randomness bans |
+| rand_chacha | 0.10.0 | Control: seeded generation stays allowed |
+| toml | 1.1.8 | Proves the float check sees a float read from a dependency |
+| Python | 3, standard library only; CI uses the runner image's `python3`, and the scripts also run on Python 3.9 | Runs the fixture harness and the web check |
+
 ## Tools: planned, not introduced
 
 | Tool | Introduced by |

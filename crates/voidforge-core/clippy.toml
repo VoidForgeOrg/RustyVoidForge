@@ -1,0 +1,81 @@
+# Determinism bans for voidforge-core, voidforge-rules and voidforge-worldgen (Technical Plan P0.4,
+# Architectural Design "Determinism rules"). The three crates carry identical copies of this file;
+# tests/guardrails/run_fixtures.py fails if they differ and proves every path below with a fixture.
+# Each crate's lib.rs forbids the lints these lists feed, so no exception is possible.
+# Paths into crates that are not dependencies yet use allow-invalid; their fixtures add the crate.
+
+disallowed-methods = [
+    # Clocks: game time is an input, never read (Time is an input).
+    { path = "std::time::Instant::now", reason = "clocks: game time is an input, stamped by the host" },
+    { path = "std::time::Instant::elapsed", reason = "clocks: game time is an input, stamped by the host" },
+    { path = "std::time::SystemTime::now", reason = "clocks: game time is an input, stamped by the host" },
+    { path = "std::time::SystemTime::elapsed", reason = "clocks: game time is an input, stamped by the host" },
+    { path = "uuid::Timestamp::now", reason = "clocks: game time is an input, stamped by the host", allow-invalid = true },
+    # Threads (Single-threaded core).
+    { path = "std::thread::spawn", reason = "threads: the core is single-threaded" },
+    { path = "std::thread::scope", reason = "threads: the core is single-threaded" },
+    { path = "std::thread::sleep", reason = "threads: the core is single-threaded and never waits" },
+    # Locks and other concurrency primitives (Single-threaded core).
+    { path = "std::sync::mpsc::channel", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::mpsc::sync_channel", reason = "locks: no concurrency primitives in the core" },
+    # System randomness (Seeded randomness only).
+    { path = "getrandom::fill", reason = "system randomness: only seeded generators", allow-invalid = true },
+    { path = "getrandom::fill_uninit", reason = "system randomness: only seeded generators", allow-invalid = true },
+    { path = "getrandom::u32", reason = "system randomness: only seeded generators", allow-invalid = true },
+    { path = "getrandom::u64", reason = "system randomness: only seeded generators", allow-invalid = true },
+    # UUID generation (Engine-assigned IDs: player UUIDs arrive in commands).
+    { path = "uuid::Uuid::new_v1", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::now_v1", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::new_v3", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::new_v4", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::new_v5", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::new_v6", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::now_v6", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::new_v7", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::now_v7", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+    { path = "uuid::Uuid::new_v8", reason = "UUID generation: IDs come from World.next_id or arrive in commands", allow-invalid = true },
+]
+
+disallowed-types = [
+    # Clocks.
+    { path = "std::time::Instant", reason = "clocks: game time is an input, stamped by the host" },
+    { path = "std::time::SystemTime", reason = "clocks: game time is an input, stamped by the host" },
+    # Hash-ordered collections (Ordered iteration: every collection iterates in ID order).
+    { path = "std::collections::HashMap", reason = "hash-ordered collections: use BTreeMap" },
+    { path = "std::collections::HashSet", reason = "hash-ordered collections: use BTreeSet" },
+    # System randomness.
+    { path = "std::hash::RandomState", reason = "system randomness: randomly keyed hashing" },
+    { path = "getrandom::SysRng", reason = "system randomness: only seeded generators", allow-invalid = true },
+    # Threads.
+    { path = "std::thread::Builder", reason = "threads: the core is single-threaded" },
+    { path = "std::thread::JoinHandle", reason = "threads: the core is single-threaded" },
+    { path = "std::thread::Scope", reason = "threads: the core is single-threaded" },
+    { path = "std::thread::ScopedJoinHandle", reason = "threads: the core is single-threaded" },
+    # Locks and other concurrency primitives.
+    { path = "std::sync::Mutex", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::RwLock", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::Condvar", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::Barrier", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::Once", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::OnceLock", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::LazyLock", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::mpsc::Sender", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::mpsc::SyncSender", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::mpsc::Receiver", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicBool", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicI8", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicI16", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicI32", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicI64", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicIsize", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicU8", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicU16", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicU32", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicU64", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicUsize", reason = "locks: no concurrency primitives in the core" },
+    { path = "std::sync::atomic::AtomicPtr", reason = "locks: no concurrency primitives in the core" },
+    # Floats (Integer arithmetic: no float types in the core). Float operations are also
+    # caught by the forbidden clippy::float_arithmetic lint.
+    { path = "f32", reason = "floats: integers only, 64-bit storage and 128-bit intermediates" },
+    { path = "f64", reason = "floats: integers only, 64-bit storage and 128-bit intermediates" },
+]

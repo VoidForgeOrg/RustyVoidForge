@@ -8,7 +8,7 @@ Binary. It is a stub today; P4.1 is the first package that fills it. The layerin
 
 - Workspace: `voidforge-api-types` and `voidforge-telemetry` only.
 - External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): axum, tower-http, maud, openidconnect, tower-sessions (in-memory store), reqwest, clap and anyhow, plus scraper for smoke tests.
-- Never: core, host, store or server, directly or anywhere in its dependency tree. P0.4 adds the dependency check that fails CI on this. Until then only review guards it: cargo does not fail on a dependency on a binary-only crate such as server, it only warns and ignores it ([D-003](../../docs/decision-log.md#d-003-crate-shapes-and-workspace-registration)).
+- Never: core, host, store or server, directly or anywhere in its dependency tree. `tests/guardrails/check_web_deps.py` fails CI on any workspace crate other than api-types and telemetry in this crate's resolved dependencies, or in the declarations of this crate or any workspace crate it reaches, of any kind ([D-011](../../docs/decision-log.md#d-011-web-dependency-isolation-check)).
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
 ## Invariants

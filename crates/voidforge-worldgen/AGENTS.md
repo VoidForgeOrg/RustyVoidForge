@@ -16,7 +16,7 @@ Library. It is a stub today; P1.12 is the first package that fills it. The layer
 - The same 64-bit seed always yields the same world and state hash. The seed is recorded in the first snapshot.
 - Generation defaults are rules data, not constants (the [P1.12 defaults](../../docs/Voidforge%20Technical%20Plan.md#phase-1-core-engine)).
 - Derived planet values (rates and next event) are stored with each planet, so a restored snapshot needs no re-solve.
-- The determinism rules apply here: no clocks, hash-ordered collections, threads, locks, system randomness, UUID generation or float arithmetic ([P0.4](../../docs/Voidforge%20Technical%20Plan.md#phase-0-foundations), [Determinism rules](../../docs/Voidforge%20Architectural%20Design.md#determinism-rules)). Review enforces them until P0.4 adds the clippy bans.
+- The determinism rules apply here: no clocks, hash-ordered collections, threads, locks, system randomness, UUID generation or float arithmetic ([P0.4](../../docs/Voidforge%20Technical%20Plan.md#phase-0-foundations), [Determinism rules](../../docs/Voidforge%20Architectural%20Design.md#determinism-rules)). This crate's `clippy.toml` lists the banned paths, and `lib.rs` forbids the lints they feed, so no item can opt out. `tests/guardrails/run_fixtures.py` proves every ban here ([D-010](../../docs/decision-log.md#d-010-determinism-bans-in-core-rules-and-worldgen)). To ban another item, add it to all three identical `clippy.toml` files (core, rules, worldgen) and to a fixture. `tests/guardrails/check_no_floats.py` also rejects any `f32` or `f64` in this crate's compiled library, including floats no clippy ban can see ([D-013](../../docs/decision-log.md#d-013-type-aware-float-check)).
 
 ## Tests
 

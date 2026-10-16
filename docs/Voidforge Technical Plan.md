@@ -93,12 +93,13 @@ voidforge/
   Cargo.toml            workspace members, shared lints, pinned versions
   rust-toolchain.toml
   justfile
-  clippy.toml           banned APIs for core, rules and worldgen
   deny.toml             cargo-deny policy and dependency allowlist
-  crates/               one folder per crate, each with an AGENTS.md
+  crates/               one folder per crate, each with an AGENTS.md; core, rules and
+                        worldgen also hold identical clippy.toml files with the banned APIs
   rules/                versioned rules files (TOML)
   docs/                 game design and architectural design, as Markdown
   tests/golden/         recorded logs and their expected hashes
+  tests/guardrails/     fixtures proving the determinism bans and web isolation
   deploy/               compose file and dex config
   dockerfiles/          server and web images
   .github/workflows/    CI
@@ -193,7 +194,7 @@ An empty but fully guarded workspace, so every later package lands in CI, under 
 | P0.1 | Workspace skeleton in the new repository: every crate as a stub, toolchain pinned, edition 2024, workspace lints, `unsafe` forbidden | repo root | `cargo build` passes, and `cargo nextest run --no-tests=warn` passes and finds every crate; the stubs have no tests yet, so the plain command exits with nextest's no-tests code until the first real test lands |
 | P0.2 | Agent conventions: root and per-crate `AGENTS.md`, PR template, decision log, version table | repo root | Merged, linked from the README, and every `AGENTS.md` links to the specs |
 | P0.3 | CI baseline: lint, supply chain and test stages, with caching | `.github/workflows` | The checks are required on main; the test stage runs plain `cargo nextest run` once the workspace has a real test, and until then may pass `--no-tests=warn` on that command alone, with a comment naming the package that removes it (the first package to add a real test, P1.1 at the latest) |
-| P0.4 | Determinism guardrails: clippy bans on clocks, hash-ordered collections, threads, locks, system randomness, UUID generation and float arithmetic in the core, rules and worldgen, plus a dependency check that keeps `voidforge-web` away from the core, host, store and server | `voidforge-core`, voidforge-rules, voidforge-worldgen, `clippy.toml` | A fixture with each banned call, and one with a forbidden dependency, fails CI |
+| P0.4 | Determinism guardrails: clippy bans on clocks, hash-ordered collections, threads, locks, system randomness, UUID generation and float arithmetic in the core, rules and worldgen, plus a dependency check that keeps `voidforge-web` away from the core, host, store and server | `voidforge-core`, voidforge-rules, voidforge-worldgen, their `clippy.toml` files, `tests/guardrails/` | A fixture with each banned call, and one with a forbidden dependency, fails CI |
 | P0.5 | Local stack: compose with Postgres, dex and otel-lgtm; dex static users and clients; the `justfile` | `deploy/`, `justfile` | `just up` reports every service healthy and dex serves its discovery document |
 | P0.6 | Telemetry bootstrap: one init function for tracing and OTLP export, used by every binary | `voidforge-telemetry` | A stub binary's span shows up in local Grafana |
 

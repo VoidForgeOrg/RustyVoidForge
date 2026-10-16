@@ -53,6 +53,9 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 | lint | `.github/scripts/test-check-no-managed-blocks.sh` |
 | lint | `cargo fmt --all --check` |
 | lint | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| lint | `python3 tests/guardrails/check_no_floats.py` |
+| lint | `python3 tests/guardrails/check_web_deps.py` |
+| lint | `python3 tests/guardrails/run_fixtures.py`, which proves the determinism bans and the web check with fixtures ([tests/guardrails](tests/guardrails/README.md)) |
 | supply-chain | `cargo deny check`, which needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) |
 | test | `cargo nextest run --workspace --locked --no-tests=warn`, which needs [cargo-nextest](https://nexte.st) |
 
@@ -64,8 +67,9 @@ The workspace has no tests yet, so plain `cargo nextest run` exits with nextest'
 
 - `unsafe` is forbidden in every crate through the workspace lints. A crate cannot re-allow it.
 - Every crate's `Cargo.toml` keeps `[lints] workspace = true`.
-- The determinism rules in the [Architectural Design](docs/Voidforge%20Architectural%20Design.md#determinism-rules) apply to `voidforge-core`, and the Technical Plan extends the same bans to `voidforge-rules` and `voidforge-worldgen`. They are enforced by review for now. Clippy bans in `clippy.toml` arrive with P0.4.
+- The determinism rules in the [Architectural Design](docs/Voidforge%20Architectural%20Design.md#determinism-rules) apply to `voidforge-core`, and the Technical Plan extends the same bans to `voidforge-rules` and `voidforge-worldgen`. Clippy enforces the bans through identical `clippy.toml` files in those three crates and a `#![forbid(...)]` in each `lib.rs`, so there are no exceptions. Fixtures in `tests/guardrails/` prove every ban ([D-010](docs/decision-log.md#d-010-determinism-bans-in-core-rules-and-worldgen)). A `clippy.toml` anywhere else is a deliberate choice that needs its own decision-log entry. Clippy cannot see a float that is never named, so `tests/guardrails/check_no_floats.py` also rejects any `f32` or `f64` in those crates' compiled MIR ([D-013](docs/decision-log.md#d-013-type-aware-float-check)).
 - CI runs the `lint`, `supply-chain` and `test` jobs on every pull request and on main. All three are required checks on main ([D-007](docs/decision-log.md#d-007-ci-baseline-and-required-checks)).
 - `deny.toml` holds the dependency allowlist. A crate outside it fails `supply-chain`, so a new dependency means a new allowlist entry, its license and a decision-log entry ([D-008](docs/decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist)).
 - Agent-harness managed blocks never enter tracked files. The `lint` job rejects their markers ([D-009](docs/decision-log.md#d-009-managed-block-markers-rejected-in-tracked-files)).
-- These are not in the repository yet; each arrives with its package: determinism clippy bans and the web dependency check (P0.4), `justfile` and `deploy/` (P0.5), `rules/` (P1.2), `tests/golden/` (P2.6) and `dockerfiles/` (P5.2).
+- `voidforge-web` may depend only on `voidforge-api-types` and `voidforge-telemetry` among workspace crates, directly or transitively, in any dependency kind. `tests/guardrails/check_web_deps.py` enforces this in CI ([D-011](docs/decision-log.md#d-011-web-dependency-isolation-check)).
+- These are not in the repository yet; each arrives with its package: `justfile` and `deploy/` (P0.5), `rules/` (P1.2), `tests/golden/` (P2.6) and `dockerfiles/` (P5.2).
