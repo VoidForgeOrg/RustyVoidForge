@@ -15,7 +15,7 @@ Library, delivered in P0.6 ([D-016](../../docs/decision-log.md#d-016-telemetry-b
 
 - Telemetry is set up once, here. Binaries call `init` instead of configuring exporters themselves; a second `init` in one process is an error.
 - `OTEL_EXPORTER_OTLP_ENDPOINT` decides export. Set (locally `http://localhost:4318`), spans go to `<endpoint>/v1/traces`. Unset, the binary still runs and logs to stderr, and nothing waits on a collector.
-- `Telemetry::shutdown` flushes and reports spans it could not deliver as an error, within the 5-second export timeout. Dropping the guard flushes too and prints a failure to stderr.
+- `Telemetry::shutdown` flushes, always stops the exporter (even after a failed flush), and reports spans it could not deliver as an error, within the 5-second export timeout. Dropping the guard flushes too and prints a failure to stderr.
 - The core stays free of instrumentation, and the shell records the step statistics the core returns ([Operations and scaling](../../docs/Voidforge%20Architectural%20Design.md#operations-and-scaling)).
 
 ## Tests
@@ -29,6 +29,7 @@ cargo nextest run -p voidforge-telemetry
 Unit tests cover:
 - delivery of a span to an OTLP endpoint;
 - the delivery error when nothing listens;
+- a rejected flush still stopping the exporter, so nothing recorded afterwards is exported;
 - the offline path;
 - the second-init error.
 

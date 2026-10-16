@@ -101,13 +101,16 @@ impl Drop for Telemetry {
 }
 
 impl Exporter {
+    /// Flushes, then always shuts the provider down, even when the flush failed: the global
+    /// subscriber still holds the provider, so skipping shutdown would leave the exporter
+    /// running. A flush failure is reported in preference to a shutdown failure.
     fn shutdown(self) -> Result<(), Error> {
-        let delivery = |source| Error::Delivery {
-            endpoint: self.endpoint.clone(),
+        let flushed = self.provider.force_flush();
+        let stopped = self.provider.shutdown();
+        flushed.and(stopped).map_err(|source| Error::Delivery {
+            endpoint: self.endpoint,
             source,
-        };
-        self.provider.force_flush().map_err(delivery)?;
-        self.provider.shutdown().map_err(delivery)
+        })
     }
 }
 
@@ -182,18 +185,25 @@ mod tests {
         }
     }
 
-    /// A one-request OTLP/HTTP collector on a free local port that answers 200 OK.
-    fn collector() -> (String, mpsc::Receiver<Request>) {
+    /// An OTLP/HTTP collector on a free local port that answers every request with `status`
+    /// (for example "200 OK") and hands each request to the test.
+    fn collector(status: &'static str) -> (String, mpsc::Receiver<Request>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
         let base = format!("http://{}", listener.local_addr().expect("local address"));
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept the exporter's connection");
-            let request = read_request(&stream);
-            (&stream)
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
-                .expect("answer the exporter");
-            sender.send(request).expect("hand the request to the test");
+            for stream in listener.incoming() {
+                let stream = stream.expect("accept the exporter's connection");
+                let request = read_request(&stream);
+                let response =
+                    format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                (&stream)
+                    .write_all(response.as_bytes())
+                    .expect("answer the exporter");
+                if sender.send(request).is_err() {
+                    break; // the test has finished
+                }
+            }
         });
         (base, receiver)
     }
@@ -243,7 +253,7 @@ mod tests {
 
     #[test]
     fn shutdown_delivers_a_span_to_the_configured_endpoint() {
-        let (base, requests) = collector();
+        let (base, requests) = collector("200 OK");
         let (subscriber, telemetry) =
             build("telemetry-test", Some(&format!("{base}/"))).expect("build with an endpoint");
         assert!(telemetry.exports());
@@ -293,6 +303,38 @@ mod tests {
         );
         let expected = format!("{base}/v1/traces");
         assert!(matches!(&error, Error::Delivery { endpoint, .. } if *endpoint == expected));
+    }
+
+    #[test]
+    fn a_failed_flush_still_stops_the_exporter() {
+        // Regression (P0.6 review): a failed flush used to skip shutdown, leaving the exporter
+        // alive in the subscriber, so spans recorded after shutdown were still exported.
+        let (base, requests) = collector("400 Bad Request");
+        let (subscriber, telemetry) = build("telemetry-test", Some(&base)).expect("build");
+        let result = tracing::subscriber::with_default(subscriber, || {
+            tracing::info_span!("before_shutdown")
+                .in_scope(|| tracing::info!("rejected by the collector"));
+            let result = telemetry.shutdown();
+            tracing::info_span!("after_shutdown")
+                .in_scope(|| tracing::info!("must not be exported"));
+            result
+        }); // the subscriber, holding the last provider handle, is dropped here
+
+        assert!(
+            matches!(result, Err(Error::Delivery { .. })),
+            "the rejected flush is reported"
+        );
+        let first = requests
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the flush reaches the collector");
+        assert!(contains(&first.body, "before_shutdown"));
+        // The batch worker exports every 5 seconds; a live exporter would send after_shutdown.
+        let later = requests.recv_timeout(Duration::from_secs(7));
+        assert!(
+            later.is_err(),
+            "no export after shutdown, but got {}",
+            later.map(|r| r.line).unwrap_or_default()
+        );
     }
 
     #[test]
