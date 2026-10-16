@@ -1,0 +1,75 @@
+# CI baseline (Technical Plan P0.3). Each job is a required check on main.
+# Every command here also runs locally from the repository root; see AGENTS.md, Commands.
+# Action and tool versions are pinned; see docs/versions.md and decision log D-007.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: No managed blocks in tracked files
+        run: .github/scripts/check-no-managed-blocks.sh
+      - name: The managed-block check rejects a marker
+        run: |
+          tmp=$(mktemp -d)
+          git -C "$tmp" init -q
+          printf '<!-- BEGIN %s %s: example -->\n' "OpenRig MANAGED" "BLOCK" > "$tmp/AGENTS.md"
+          git -C "$tmp" add AGENTS.md
+          if .github/scripts/check-no-managed-blocks.sh "$tmp"; then
+            echo "::error::the managed-block check passed a file that contains a marker"
+            exit 1
+          fi
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy, warnings as errors
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  supply-chain:
+    name: supply-chain
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-deny@0.20.2
+      - name: cargo-deny (licenses, advisories, bans and dependency allowlist, sources)
+        run: cargo deny check
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Unit and property tests
+        # TODO(P1.1): remove --no-tests=warn in the first package that adds a real test,
+        # P1.1 at the latest. Until then the workspace has no tests (decision log D-004).
+        run: cargo nextest run --workspace --locked --no-tests=warn

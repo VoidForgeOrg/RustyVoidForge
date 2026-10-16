@@ -45,14 +45,17 @@ Only `voidforge-host` changes the live `World`. `voidforge-replay` and tests als
 
 ## Commands
 
-Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain (see the [version table](docs/versions.md)).
+Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain, and the [version table](docs/versions.md) has the tool versions CI uses. These are the commands CI runs ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), so a red check reproduces locally.
 
-| Purpose | Command |
+| CI job | Command |
 | --- | --- |
-| Build | `cargo build` |
-| Lint | `cargo clippy --workspace --all-targets -- -D warnings` |
-| Format | `cargo fmt --all --check` |
-| Tests | `cargo nextest run`, which needs [cargo-nextest](https://nexte.st) |
+| lint | `.github/scripts/check-no-managed-blocks.sh` |
+| lint | `cargo fmt --all --check` |
+| lint | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| supply-chain | `cargo deny check`, which needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) |
+| test | `cargo nextest run --workspace --locked --no-tests=warn`, which needs [cargo-nextest](https://nexte.st) |
+
+`cargo build` builds everything.
 
 The workspace has no tests yet, so plain `cargo nextest run` exits with nextest's no-tests code (4). Until the first real test lands (P1.1 at the latest), use `cargo nextest run --no-tests=warn` on the command line. Never add a repository-wide override such as `NEXTEST_NO_TESTS`, and never add placeholder tests to satisfy the runner ([decision log D-004](docs/decision-log.md#d-004-zero-test-runs-before-the-first-real-test)).
 
@@ -61,4 +64,7 @@ The workspace has no tests yet, so plain `cargo nextest run` exits with nextest'
 - `unsafe` is forbidden in every crate through the workspace lints. A crate cannot re-allow it.
 - Every crate's `Cargo.toml` keeps `[lints] workspace = true`.
 - The determinism rules in the [Architectural Design](docs/Voidforge%20Architectural%20Design.md#determinism-rules) apply to `voidforge-core`, and the Technical Plan extends the same bans to `voidforge-rules` and `voidforge-worldgen`. They are enforced by review for now. Clippy bans in `clippy.toml` arrive with P0.4.
-- These are not in the repository yet; each arrives with its package: CI and `deny.toml` (P0.3), determinism clippy bans and the web dependency check (P0.4), `justfile` and `deploy/` (P0.5), `rules/` (P1.2), `tests/golden/` (P2.6) and `dockerfiles/` (P5.2).
+- CI runs the `lint`, `supply-chain` and `test` jobs on every pull request and on main. All three are required checks on main ([D-007](docs/decision-log.md#d-007-ci-baseline-and-required-checks)).
+- `deny.toml` holds the dependency allowlist. A crate outside it fails `supply-chain`, so a new dependency means a new allowlist entry, its license and a decision-log entry ([D-008](docs/decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist)).
+- Agent-harness managed blocks never enter tracked files. The `lint` job rejects their markers ([D-009](docs/decision-log.md#d-009-managed-block-markers-rejected-in-tracked-files)).
+- These are not in the repository yet; each arrives with its package: determinism clippy bans and the web dependency check (P0.4), `justfile` and `deploy/` (P0.5), `rules/` (P1.2), `tests/golden/` (P2.6) and `dockerfiles/` (P5.2).

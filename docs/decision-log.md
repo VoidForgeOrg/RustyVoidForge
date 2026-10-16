@@ -31,7 +31,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 ### D-004: Zero-test runs before the first real test
 
 - Date and package: 2026-10-16, P0.1. The rule is in the Technical Plan on main (aeee630, wording reconciled in ff0681c, PR #1).
-- Decision: nextest fails a run that finds no tests (exit 4). While the workspace has no real test, `cargo nextest run --no-tests=warn` is used on the command line. P0.1 proved the runner that way, and P0.3's CI may do the same with a comment naming the package that removes it. The exception ends with the first package that adds a real test, P1.1 at the latest. After that the plain `cargo nextest run` must pass.
+- Decision: nextest fails a run that finds no tests (exit 4). While the workspace has no real test, `cargo nextest run --no-tests=warn` is used on the command line. P0.1 proved the runner that way. P0.3's `test` job does the same, with a `TODO(P1.1)` comment naming the package that removes it. The exception ends with the first package that adds a real test, P1.1 at the latest. After that the plain `cargo nextest run` must pass.
 - Ruled out: repository-wide overrides such as `NEXTEST_NO_TESTS` in config or the environment, and placeholder tests written only to satisfy the runner. Either would let a run that finds no tests pass silently, for example after a filter typo.
 - Recorded in: the P0.1 and P0.3 rows of [Phase 0](Voidforge%20Technical%20Plan.md#phase-0-foundations), and the zero-test rule in [Agent factory rules](Voidforge%20Technical%20Plan.md#agent-factory-rules).
 
@@ -48,3 +48,37 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Decision: only `voidforge-host` changes the live `World`. `voidforge-replay`, which rebuilds a world from a snapshot and the log, and tests also drive the core's state-changing entry points, offline and never against live state. Host recovery and replay map a log record to `advance_to` or `apply` through one shared function: P2.5 adds it to a crate both may depend on, and P2.7 reuses it.
 - Why: the earlier sentence ("only `voidforge-host` calls the core's state-changing entry points") contradicted replay's role and allowed dependencies. The rule exists to protect live state, not to grant exclusive call rights. One shared function keeps recovery and replay from drifting apart.
 - Recorded in: [Project layering](Voidforge%20Technical%20Plan.md#project-layering).
+
+### D-007: CI baseline and required checks
+
+- Date and package: 2026-10-16, P0.3.
+- Decision: one GitHub Actions workflow, `.github/workflows/ci.yml`, runs on pull requests to main and on pushes to main. It has three jobs, each a required status check on main from the GitHub Actions app:
+  - `lint`: the managed-block check and a self-test that it rejects a marker, `cargo fmt --all --check`, and clippy with warnings as errors.
+  - `supply-chain`: `cargo deny check`.
+  - `test`: `cargo nextest run --workspace --locked --no-tests=warn`, with the D-004 removal TODO.
+- Pins:
+  - The runner is `ubuntu-24.04`, not `ubuntu-latest`.
+  - Third-party actions are pinned to full commit SHAs, with the release tag in a comment.
+  - cargo-deny and cargo-nextest are installed at exact versions.
+  - The toolchain comes from `rust-toolchain.toml`.
+  - Versions are listed in the [version table](versions.md).
+- Caching: Swatinem/rust-cache on the jobs that compile (`lint` and `test`). `supply-chain` compiles nothing.
+- Why: these are the lint, supply-chain, and unit and property test stages of [CI/CD](Voidforge%20Technical%20Plan.md#cicd) that P0.3 delivers. The determinism, database and end-to-end stages, and image builds, arrive with their packages. They are not stubbed here. Pinning by SHA keeps the workflow's inputs immutable. Requiring the checks from the GitHub Actions app means a status posted by anything else cannot satisfy them.
+
+### D-008: cargo-deny policy and dependency allowlist
+
+- Date and package: 2026-10-16, P0.3.
+- Decision: `deny.toml` contains:
+  - Advisories: deny vulnerabilities and yanked crates.
+  - Licenses: none allowed yet, because no external crate exists. Unpublished workspace crates are ignored.
+  - Bans: duplicate versions and wildcard requirements are denied, apart from workspace path dependencies.
+  - Allowlist: `[bans].allow` names the twelve workspace crates. Once that list is non-empty, cargo-deny rejects any crate not on it, workspace crates included.
+  - Sources: only crates.io.
+- Adding a dependency: add it to `[bans].allow` and its license to `[licenses].allow` in the same pull request, with a decision-log entry and a [version table](versions.md) row ([Agent factory rules](Voidforge%20Technical%20Plan.md#agent-factory-rules)).
+- Why: the [Tech stack](Voidforge%20Technical%20Plan.md#tech-stack) makes cargo-deny responsible for licenses, advisories and a dependency allowlist, and the allowlist makes "a new dependency needs a decision" mechanical.
+
+### D-009: Managed-block markers rejected in tracked files
+
+- Date and package: 2026-10-16, P0.3.
+- Decision: the `lint` job runs `.github/scripts/check-no-managed-blocks.sh`. It fails if any tracked file contains the agent-harness managed-block marker. The script builds the marker from two halves so its own source never matches. A second step builds a throwaway repository with a marker and checks that the script rejects it.
+- Why: the root `AGENTS.md` and `CLAUDE.md` may carry local managed blocks in an owner checkout (D-005), protected there by `skip-worktree` and a local exclude. This check is the mechanical backstop if either protection is lost.
