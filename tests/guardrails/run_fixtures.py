@@ -12,6 +12,10 @@ clippy.toml files and lint attributes are what gets tested. For each case:
   meta/*.rs                     traps for this harness itself: a guardrail that does not fire
                                 must be reported MISSING, and an unrelated compile or
                                 dependency error must be reported ERROR, never as a rejection;
+  float_values/<name>.rs        floats clippy cannot see; check_no_floats.py must reject them in
+                                core, rules and worldgen, naming exactly the "expect-float-fn:"
+                                functions; <name>.ok.rs must pass; <name>.err.rs does not
+                                compile and must make the check exit 2, never pass;
   WEB_CASES below               manifest edits checked with check_web_deps.py.
 
 Before running cases it checks that the three clippy.toml files are identical and that every
@@ -22,6 +26,8 @@ Fixture header lines:
                                     backticks in its message
   // dependency: <toml line>        added under [dependencies] of the crate under test
   // classify: MISSING|ERROR        meta fixtures only: the outcome this harness must report
+  // expect-float-fn: <name>        float_values fixtures: a function (or const/static) the float
+                                    check must report
 
 Usage: run_fixtures.py [--only SUBSTRING] [--verbose]   (run from the repository root)
 Exit codes: 0 every case behaved as intended, 1 a case did not, 2 the harness could not run.
@@ -53,6 +59,11 @@ def run(cmd, cwd, env=None):
                               universal_newlines=True)
     except OSError as exc:
         raise HarnessError("cannot run " + cmd[0] + ": " + str(exc))
+
+
+def float_fns(path):
+    with open(path) as f:
+        return sorted(m.group(1) for m in (re.match(r"//\s*expect-float-fn:\s*(\S+)\s*$", l) for l in f) if m)
 
 
 def parse_fixture(path):
@@ -252,6 +263,39 @@ def run_determinism(ws, report, only):
             report.case(name, code == 0 and not diags, [describe(d) for d in diags] + stderr.splitlines()[-3:])
 
 
+def run_float_values(ws, report, only):
+    folder = os.path.join(HERE, "float_values")
+    checker = os.path.join(HERE, "check_no_floats.py")
+    for fname in sorted(f for f in os.listdir(folder) if f.endswith(".rs")):
+        path = os.path.join(folder, fname)
+        _, deps, _ = parse_fixture(path)
+        want_fns = float_fns(path)
+        kind = "err" if fname.endswith(".err.rs") else "ok" if fname.endswith(".ok.rs") else "reject"
+        if kind == "reject" and not want_fns:
+            raise HarnessError(fname + " has no expect-float-fn: lines")
+        for crate in TARGETS:
+            name = {"reject": "float check rejects %s in %s", "ok": "float check accepts %s in %s",
+                    "err": "float check exits 2 (not a pass) for %s in %s"}[kind] % (fname, crate)
+            if only and only not in name:
+                continue
+            inject(ws, crate, path, deps)
+            proc = run([sys.executable, checker, ws.root], ws.root, ws.env)
+            ws.reset()
+            lines = [l for l in proc.stdout.splitlines() if l.startswith("violation: ")]
+            got_fns = sorted(re.match(r"violation: \S+: (?:fn|const|static|static mut|item) (\S+): ", l).group(1)
+                             if re.match(r"violation: \S+: (?:fn|const|static|static mut|item) (\S+): ", l) else l
+                             for l in lines)
+            got_crates = {l.split()[1].rstrip(":") for l in lines}
+            if kind == "reject":
+                ok = proc.returncode == 1 and got_fns == want_fns and got_crates == {crate}
+            elif kind == "ok":
+                ok = proc.returncode == 0 and not lines
+            else:
+                ok = proc.returncode == 2 and "could not check" in proc.stderr and not lines
+            report.case(name, ok, ["exit %d" % proc.returncode, "want fns %s, got %s" % (want_fns, got_fns)]
+                        + lines + proc.stderr.splitlines()[-3:])
+
+
 def run_meta(ws, report, only):
     folder = os.path.join(HERE, "meta")
     for fname in sorted(f for f in os.listdir(folder) if f.endswith(".rs")):
@@ -301,13 +345,25 @@ WEB_CASES = [
     ("web on core through api-types",
      [("voidforge-api-types", "dependencies", "voidforge-core = { workspace = true }"),
       ("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 1,
-     ["violation: resolved normal path: voidforge-web -> voidforge-api-types -> voidforge-core"]),
+     ["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-core",
+      "violation: resolved normal path: voidforge-web -> voidforge-api-types -> voidforge-core"]),
     ("web on store through telemetry and host",
      [("voidforge-host", "dependencies", "voidforge-store = { workspace = true }"),
       ("voidforge-telemetry", "dependencies", "voidforge-host = { workspace = true }"),
       ("voidforge-web", "dependencies", "voidforge-telemetry = { workspace = true }")], 1,
-     ["violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host",
+     ["violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-host",
+      "violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store",
+      "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host",
       "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store"]),
+    ("web on server through telemetry by path (a declaration cargo drops, in a reachable crate)",
+     [("voidforge-telemetry", "dependencies", 'voidforge-server = { path = "../voidforge-server" }'),
+      ("voidforge-web", "dependencies", "voidforge-telemetry = { workspace = true }")], 1,
+     ["violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-server"]),
+    ("reachable crate declaring an allowed crate (telemetry on api-types)",
+     [("voidforge-telemetry", "dependencies", "voidforge-api-types = { workspace = true }"),
+      ("voidforge-web", "dependencies", "voidforge-telemetry = { workspace = true }")], 0, []),
+    ("unreachable crate may declare anything (server on core; web does not depend on server)",
+     [("voidforge-server", "dependencies", "voidforge-core = { workspace = true }")], 0, []),
     ("web on another workspace crate (rules)",
      [("voidforge-web", "dependencies", "voidforge-rules = { workspace = true }")], 1,
      ["violation: declared normal dependency: voidforge-web -> voidforge-rules",
@@ -401,10 +457,16 @@ def main():
             check_structure(repo, report)
         ws = Workspace(repo)
         run_determinism(ws, report, args.only)
+        run_float_values(ws, report, args.only)
         run_meta(ws, report, args.only)
         run_web(ws, report, args.only)
     except HarnessError as exc:
         print("error: " + str(exc) + "; the guardrail fixtures could not run", file=sys.stderr)
+        return 2
+    except Exception:  # a bug in this harness must never look like a guardrail result
+        import traceback
+        traceback.print_exc()
+        print("error: the guardrail harness crashed; the guardrail fixtures could not run", file=sys.stderr)
         return 2
     finally:
         if ws:

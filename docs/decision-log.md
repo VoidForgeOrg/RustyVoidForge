@@ -95,21 +95,24 @@ Each entry records its date, the package that made it, the decision, the reasons
   - Locks and concurrency primitives: `Mutex`, `RwLock`, `Condvar`, `Barrier`, `Once`, `OnceLock`, `LazyLock`, mpsc channels and their ends, and every `std::sync::atomic` type.
   - System randomness: `std::hash::RandomState`, and getrandom's `fill`, `fill_uninit`, `u32`, `u64` and `SysRng`.
   - UUID generation: uuid's `new_v1`, `now_v1`, `new_v3`, `new_v4`, `new_v5`, `new_v6`, `now_v6`, `new_v7`, `now_v7` and `new_v8`.
-  - Floats: the `f32` and `f64` types, plus `clippy::float_arithmetic`.
+  - Floats: the `f32` and `f64` types, plus `clippy::float_arithmetic`. Clippy cannot see a float that is never named, so D-013 adds a type-aware check.
 - Placement: clippy reads the nearest `clippy.toml` walking up from each crate, so a root file would also ban clocks and threads in host and server, which legitimately use them. The Technical Plan's layout was updated to match. A `clippy.toml` in any other crate, or at the root, is a deliberate choice that needs its own decision-log entry. The fixture run fails on any other `clippy.toml`, so adding one means updating that check in the same pull request as the entry.
 - Paths in crates that are not dependencies yet (uuid, getrandom) use `allow-invalid`. Clippy cannot report a typo in those, so the fixture run requires every banned path to be expected by a fixture that adds the real crate and triggers it (D-012). Std paths have no `allow-invalid`, so a typo produces a clippy warning, and the clean baseline fails on it.
 - Not banned, deliberately:
   - `Arc`: shared ownership is not concurrency by itself.
   - `Duration`: a value, not a clock.
-  - Name-free float literals that never reach arithmetic or a typed binding. They cannot reach state without naming a float type.
   - External hash-map crates. A new crate must first pass the `deny.toml` allowlist and its decision entry, where this rule applies (D-008).
 - Why: these are the Technical Plan P0.4 bans and the lint-enforced rows of the Architectural Design's [Determinism rules](Voidforge%20Architectural%20Design.md#determinism-rules).
 
 ### D-011: Web dependency isolation check
 
 - Date and package: 2026-10-16, P0.4.
-- Decision: `tests/guardrails/check_web_deps.py` runs in the `lint` job. It reads `cargo metadata`. It fails if `voidforge-web` declares a dependency of any kind (normal, dev or build, renamed or by path) on a workspace crate other than `voidforge-api-types` and `voidforge-telemetry`, or if any such crate appears anywhere in its resolved dependency graph. It prints the offending path. Exit codes: 0 isolated, 1 violation, 2 could not check.
-- Why: [Project layering](Voidforge%20Technical%20Plan.md#project-layering) allows web only those two workspace crates, so it never links core, host, store or server, even transitively. The declared-dependency pass catches a path dependency on a binary crate, which cargo ignores with only a warning (D-003).
+- Decision: `tests/guardrails/check_web_deps.py` runs in the `lint` job. It reads `cargo metadata`. It has two passes, over every dependency kind (normal, dev and build), and prints the offending path. Exit codes: 0 isolated, 1 violation, 2 could not check.
+  - Resolved: any workspace crate other than `voidforge-api-types` and `voidforge-telemetry` anywhere in the graph cargo resolves from `voidforge-web` fails.
+  - Declared: a manifest declaration of such a crate, by name, path or rename, fails. This covers `voidforge-web` and every workspace crate it reaches.
+- Scope, stated honestly: for a declaration cargo drops from the graph, such as a path dependency on a binary-only crate, this enforces the declaration. Cargo links no library from a binary crate. Crates `voidforge-web` does not reach are not checked here.
+- Fixed in P0.4 review: QA found that the first version read only web's own declarations, so web → telemetry → server by path passed. Reachable crates' declarations are now checked, with a regression case and allowed controls.
+- Why: [Project layering](Voidforge%20Technical%20Plan.md#project-layering) allows web only those two workspace crates, so it never links core, host, store or server, even transitively. The declared pass catches a path dependency on a binary crate, which cargo ignores with only a warning (D-003).
 
 ### D-012: Guardrail fixtures
 
@@ -120,5 +123,14 @@ Each entry records its date, the package that made it, the decision, the reasons
   - `meta/` traps prove the harness reports a ban that does not fire as MISSING, and an unrelated compile or dependency error as ERROR, never as a rejection.
   - Web cases edit manifests and check the checker's exit code and exact violation lines.
   - It also checks that the three `clippy.toml` files are identical, that no other `clippy.toml` exists, and that every banned path has a fixture.
-- Fixture-only crates: uuid 1.28.0, getrandom 0.4.3 and rand_chacha 0.10.0 are added only inside the temporary copy. They never enter the workspace's `Cargo.lock` or the `deny.toml` allowlist. See the [version table](versions.md).
+  - Each `float_values/<name>.rs` must be rejected by the float check (D-013) in all three crates, naming exactly its `expect-float-fn:` items; `.ok.rs` must pass and `.err.rs` must exit 2.
+- Fixture-only crates: uuid 1.28.0, getrandom 0.4.3, rand_chacha 0.10.0 and toml 1.1.8 are added only inside the temporary copy. They never enter the workspace's `Cargo.lock` or the `deny.toml` allowlist. See the [version table](versions.md).
 - Why: the P0.4 done-when needs a failing fixture for each banned call and forbidden dependency. Matching exact diagnostics keeps a missing import, a resolution failure or a different lint from counting as a rejection. Python is preinstalled on the CI runner and avoids adding a crate to the workspace.
+
+### D-013: Type-aware float check
+
+- Date and package: 2026-10-16, P0.4, from QA's review of the first candidate.
+- Decision: `tests/guardrails/check_no_floats.py` runs in the `lint` job. It compiles the libraries of `voidforge-core`, `voidforge-rules` and `voidforge-worldgen` to MIR with stable `rustc --emit=mir`. It fails on any `f32` or `f64` there, naming the function, closure, const or static. String literals and constant byte dumps are ignored. Exit codes: 0 none, 1 floats found, 2 could not check (build failure or no MIR).
+- Why: QA showed `1.25f64.sqrt().to_bits()` passes clippy in all three crates. It names no float type and uses no float operator, so neither `disallowed_types` nor `float_arithmetic` sees it, and clippy has no type-aware float lint. MIR records the type of every local, constant and call, so a float computed by a method, a cast literal, a trait call, a closure, a const or a value returned by std or a dependency all show up. The clippy bans stay, because they point at the source line.
+- Scope: library code of the three crates. Their test code is covered by the clippy bans, which run with `--all-targets`, but not by this check.
+- Proof: the `float_values/` fixtures in D-012 must be rejected in all three crates naming exactly the expected items. Integer code and a string mentioning "f64" must pass, and a crate that does not compile must make the check exit 2.

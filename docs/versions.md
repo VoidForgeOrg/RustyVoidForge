@@ -34,6 +34,7 @@ Used only by `tests/guardrails/run_fixtures.py`, inside a temporary copy of the 
 | uuid | 1.28.0 (features v1, v3 to v8) | Proves the UUID-generation and `Timestamp::now` bans |
 | getrandom | 0.4.3 (feature sys_rng) | Proves the system-randomness bans |
 | rand_chacha | 0.10.0 | Control: seeded generation stays allowed |
+| toml | 1.1.8 | Proves the float check sees a float read from a dependency |
 | Python | 3, standard library only; CI uses the runner image's `python3`, and the scripts also run on Python 3.9 | Runs the fixture harness and the web check |
 
 ## Tools: planned, not introduced

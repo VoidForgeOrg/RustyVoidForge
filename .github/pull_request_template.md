@@ -17,7 +17,7 @@ CI runs these as the required `lint`, `supply-chain` and `test` checks; they als
 - [ ] `.github/scripts/check-no-managed-blocks.sh` and `.github/scripts/test-check-no-managed-blocks.sh`
 - [ ] `cargo fmt --all --check`
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings`
-- [ ] `python3 tests/guardrails/check_web_deps.py` and `python3 tests/guardrails/run_fixtures.py`
+- [ ] `python3 tests/guardrails/check_no_floats.py`, `python3 tests/guardrails/check_web_deps.py` and `python3 tests/guardrails/run_fixtures.py`
 - [ ] `cargo deny check`
 - [ ] `cargo nextest run --workspace --locked` (with `--no-tests=warn` only while the workspace has no real test; see decision log D-004)
 
