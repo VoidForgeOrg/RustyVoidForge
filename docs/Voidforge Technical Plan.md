@@ -83,8 +83,8 @@ Only `voidforge-host` changes the live `World`, and only the binaries talk to th
 | `voidforge-telemetry` | Tracing and OTLP setup | No workspace crate |
 | `voidforge-server` | API, token checks, accounts and the leaderboard job | host, store, rules, worldgen, api-types, telemetry |
 | `voidforge-web` | Server-rendered HTML frontend and OIDC login; reaches the server only over HTTP | api-types, telemetry; never core, host, store or server |
-| `voidforge-bots` | Scripted players for end-to-end and nightly runs, plus a terminal client with device code login | api-types |
-| `voidforge-replay` | Replay and divergence finder | core, rules, store |
+| `voidforge-bots` | Scripted players for end-to-end and nightly runs, plus a terminal client with device code login | api-types, telemetry |
+| `voidforge-replay` | Replay and divergence finder | core, rules, store, telemetry |
 
 Repository layout:
 

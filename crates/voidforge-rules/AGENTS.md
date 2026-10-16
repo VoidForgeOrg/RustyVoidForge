@@ -23,7 +23,7 @@ Library. It is a stub today; P1.2 is the first package that fills it. The layeri
 ```sh
 cargo build -p voidforge-rules
 cargo clippy -p voidforge-rules --all-targets -- -D warnings
-cargo nextest run -p voidforge-rules --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-rules` alone exits 4
 ```
 
 P1.2: Rules v0 loads, and invalid files fail with clear errors.

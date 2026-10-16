@@ -117,10 +117,20 @@ class Workspace:
             f.write(text)
 
     def add_dependencies(self, crate, section, lines):
-        if lines:
-            self.write("crates/" + crate + "/Cargo.toml", "\n[" + section + "]\n" + "\n".join(lines) + "\n",
-                       append=True)
-            self.touched.add("Cargo.lock")
+        """Add lines to a manifest table, inserting under the table if the crate already has it."""
+        if not lines:
+            return
+        rel = "crates/" + crate + "/Cargo.toml"
+        with open(self.path(rel)) as f:
+            manifest = f.read()
+        header = "[" + section + "]\n"
+        if manifest.startswith(header) or ("\n" + header) in manifest:
+            at = manifest.index(header) + len(header)
+            manifest = manifest[:at] + "\n".join(lines) + "\n" + manifest[at:]
+        else:
+            manifest += "\n" + header + "\n".join(lines) + "\n"
+        self.write(rel, manifest)
+        self.touched.add("Cargo.lock")
 
     def reset(self):
         for rel in self.touched:
@@ -317,10 +327,9 @@ def run_meta(ws, report, only):
 # Web dependency cases: (name, edits, expected exit, expected violation lines or stderr fragments).
 # An edit is (crate, section, line) appended to that crate's Cargo.toml.
 WEB_CASES = [
-    ("web with no workspace dependencies", [], 0, []),
-    ("web on api-types and telemetry (allowed)",
-     [("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }"),
-      ("voidforge-web", "dependencies", "voidforge-telemetry = { workspace = true }")], 0, []),
+    ("web as committed (telemetry only, and telemetry's external crates)", [], 0, []),
+    ("web adds api-types next to telemetry (allowed)",
+     [("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 0, []),
     ("web on core", [("voidforge-web", "dependencies", "voidforge-core = { workspace = true }")], 1,
      ["violation: declared normal dependency: voidforge-web -> voidforge-core",
       "violation: resolved normal path: voidforge-web -> voidforge-core"]),
@@ -349,19 +358,19 @@ WEB_CASES = [
       "violation: resolved normal path: voidforge-web -> voidforge-api-types -> voidforge-core"]),
     ("web on store through telemetry and host",
      [("voidforge-host", "dependencies", "voidforge-store = { workspace = true }"),
-      ("voidforge-telemetry", "dependencies", "voidforge-host = { workspace = true }"),
-      ("voidforge-web", "dependencies", "voidforge-telemetry = { workspace = true }")], 1,
+      ("voidforge-telemetry", "dependencies", "voidforge-host = { workspace = true }")], 1,
      ["violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-host",
       "violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store",
       "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host",
       "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store"]),
-    ("web on server through telemetry by path (a declaration cargo drops, in a reachable crate)",
-     [("voidforge-telemetry", "dependencies", 'voidforge-server = { path = "../voidforge-server" }'),
-      ("voidforge-web", "dependencies", "voidforge-telemetry = { workspace = true }")], 1,
-     ["violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-server"]),
+    # Since P0.6 every binary depends on telemetry, so telemetry -> server would be a cycle;
+    # api-types is the reachable crate that declares the binary here.
+    ("web on server through api-types by path (a declaration cargo drops, in a reachable crate)",
+     [("voidforge-api-types", "dependencies", 'voidforge-server = { path = "../voidforge-server" }'),
+      ("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 1,
+     ["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-server"]),
     ("reachable crate declaring an allowed crate (telemetry on api-types)",
-     [("voidforge-telemetry", "dependencies", "voidforge-api-types = { workspace = true }"),
-      ("voidforge-web", "dependencies", "voidforge-telemetry = { workspace = true }")], 0, []),
+     [("voidforge-telemetry", "dependencies", "voidforge-api-types = { workspace = true }")], 0, []),
     ("unreachable crate may declare anything (server on core; web does not depend on server)",
      [("voidforge-server", "dependencies", "voidforge-core = { workspace = true }")], 0, []),
     ("web on another workspace crate (rules)",

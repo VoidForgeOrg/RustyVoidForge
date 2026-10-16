@@ -20,6 +20,16 @@ voidforge-telemetry = { path = "crates/voidforge-telemetry", version = "0.1.0" }
 voidforge-testkit = { path = "crates/voidforge-testkit", version = "0.1.0" }
 voidforge-worldgen = { path = "crates/voidforge-worldgen", version = "0.1.0" }
 
+# External crates: exact pins (Technical Plan, Tech stack); each has a decision-log entry and a
+# version-table row, and passes the deny.toml allowlist.
+opentelemetry = { version = "=0.33.1", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
+opentelemetry_sdk = { version = "=0.33.1", default-features = false, features = ["trace"] }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-opentelemetry = { version = "=0.34.0", default-features = false }
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["std", "fmt", "registry"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unused_lifetimes = "warn"

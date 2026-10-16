@@ -23,7 +23,7 @@ Library. It is a stub today; P2.1 is the first package that fills it. The layeri
 ```sh
 cargo build -p voidforge-store
 cargo clippy -p voidforge-store --all-targets -- -D warnings
-cargo nextest run -p voidforge-store --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-store` alone exits 4
 ```
 
 P2.1: migrations apply cleanly to an empty database. P2.2: the snapshot codec round-trips byte for byte. The Database tests stage in [CI/CD](../../docs/Voidforge%20Technical%20Plan.md#cicd), which runs migrations, store tests and the sqlx metadata check against Postgres, is not in CI yet. P0.3 added only the lint, supply-chain and test jobs.

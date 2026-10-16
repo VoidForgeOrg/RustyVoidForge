@@ -58,8 +58,14 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 
 ## Crate dependencies
 
-`Cargo.lock` holds only the twelve workspace crates; no external crate is a dependency yet. The `deny.toml` allowlist enforces this ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist)). Each Tech stack crate (serde, serde_json, thiserror, anyhow, tokio, axum, tower-http, reqwest, sqlx, postcard, blake3, toml, rand_chacha, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, tracing, opentelemetry, opentelemetry-otlp, tracing-opentelemetry, proptest, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
+The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (serde, serde_json, thiserror, anyhow, tokio, axum, tower-http, reqwest, sqlx, postcard, blake3, toml, rand_chacha, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, tracing, opentelemetry, opentelemetry-otlp, tracing-opentelemetry, proptest, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
-| _none yet_ | | | | |
+| tracing | =0.1.44 | telemetry, all four binaries | P0.6 | D-017 |
+| tracing-subscriber | =0.3.23 (std, fmt, registry) | telemetry | P0.6 | D-017 |
+| opentelemetry | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
+| opentelemetry_sdk | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
+| opentelemetry-otlp | =0.33.1 (http-proto, reqwest-blocking-client, trace) | telemetry | P0.6 | D-017 |
+| tracing-opentelemetry | =0.34.0 (no default features) | telemetry | P0.6 | D-017 |
+| thiserror | =2.0.21 | telemetry | P0.6 | D-017 |

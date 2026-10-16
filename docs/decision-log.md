@@ -33,6 +33,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Date and package: 2026-10-16, P0.1. The rule is in the Technical Plan on main (aeee630, wording reconciled in ff0681c, PR #1).
 - Decision: nextest fails a run that finds no tests (exit 4). While the workspace has no real test, `cargo nextest run --no-tests=warn` is used on the command line. P0.1 proved the runner that way. P0.3's `test` job does the same, with a `TODO(P1.1)` comment naming the package that removes it. The exception ends with the first package that adds a real test, P1.1 at the latest. After that the plain `cargo nextest run` must pass.
 - Ruled out: repository-wide overrides such as `NEXTEST_NO_TESTS` in config or the environment, and placeholder tests written only to satisfy the runner. Either would let a run that finds no tests pass silently, for example after a filter typo.
+- Ended in P0.6: `voidforge-telemetry` added the first real tests, so CI, the justfile and every guide now run plain `cargo nextest run --workspace --locked`. A crate without tests still makes `-p <crate>` exit 4; its guide says to use the workspace command.
 - Recorded in: the P0.1 and P0.3 rows of [Phase 0](Voidforge%20Technical%20Plan.md#phase-0-foundations), and the zero-test rule in [Agent factory rules](Voidforge%20Technical%20Plan.md#agent-factory-rules).
 
 ### D-005: Where conventions live
@@ -55,7 +56,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Decision: one GitHub Actions workflow, `.github/workflows/ci.yml`, runs on pull requests to main and on pushes to main. It has three jobs, each a required status check on main from the GitHub Actions app:
   - `lint`: the managed-block check and its regression cases, `cargo fmt --all --check`, and clippy with warnings as errors.
   - `supply-chain`: `cargo deny check`.
-  - `test`: `cargo nextest run --workspace --locked --no-tests=warn`, with the D-004 removal TODO.
+  - `test`: `cargo nextest run --workspace --locked`. It carried `--no-tests=warn` until P0.6 (D-004).
 - Pins:
   - The runner is `ubuntu-24.04`, not `ubuntu-latest`.
   - Third-party actions are pinned to full commit SHAs, with the release tag in a comment.
@@ -111,7 +112,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - Resolved: any workspace crate other than `voidforge-api-types` and `voidforge-telemetry` anywhere in the graph cargo resolves from `voidforge-web` fails.
   - Declared: a manifest declaration of such a crate, by name, path or rename, fails. This covers `voidforge-web` and every workspace crate it reaches.
 - Scope, stated honestly: for a declaration cargo drops from the graph, such as a path dependency on a binary-only crate, this enforces the declaration. Cargo links no library from a binary crate. Crates `voidforge-web` does not reach are not checked here.
-- Fixed in P0.4 review: QA found that the first version read only web's own declarations, so web → telemetry → server by path passed. Reachable crates' declarations are now checked, with a regression case and allowed controls.
+- Fixed in P0.4 review: QA found that the first version read only web's own declarations, so web → telemetry → server by path passed. Reachable crates' declarations are now checked, with a regression case and allowed controls. Since P0.6 every binary depends on telemetry, so telemetry declaring a binary would be a cycle; the regression case uses api-types as the reachable crate instead.
 - Why: [Project layering](Voidforge%20Technical%20Plan.md#project-layering) allows web only those two workspace crates, so it never links core, host, store or server, even transitively. The declared pass catches a path dependency on a binary crate, which cargo ignores with only a warning (D-003).
 
 ### D-012: Guardrail fixtures
@@ -163,3 +164,36 @@ Each entry records its date, the package that made it, the decision, the reasons
   - An issuer such as `http://dex.localhost:5556/dex` with a compose network alias works for glibc and musl resolvers, but curl in a container resolves `*.localhost` to loopback regardless of DNS, so it depends on the client.
   - With host networking, curl and busybox in a container got the same discovery and issuer as the host, and a bridge-network container could not connect.
 - Fallback for the Phase 5 images, if host networking becomes painful: keep the issuer string `http://localhost:5556/dex`, and have the containers fetch discovery and keys from an internal URL such as `http://dex:5556/dex/...`. That is a configuration split, not an issuer change. It is not built now.
+
+### D-016: Telemetry bootstrap
+
+- Date and package: 2026-10-16, P0.6. The layering change was agreed with orch-advisor and recorded in the Technical Plan in the same pull request.
+- Decision: `voidforge_telemetry::init(service_name)` is the one telemetry setup. Every binary calls it first and calls `Telemetry::shutdown` before exit. It:
+  - installs a global `tracing` subscriber that logs INFO and above to stderr;
+  - when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, adds an OpenTelemetry layer whose batch exporter sends OTLP/HTTP protobuf to `<endpoint>/v1/traces`, with `service.name` set to the binary's name and a 5-second export timeout;
+  - when the variable is unset, logs locally and exports nothing, so a hand or offline run never waits on a collector.
+
+  `shutdown` flushes and returns an error for spans it could not deliver, and the stub binaries exit 1 on that error. A second `init` in one process is an error. `trace_id(&span)` exposes a span's trace ID, so a run's trace can be found.
+- Layering: Project layering now lets `voidforge-bots` and `voidforge-replay` depend on `voidforge-telemetry`. P0.6 says every binary uses the init function, and telemetry depends on no workspace crate, so this adds no path to the core. The web check (D-011) still allows web only api-types and telemetry, and the core stays uninstrumented.
+- Stub binaries: each binary's `main` records one `stub_startup` span with attribute `binary` and prints `trace_id=<hex>` when exporting. `just trace-check` (`deploy/verify_trace.py`) runs all four against the local stack and finds each trace's span through Grafana's Tempo datasource. It also checks that an offline run exits 0 without exporting, and that an unreachable endpoint makes the binary exit 1 with the delivery error. The verifier waits for the span itself, because Tempo can answer 200 with an empty trace before ingestion completes.
+- Out of scope: command-path spans and metrics belong to P5.1. Configuration through clap structs arrives with each binary's features. Until then the standard OpenTelemetry variable is the only setting.
+- Tests: four unit tests in `voidforge-telemetry` against an in-process OTLP/HTTP listener: delivery, the delivery error, offline, and second init. They are the workspace's first real tests, which ended the D-004 exception.
+
+### D-017: Telemetry dependencies, licenses and duplicates
+
+- Date and package: 2026-10-16, P0.6.
+- Direct dependencies of `voidforge-telemetry`, pinned exactly in `[workspace.dependencies]`:
+  - tracing 0.1.44;
+  - tracing-subscriber 0.3.23, with features std, fmt and registry, and no env-filter or ANSI;
+  - opentelemetry 0.33.1 and opentelemetry_sdk 0.33.1, trace feature only;
+  - opentelemetry-otlp 0.33.1: http-proto, reqwest-blocking-client and trace. No gRPC and no TLS, because the collector is local;
+  - tracing-opentelemetry 0.34.0, no default features. It is the release built against opentelemetry 0.33;
+  - thiserror 2.0.21.
+
+  Binaries add `tracing` for their spans.
+- Why these: the latest releases that work together, according to each crate's published dependency requirements on crates.io. The blocking HTTP client needs no async runtime in the binaries, and without TLS no OpenSSL or ring enters the tree.
+- `deny.toml`:
+  - Licenses: Apache-2.0, MIT and Unicode-3.0. Unicode-3.0 is required by the ICU crates under `url`; other licenses in the tree are only alternatives in dual-licensed crates.
+  - Targets: cargo-deny checks only the targets we build (x86_64 and aarch64, Linux and macOS), so wasm and Windows-only crates are not allowlisted.
+  - Allowlist: the 98 crates the telemetry stack brings in, listed by name.
+  - Duplicates: one skip, `syn@2.0.119`. Proc-macro crates are mid-way from syn 2 to syn 3 (prost-derive and tracing-attributes use 2; async-trait and displaydoc use 3). Both are compile-time only. `multiple-versions = "deny"` otherwise stays.

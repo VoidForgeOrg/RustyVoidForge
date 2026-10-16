@@ -36,10 +36,10 @@ Twelve crates in three layers; dependencies only point down. Each crate's `AGENT
 | [voidforge-telemetry](crates/voidforge-telemetry/AGENTS.md) | library | none |
 | [voidforge-server](crates/voidforge-server/AGENTS.md) | binary | host, store, rules, worldgen, api-types, telemetry |
 | [voidforge-web](crates/voidforge-web/AGENTS.md) | binary | api-types, telemetry only |
-| [voidforge-bots](crates/voidforge-bots/AGENTS.md) | binary | api-types |
-| [voidforge-replay](crates/voidforge-replay/AGENTS.md) | binary | core, rules, store |
+| [voidforge-bots](crates/voidforge-bots/AGENTS.md) | binary | api-types, telemetry |
+| [voidforge-replay](crates/voidforge-replay/AGENTS.md) | binary | core, rules, store, telemetry |
 
-Only `voidforge-host` changes the live `World`. `voidforge-replay` and tests also drive the core's state-changing entry points, offline and never against live state, and host recovery and replay share one function for turning a log record into a core call (P2.5). Only the binaries talk to the outside world. `voidforge-web` and `voidforge-bots` reach the server over HTTP alone.
+Only `voidforge-host` changes the live `World`. `voidforge-replay` and tests also drive the core's state-changing entry points, offline and never against live state, and host recovery and replay share one function for turning a log record into a core call (P2.5). Only the binaries talk to the outside world, and each starts by calling `voidforge_telemetry::init` ([D-016](docs/decision-log.md#d-016-telemetry-bootstrap)). `voidforge-web` and `voidforge-bots` reach the server over HTTP alone.
 
 `members = ["crates/*"]` makes every folder under `crates/` a workspace member, so anything placed there is built with the workspace.
 
@@ -57,7 +57,7 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 | lint | `python3 tests/guardrails/check_web_deps.py` |
 | lint | `python3 tests/guardrails/run_fixtures.py`, which proves the determinism bans and the web check with fixtures ([tests/guardrails](tests/guardrails/README.md)) |
 | supply-chain | `cargo deny check`, which needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) |
-| test | `cargo nextest run --workspace --locked --no-tests=warn`, which needs [cargo-nextest](https://nexte.st) |
+| test | `cargo nextest run --workspace --locked`, which needs [cargo-nextest](https://nexte.st) |
 
 `cargo build` builds everything. The [`justfile`](justfile) has the same commands as `just lint`, `just supply-chain` and `just test`.
 
@@ -72,9 +72,11 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 | Grafana | `http://localhost:3000` |
 | OTLP | gRPC `localhost:4317`, HTTP `localhost:4318` |
 
+Binaries export traces when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and log locally without it. `just trace-check` runs every binary against the stack and finds each one's span through Grafana's trace backend.
+
 The credentials and the static dex users and clients are test-only values ([deploy/README.md](deploy/README.md)). Recipes for later packages (`e2e`, `replay`, `seed`, `bless`) are added by those packages, not stubbed ([D-014](docs/decision-log.md#d-014-local-stack)).
 
-The workspace has no tests yet, so plain `cargo nextest run` exits with nextest's no-tests code (4). Until the first real test lands (P1.1 at the latest), use `cargo nextest run --no-tests=warn` on the command line. Never add a repository-wide override such as `NEXTEST_NO_TESTS`, and never add placeholder tests to satisfy the runner ([decision log D-004](docs/decision-log.md#d-004-zero-test-runs-before-the-first-real-test)).
+Never add a repository-wide nextest override such as `NEXTEST_NO_TESTS`, and never add placeholder tests to satisfy the runner. The command-local `--no-tests=warn` used while the workspace had no tests ended in P0.6, with the first real tests ([D-004](docs/decision-log.md#d-004-zero-test-runs-before-the-first-real-test)). A crate with no tests yet makes `cargo nextest run -p <crate>` exit 4, so use the workspace command for it.
 
 ## Guardrails
 

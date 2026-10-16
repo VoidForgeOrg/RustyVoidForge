@@ -13,6 +13,7 @@ Binary. It is a stub today; P2.9 is the first package that fills it. The layerin
 
 ## Invariants
 
+- Telemetry: `main` calls `voidforge_telemetry::init` once, first, and `Telemetry::shutdown` before exit, reporting a failed shutdown with a non-zero exit ([D-016](../../docs/decision-log.md#d-016-telemetry-bootstrap)). It never configures its own exporter or subscriber.
 - Nothing in the engine knows about auth. The API turns a dex ID token into a player UUID before any command reaches the host, and never sees a password ([Auth](../../docs/Voidforge%20Technical%20Plan.md#auth)).
 - Tokens are checked against dex's cached signing keys, issuer, the audience allowlist and expiry. Anything else gets 401.
 - All writes go through `POST /commands` with a required `Idempotency-Key` header. The player comes from the token, never from the body.
@@ -25,7 +26,7 @@ Binary. It is a stub today; P2.9 is the first package that fills it. The layerin
 ```sh
 cargo build -p voidforge-server
 cargo clippy -p voidforge-server --all-targets -- -D warnings
-cargo nextest run -p voidforge-server --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-server` alone exits 4
 ```
 
 P2.9: on an empty database, the bootstrap always yields the same state hash. P3.2 to P3.5 and P3.8: token, account, route (insta contract snapshots), leaderboard and rate-limit tests.

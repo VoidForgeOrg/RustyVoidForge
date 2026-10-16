@@ -27,7 +27,7 @@ Library. It is a stub today; P2.3 is the first package that fills it. The layeri
 ```sh
 cargo build -p voidforge-host
 cargo clippy -p voidforge-host --all-targets -- -D warnings
-cargo nextest run -p voidforge-host --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-host` alone exits 4
 ```
 
 P2.3 to P2.5: commands round-trip through an in-memory store and Postgres, idempotency survives restart, and snapshot round trip and recovery pass. P2.8: crash-and-retry.

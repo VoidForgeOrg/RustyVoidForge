@@ -31,7 +31,7 @@ Library. It is a stub today; P1.1 is the first package that fills it. The layeri
 ```sh
 cargo build -p voidforge-core
 cargo clippy -p voidforge-core --all-targets -- -D warnings
-cargo nextest run -p voidforge-core --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-core` alone exits 4
 ```
 
 P1.1 to P1.11 add the solver, fleet, command and view tests, and P1.5 adds the determinism suite: property tests, observation invariance and an in-process double run. Every later package must keep that suite green ([Phase 1](../../docs/Voidforge%20Technical%20Plan.md#phase-1-core-engine), [Testing strategy](../../docs/Voidforge%20Architectural%20Design.md#testing-strategy)).

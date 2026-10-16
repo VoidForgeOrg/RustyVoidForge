@@ -19,7 +19,7 @@ CI runs these as the required `lint`, `supply-chain` and `test` checks; they als
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - [ ] `python3 tests/guardrails/check_no_floats.py`, `python3 tests/guardrails/check_web_deps.py` and `python3 tests/guardrails/run_fixtures.py`
 - [ ] `cargo deny check`
-- [ ] `cargo nextest run --workspace --locked` (with `--no-tests=warn` only while the workspace has no real test; see decision log D-004)
+- [ ] `cargo nextest run --workspace --locked`
 - [ ] `just up` passes, if `deploy/` or the `justfile` changed
 
 ## Specs and decisions

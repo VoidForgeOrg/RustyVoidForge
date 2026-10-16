@@ -68,6 +68,4 @@ jobs:
         with:
           tool: cargo-nextest@0.9.148
       - name: Unit and property tests
-        # TODO(P1.1): remove --no-tests=warn in the first package that adds a real test,
-        # P1.1 at the latest. Until then the workspace has no tests (decision log D-004).
-        run: cargo nextest run --workspace --locked --no-tests=warn
+        run: cargo nextest run --workspace --locked

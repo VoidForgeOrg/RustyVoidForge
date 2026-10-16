@@ -22,7 +22,7 @@ Library. It is a stub today; P3.1 is the first package that fills it. The layeri
 ```sh
 cargo build -p voidforge-api-types
 cargo clippy -p voidforge-api-types --all-targets -- -D warnings
-cargo nextest run -p voidforge-api-types --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-api-types` alone exits 4
 ```
 
 P3.1: `/openapi.json` builds, and the schemas for every command and view validate.

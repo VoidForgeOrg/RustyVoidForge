@@ -21,6 +21,10 @@ up:
 status:
     python3 deploy/verify_stack.py
 
+# Prove telemetry by effect: every binary's stub span is found through Grafana's trace backend.
+trace-check: up
+    python3 deploy/verify_trace.py
+
 # Stop the stack. Postgres data stays in the voidforge_postgres-data volume.
 down:
     {{compose}} down
@@ -45,5 +49,4 @@ supply-chain:
 
 # The CI test job.
 test:
-    # TODO(P1.1): drop --no-tests=warn with the first real test (decision log D-004).
-    cargo nextest run --workspace --locked --no-tests=warn
+    cargo nextest run --workspace --locked

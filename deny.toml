@@ -4,6 +4,14 @@
 
 [graph]
 all-features = true
+# Only the platforms the project builds and runs on: CI and images (Linux) and developer
+# machines (macOS). Crates needed only on other targets (wasm, Windows) are not checked.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
 
 [advisories]
 version = 2
@@ -11,8 +19,8 @@ yanked = "deny"
 
 [licenses]
 version = 2
-# No external crate yet, so no license is allowed yet.
-allow = []
+# Each license is added with the first dependency that needs it (decision log D-017).
+allow = ["Apache-2.0", "MIT", "Unicode-3.0"]
 confidence-threshold = 0.93
 
 [licenses.private]
@@ -38,6 +46,110 @@ allow = [
     { crate = "voidforge-testkit" },
     { crate = "voidforge-web" },
     { crate = "voidforge-worldgen" },
+    # voidforge-telemetry (P0.6, decision log D-017): its direct dependencies
+    { crate = "opentelemetry" },
+    { crate = "opentelemetry-otlp" },
+    { crate = "opentelemetry_sdk" },
+    { crate = "thiserror" },
+    { crate = "tracing" },
+    { crate = "tracing-opentelemetry" },
+    { crate = "tracing-subscriber" },
+    # ...and what they pull in on the targets above.
+    { crate = "anyhow" },
+    { crate = "async-trait" },
+    { crate = "atomic-waker" },
+    { crate = "base64" },
+    { crate = "bitflags" },
+    { crate = "bytes" },
+    { crate = "cfg-if" },
+    { crate = "displaydoc" },
+    { crate = "either" },
+    { crate = "form_urlencoded" },
+    { crate = "futures-channel" },
+    { crate = "futures-core" },
+    { crate = "futures-executor" },
+    { crate = "futures-io" },
+    { crate = "futures-macro" },
+    { crate = "futures-sink" },
+    { crate = "futures-task" },
+    { crate = "futures-util" },
+    { crate = "getrandom" },
+    { crate = "http" },
+    { crate = "http-body" },
+    { crate = "http-body-util" },
+    { crate = "httparse" },
+    { crate = "httpdate" },
+    { crate = "hyper" },
+    { crate = "hyper-util" },
+    { crate = "icu_collections" },
+    { crate = "icu_locale_core" },
+    { crate = "icu_normalizer" },
+    { crate = "icu_normalizer_data" },
+    { crate = "icu_properties" },
+    { crate = "icu_properties_data" },
+    { crate = "icu_provider" },
+    { crate = "idna" },
+    { crate = "idna_adapter" },
+    { crate = "ipnet" },
+    { crate = "itertools" },
+    { crate = "itoa" },
+    { crate = "lazy_static" },
+    { crate = "libc" },
+    { crate = "litemap" },
+    { crate = "log" },
+    { crate = "memchr" },
+    { crate = "mio" },
+    { crate = "once_cell" },
+    { crate = "opentelemetry-http" },
+    { crate = "opentelemetry-proto" },
+    { crate = "percent-encoding" },
+    { crate = "pin-project-lite" },
+    { crate = "potential_utf" },
+    { crate = "ppv-lite86" },
+    { crate = "proc-macro2" },
+    { crate = "prost" },
+    { crate = "prost-derive" },
+    { crate = "quote" },
+    { crate = "rand" },
+    { crate = "rand_chacha" },
+    { crate = "rand_core" },
+    { crate = "reqwest" },
+    { crate = "sharded-slab" },
+    { crate = "slab" },
+    { crate = "smallvec" },
+    { crate = "socket2" },
+    { crate = "stable_deref_trait" },
+    { crate = "syn" },
+    { crate = "sync_wrapper" },
+    { crate = "synstructure" },
+    { crate = "thiserror-impl" },
+    { crate = "thread_local" },
+    { crate = "tinystr" },
+    { crate = "tokio" },
+    { crate = "tower" },
+    { crate = "tower-http" },
+    { crate = "tower-layer" },
+    { crate = "tower-service" },
+    { crate = "tracing-attributes" },
+    { crate = "tracing-core" },
+    { crate = "try-lock" },
+    { crate = "unicode-ident" },
+    { crate = "url" },
+    { crate = "utf8_iter" },
+    { crate = "want" },
+    { crate = "writeable" },
+    { crate = "yoke" },
+    { crate = "yoke-derive" },
+    { crate = "zerocopy" },
+    { crate = "zerofrom" },
+    { crate = "zerofrom-derive" },
+    { crate = "zerotrie" },
+    { crate = "zerovec" },
+    { crate = "zerovec-derive" },
+]
+# Duplicates allowed by name and version, each with its reason (decision log D-017).
+skip = [
+    { crate = "syn@2.0.119", reason = "proc-macro crates are mid-way from syn 2 to syn 3: prost-derive and tracing-attributes still use 2, async-trait and displaydoc use 3; compile-time only" },
 ]
 
 [sources]
