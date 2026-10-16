@@ -192,7 +192,7 @@ An empty but fully guarded workspace, so every later package lands in CI, under 
 | --- | --- | --- | --- |
 | P0.1 | Workspace skeleton in the new repository: every crate as a stub, toolchain pinned, edition 2024, workspace lints, `unsafe` forbidden | repo root | `cargo build` passes, and `cargo nextest run --no-tests=warn` passes and finds every crate; the stubs have no tests yet, so the plain command exits with nextest's no-tests code until the first real test lands |
 | P0.2 | Agent conventions: root and per-crate `AGENTS.md`, PR template, decision log, version table | repo root | Merged, linked from the README, and every `AGENTS.md` links to the specs |
-| P0.3 | CI baseline: lint, supply chain and test stages, with caching | `.github/workflows` | The checks are required on main |
+| P0.3 | CI baseline: lint, supply chain and test stages, with caching | `.github/workflows` | The checks are required on main; the test stage runs plain `cargo nextest run` once the workspace has a real test, and until then may pass `--no-tests=warn` on that command alone, with a comment naming the package that removes it (the first package to add a real test, P1.1 at the latest) |
 | P0.4 | Determinism guardrails: clippy bans on clocks, hash-ordered collections, threads, locks, system randomness, UUID generation and float arithmetic in the core, rules and worldgen, plus a dependency check that keeps `voidforge-web` away from the core, host, store and server | `voidforge-core`, voidforge-rules, voidforge-worldgen, `clippy.toml` | A fixture with each banned call, and one with a forbidden dependency, fails CI |
 | P0.5 | Local stack: compose with Postgres, dex and otel-lgtm; dex static users and clients; the `justfile` | `deploy/`, `justfile` | `just up` reports every service healthy and dex serves its discovery document |
 | P0.6 | Telemetry bootstrap: one init function for tracing and OTLP export, used by every binary | `voidforge-telemetry` | A stub binary's span shows up in local Grafana |
@@ -327,6 +327,7 @@ These rules keep the factory on one package at a time, so every change lands on 
 - The documents are the source of truth. If code and documents disagree, the agent stops and raises a question instead of guessing, and the document changes land before the code.
 - Every crate has an `AGENTS.md` with its purpose, allowed dependencies, invariants and test commands.
 - Guardrails are mechanical: CI enforces the lints and the dependency allowlist, and a new dependency needs a row in the decision log.
+- Zero tests is never a pass by configuration: no repository-wide nextest override such as `NEXTEST_NO_TESTS`, and no placeholder tests to satisfy the runner. The only exception is the command-local `--no-tests=warn` in P0.1 and P0.3, removed as P0.3 states.
 - Tests come with the code: unit tests plus the package's "done when" checks, with the determinism suite on every pull request.
 - Golden files change only through `just bless`, and a reviewer checks every change to them.
 - A reviewer agent checks each pull request against its package row before merge.
