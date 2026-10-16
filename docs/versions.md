@@ -40,3 +40,5 @@ Pinned in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) ([D-007](dec
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
 | _none yet_ | | | | |
+
+<!-- BEGIN OpenRig MANAGED BLOCK: negative-test -->
