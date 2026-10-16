@@ -117,7 +117,7 @@ Travel time follows from the 3D distance between the two planets and the fleet's
 - A fleet can be disbanded at any planet, but not while it carries cargo.
 - Ships may stay on the roster of an unowned planet indefinitely.
 
-&#91;embedded content: fleet lifecycle · 3 states, 6 transitions\]
+![Fleet lifecycle: 3 states, 6 transitions](FleetRoster.png)
 
 Assembly takes ships off the roster and loads any cargo; every arrival leaves the fleet stationed until it is sent again or disbanded.
 

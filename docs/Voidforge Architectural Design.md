@@ -28,7 +28,9 @@ Commands and reads take separate paths. A command goes from the API layer into t
 
 Nothing but the engine host ever changes game state.
 
-&#91;embedded content: server architecture · one writer, a log, a read model\]
+![Server architecture: one writer, a log, a read model](Architecture.png)
+
+The diagram places idempotency keys in the API layer for brevity; the engine host owns the key-to-outcome map, as Engine host and write path specifies.
 
 The shell is the only part that touches the clock, the network or the database. The core it calls is pure, which is what makes replays exact.
 
@@ -179,7 +181,7 @@ The game design's cascades map onto this directly. A building that completes cha
 
 A fleet's arrival time is fixed when it departs; only a recall can change it. A fleet is always stationed, in transit or returning, and only a stationed fleet accepts orders other than recall.
 
-&#91;embedded content: fleet states · 3 states, 6 transitions\]
+![Fleet states: 3 states, 6 transitions](FleetRoster.png)
 
 Only a stationed fleet takes orders; a recall turns an in-transit fleet around exactly once, and every arrival leaves the fleet stationed.
 

@@ -6,7 +6,7 @@ Oct 14, 2026 · @Tomáš Grbálik
 
 This plan turns Voidforge MVP Game Design and Voidforge Architectural Design into six phases of work for a factory of coding agents, on a Rust stack. Every choice in Decisions is agreed, so Phase 0 can start.
 
-It covers the tech stack, the workspace layering, auth through a local dex server, a rudimentary server-rendered web frontend, CI/CD, and the phases with the gate that closes each one. Each phase splits into work packages, each one incremental step for one agent and one pull request; each package names its crate and the tests that prove it done. Packages run strictly one after another, and a person signs off every gate.
+It covers the tech stack, the workspace layering, auth through a local dex server, a rudimentary server-rendered web frontend, CI/CD, and the phases with the gate that closes each one. Each phase splits into work packages, each one incremental step for one agent and one pull request; each package names its crate and the tests that prove it done. Packages run strictly one after another, and the team closes every gate itself; the owner is told when a gate closes and is asked only when a decision needs them (see Agent factory rules).
 
 The game design defines the rules and the architectural design defines engine behavior; this plan only decides how and in what order to build them. When the plan and those documents disagree, the documents win, and changes land there first.
 
@@ -67,7 +67,7 @@ Every pick favors widely used, well-documented crates, because agents write most
 
 Twelve crates in three layers keep the deterministic core free of anything that could break a replay. Dependencies only point down, and the web frontend and the bots reach the server over HTTP alone.
 
-&#91;embedded content: workspace layering · 12 crates in 3 layers\]
+![Workspace layering: 12 crates in 3 layers](Dependecies.png)
 
 Only `voidforge-host` calls the core's state-changing entry points, and only the binaries talk to the outside world. voidforge-web never links the server or the core: its only workspace dependencies are api-types and telemetry, and CI fails if that ever changes.
 
@@ -108,7 +108,7 @@ voidforge/
 
 dex runs locally as the OpenID Connect provider. The web frontend logs players in through it, and the API accepts the ID tokens it signs. Nothing in the engine knows about auth: the API turns a token into a player UUID before any command reaches the host.
 
-&#91;embedded content: web login and API call · 5 parties, 11 steps\]
+![Web login and API call: 5 parties, 11 steps](Auth.png)
 
 The API never sees a password. It checks the token's signature against dex's published keys, plus its issuer, audience and expiry, then maps issuer and subject to the player; this is the pattern dex documents for backends that consume ID tokens.
 
@@ -176,15 +176,17 @@ Once CD exists, rolling back means redeploying the previous image, so migrations
 
 ## Phases at a glance
 
-Six phases run in order, each closed by a gate that a person signs off; inside a phase, packages run one at a time, in ID order.
+Six phases run in order, each closed by a gate that the team signs off; inside a phase, packages run one at a time, in ID order.
 
-&#91;embedded content: phase roadmap · 6 phases, 6 gates\]
+![Phase roadmap: 6 phases, 6 gates](Phases.png)
+
+The diagram predates the change to team-run gates: where it says a person signs off or "you", read the team, as Agent factory rules describes.
 
 Every decision above is agreed, so Phase 0 can start.
 
 ## Phase 0: Foundations
 
-An empty but fully guarded workspace, so every later package lands in CI, under the lints and next to a running local stack. Before it starts, you create the new repository and export both design documents into its docs/ folder as Markdown; from then on those files are the specs the agents follow.
+An empty but fully guarded workspace, so every later package lands in CI, under the lints and next to a running local stack. Before it starts, the new repository holds both design documents in its docs/ folder as Markdown; from then on those files are the specs the agents follow.
 
 | ID | Package | Area | Done when |
 | --- | --- | --- | --- |
@@ -243,7 +245,7 @@ Until P1.12 lands, P1.9 tests Join game against homeworld candidates built with 
 
 Packages run one at a time, in ID order. Each one ships with its own tests, and from P1.5 on, every package must keep the determinism suite green.
 
-Gate: the whole core suite is green, every command and mission is covered, the core has no lint exceptions, and you have reviewed the scenario tests against the game design.
+Gate: the whole core suite is green, every command and mission is covered, the core has no lint exceptions, and QA has reviewed the scenario tests against the game design.
 
 ## Phase 2: Host and persistence
 
@@ -256,7 +258,7 @@ The single-writer engine host with a durable log, snapshots and exact recovery.
 | P2.3 | Engine host loop: bounded inbox, waking on a command or the next event, stamping, sequence numbers, group commit, reply, read model publish | host | Commands round-trip through both an in-memory test store and Postgres |
 | P2.4 | Idempotency: the key-to-outcome map, rebuilt from the log, with a retention window | host | A repeated key returns the first outcome, including after a restart |
 | P2.5 | Snapshots and recovery: scheduled and shutdown snapshots; restore, replay the tail, verify events, catch up to now | host, store | Snapshot round trip and recovery tests pass |
-| P2.6 | Golden logs: scripted testkit scenarios run through the host and recorded as logs with their state hashes, then blessed by a person with just bless | testkit, host | The first blessed golden logs are in tests/golden/ and replay in CI |
+| P2.6 | Golden logs: scripted testkit scenarios run through the host and recorded as logs with their state hashes, then blessed with just bless after a reviewer checks them | testkit, host | The first blessed golden logs are in tests/golden/ and replay in CI |
 | P2.7 | Replay CLI: replay a log, verify hashes and find the first divergent record | replay | Golden logs replay cleanly, and a tampered log is pinpointed |
 | P2.8 | Crash-and-retry harness: kill the host at random points | host tests | Every retried command ends with exactly one outcome |
 | P2.9 | Universe bootstrap: a server subcommand that generates a universe from a seed and writes its first snapshot; just seed wraps it | server | On an empty database, just seed always yields the same state hash |
@@ -282,7 +284,7 @@ The public HTTP API from the architectural design, protected by dex tokens and t
 
 Packages run one at a time, in ID order.
 
-Gate: the end-to-end scenario passes in CI with real dex tokens, and you have tried the API by hand.
+Gate: the end-to-end scenario passes in CI with real dex tokens, and QA has tried the API by hand.
 
 ## Phase 4: Web frontend
 
@@ -298,7 +300,7 @@ A person can play the whole MVP loop in a browser. Every package lives in `voidf
 
 Packages run one at a time, in ID order.
 
-Gate: on the fast test rules, you log in as a static user, then build, queue ships, colonize and transport cargo from the browser alone.
+Gate: on the fast test rules, QA logs in as a static user in a real browser, then build, queue ships, colonize and transport cargo from the browser alone.
 
 ## Phase 5: Operations and packaging
 
@@ -320,11 +322,13 @@ Gate: both images build in CI and run under compose, and the nightly runs stay g
 These rules keep the factory on one package at a time, so every change lands on a green main and never competes with another for the same code.
 
 - One work package is one pull request, and its title starts with the package ID. There is no size limit, but each package must be one increment: it lands on a working main, keeps every existing test green and adds one testable step, never a big-bang drop.
-- One package is in flight at a time: the next one starts only after the previous one merges with CI green. P0.1 and P0.2 come before CI exists, so a person checks those two by hand.
+- One package is in flight at a time: the next one starts only after the previous one merges with CI green. P0.1 and P0.2 come before CI exists, so a reviewer checks those two by hand.
 - Contracts land first: a package that adds public types or traits merges before the packages that use them.
 - The documents are the source of truth. If code and documents disagree, the agent stops and raises a question instead of guessing, and the document changes land before the code.
 - Every crate has an `AGENTS.md` with its purpose, allowed dependencies, invariants and test commands.
 - Guardrails are mechanical: CI enforces the lints and the dependency allowlist, and a new dependency needs a row in the decision log.
 - Tests come with the code: unit tests plus the package's "done when" checks, with the determinism suite on every pull request.
-- Golden files change only through `just bless`, and a person reviews every change to them.
-- A reviewer agent checks each pull request against its package row before merge, and a person signs off each phase gate.
+- Golden files change only through `just bless`, and a reviewer checks every change to them.
+- A reviewer agent checks each pull request against its package row before merge.
+- The team closes each phase gate: QA runs the gate's checks and confirms them by effect, both reviewers review the phase's accumulated work independently, and the lead closes the gate once all three agree, then tells the owner.
+- The team makes its own decisions, including Decisions-table changes and document clarifications, and records each in the decision log. It reaches the owner only for a change to the game design's intent, for anything that needs new accounts, money or access, or for an action that cannot be undone outside the repository.

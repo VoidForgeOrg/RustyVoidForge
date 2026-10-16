@@ -1,0 +1,8 @@
+.DS_Store
+
+# OpenRig and agent-harness files, local to each rig
+.openrig/
+.claude/
+.codex/
+.agents/
+.mcp.json
