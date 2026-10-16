@@ -21,7 +21,7 @@ Library, dev only. It is a stub today; P1.3 is the first package that fills it. 
 ```sh
 cargo build -p voidforge-testkit
 cargo clippy -p voidforge-testkit --all-targets -- -D warnings
-cargo nextest run -p voidforge-testkit --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-testkit` alone exits 4
 ```
 
 P1.3: builders can create any entity. P1.5: the determinism suite. P2.6: golden logs recorded with their state hashes.

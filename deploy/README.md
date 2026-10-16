@@ -38,6 +38,15 @@ These values exist only for local runs and CI. They are not secrets, and they mu
 
 The password grant for the static users is enabled only in `dex/config.ci.yaml`. Client credentials are never enabled.
 
+## Telemetry
+
+Binaries export traces when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and only log locally without it ([D-016](../docs/decision-log.md#d-016-telemetry-bootstrap)). Grafana at `http://localhost:3000` shows them under Explore > Tempo.
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run -p voidforge-server   # prints trace_id=<hex>
+just trace-check   # every binary: export, then find its span through Grafana's Tempo datasource
+```
+
 ## Containers and the issuer
 
 The issuer is `http://localhost:5556/dex` everywhere. A container that needs it runs with host networking, so `localhost:5556` reaches dex as it does from the host. It then reaches Postgres and the other services through their `localhost` ports, not compose service names. `just up` proves this with a host-network probe container.

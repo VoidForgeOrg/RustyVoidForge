@@ -23,7 +23,7 @@ Library. It is a stub today; P1.12 is the first package that fills it. The layer
 ```sh
 cargo build -p voidforge-worldgen
 cargo clippy -p voidforge-worldgen --all-targets -- -D warnings
-cargo nextest run -p voidforge-worldgen --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-worldgen` alone exits 4
 ```
 
 P1.12: the same seed always yields the same state hash, and every world-generation default holds.

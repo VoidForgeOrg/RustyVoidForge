@@ -6,13 +6,14 @@ Binary. It is a stub today; P3.6 is the first package that fills it. The layerin
 
 ## Allowed dependencies
 
-- Workspace: `voidforge-api-types`.
-- External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): reqwest, tokio, clap and anyhow.
-- Never: Any workspace crate other than api-types. Bots reach the server over HTTP alone.
+- Workspace: `voidforge-api-types`, `voidforge-telemetry`.
+- External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): reqwest, tokio, clap and anyhow; tracing for spans.
+- Never: Any workspace crate other than api-types and telemetry. Bots reach the server over HTTP alone.
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
 ## Invariants
 
+- Telemetry: `main` calls `voidforge_telemetry::init` once, first, and `Telemetry::shutdown` before exit, reporting a failed shutdown with a non-zero exit ([D-016](../../docs/decision-log.md#d-016-telemetry-bootstrap)). It never configures its own exporter or subscriber.
 - Terminal login uses the device code grant as the public `voidforge-cli` dex client (P3.7). The CI end-to-end tests use the password grant, for the static test users only.
 - End-to-end and nightly runs use the fast test rules.
 
@@ -21,7 +22,7 @@ Binary. It is a stub today; P3.6 is the first package that fills it. The layerin
 ```sh
 cargo build -p voidforge-bots
 cargo clippy -p voidforge-bots --all-targets -- -D warnings
-cargo nextest run -p voidforge-bots --no-tests=warn   # drop --no-tests=warn once the workspace has a real test (D-004)
+cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-bots` alone exits 4
 ```
 
 P3.6: bots log in through dex, then join, build, race to colonize and transport cargo, against the compose stack in CI. P3.7: a device code login yields a token the API accepts. P5.3: the nightly long simulation.

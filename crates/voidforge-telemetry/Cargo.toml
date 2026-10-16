@@ -7,5 +7,14 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[dependencies]
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+
 [lints]
 workspace = true
