@@ -1,0 +1,45 @@
+# cargo-deny policy: licenses, advisories, sources and the dependency allowlist.
+# A new dependency is added to [bans].allow and its license to [licenses].allow,
+# together with a decision-log entry (docs/decision-log.md, D-008).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# No external crate yet, so no license is allowed yet.
+allow = []
+confidence-threshold = 0.93
+
+[licenses.private]
+# Workspace crates are unpublished (publish = false) and carry no license field.
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+allow-wildcard-paths = true
+# The dependency allowlist. Once it is non-empty, cargo-deny rejects every crate
+# not listed, workspace crates included.
+allow = [
+    { crate = "voidforge-api-types" },
+    { crate = "voidforge-bots" },
+    { crate = "voidforge-core" },
+    { crate = "voidforge-host" },
+    { crate = "voidforge-replay" },
+    { crate = "voidforge-rules" },
+    { crate = "voidforge-server" },
+    { crate = "voidforge-store" },
+    { crate = "voidforge-telemetry" },
+    { crate = "voidforge-testkit" },
+    { crate = "voidforge-web" },
+    { crate = "voidforge-worldgen" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

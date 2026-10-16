@@ -19,11 +19,14 @@ The project is in Phase 0 (Foundations) of the [Technical Plan](docs/Voidforge%2
 
 ## Building
 
-Install [rustup](https://rustup.rs); `rust-toolchain.toml` selects the pinned toolchain. Tests need [cargo-nextest](https://nexte.st).
+Install [rustup](https://rustup.rs); `rust-toolchain.toml` selects the pinned toolchain. Tests need [cargo-nextest](https://nexte.st) and the supply-chain check needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny), at the versions in the [version table](docs/versions.md). CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same commands.
 
 ```sh
 cargo build
-cargo clippy --workspace --all-targets -- -D warnings
+.github/scripts/check-no-managed-blocks.sh
+.github/scripts/test-check-no-managed-blocks.sh
 cargo fmt --all --check
-cargo nextest run --no-tests=warn   # plain `cargo nextest run` once real tests exist (decision log D-004)
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo deny check                    # needs cargo-deny
+cargo nextest run --workspace --locked --no-tests=warn   # plain `cargo nextest run` once real tests exist (decision log D-004)
 ```
