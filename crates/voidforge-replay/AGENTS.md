@@ -13,6 +13,7 @@ Binary. It is a stub today; P2.7 is the first package that fills it. The layerin
 
 ## Invariants
 
+- Replay is an offline caller of the core: it rebuilds a world from a snapshot and the log and never touches live state. It maps each log record to `advance_to` or `apply` through the same shared function as host recovery, which P2.5 adds and P2.7 reuses ([Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering)).
 - Replays are pinned to the rules version and engine build named in the log and snapshots, and a mismatch is refused.
 - `advance` records are recomputed and checked against their recorded events, never applied.
 - Replaying the same log gives byte-identical state and the same domain events every time.

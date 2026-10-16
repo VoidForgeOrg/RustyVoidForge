@@ -22,7 +22,8 @@ Library. It is a stub today; P1.1 is the first package that fills it. The layeri
 - `view` never writes; checkpoints happen only on events and commands.
 - A command is validated against the state at its stamped time and applied atomically, or rejected with a reason code and no change ([Commands](../../docs/Voidforge%20Architectural%20Design.md#commands)).
 - A next event that is not strictly after t, or too many transitions at one instant, stops the engine with an error. That is a bug, not a game state ([Next event](../../docs/Voidforge%20Architectural%20Design.md#next-event)).
-- Only `voidforge-host` calls `advance_to` and `apply`. The core does no instrumentation; it returns step statistics as plain data.
+- Only `voidforge-host` changes the live `World`. Two offline callers also drive `advance_to` and `apply`, never against live state: `voidforge-replay`, which rebuilds a world from a snapshot and the log, and tests ([Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering)).
+- The core does no instrumentation; it returns step statistics as plain data.
 - The determinism rules apply here: no clocks, hash-ordered collections, threads, locks, system randomness, UUID generation or float arithmetic ([P0.4](../../docs/Voidforge%20Technical%20Plan.md#phase-0-foundations), [Determinism rules](../../docs/Voidforge%20Architectural%20Design.md#determinism-rules)). Review enforces them until P0.4 adds the clippy bans.
 
 ## Tests

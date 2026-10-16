@@ -39,7 +39,7 @@ Twelve crates in three layers; dependencies only point down. Each crate's `AGENT
 | [voidforge-bots](crates/voidforge-bots/AGENTS.md) | binary | api-types |
 | [voidforge-replay](crates/voidforge-replay/AGENTS.md) | binary | core, rules, store |
 
-Only `voidforge-host` calls the core's state-changing entry points. Only the binaries talk to the outside world. `voidforge-web` and `voidforge-bots` reach the server over HTTP alone.
+Only `voidforge-host` changes the live `World`. `voidforge-replay` and tests also drive the core's state-changing entry points, offline and never against live state, and host recovery and replay share one function for turning a log record into a core call (P2.5). Only the binaries talk to the outside world. `voidforge-web` and `voidforge-bots` reach the server over HTTP alone.
 
 `members = ["crates/*"]` makes every folder under `crates/` a workspace member, so anything placed there is built with the workspace.
 

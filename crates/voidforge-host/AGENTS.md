@@ -13,7 +13,8 @@ Library. It is a stub today; P2.3 is the first package that fills it. The layeri
 
 ## Invariants
 
-- It is the only code that calls the core's state-changing entry points. One thread owns the `World`, and everything else reaches it through the bounded inbox ([Engine host and write path](../../docs/Voidforge%20Architectural%20Design.md#engine-host-and-write-path)).
+- Only the host changes the live `World` ([Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering)). One thread owns it, and everything else reaches it through the bounded inbox ([Engine host and write path](../../docs/Voidforge%20Architectural%20Design.md#engine-host-and-write-path)).
+- Host recovery and replay map a log record to `advance_to` or `apply` through one shared function, so they cannot drift apart. P2.5 adds it to a crate both may depend on, and P2.7 reuses it.
 - Stamp t = max(wall clock, last t), so stamps never go backwards.
 - A command is acknowledged only after its log record is durable. A failed append is fatal: the host stops and recovers.
 - A known idempotency key returns the logged outcome without applying anything. The key map is rebuilt from the log on recovery.
