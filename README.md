@@ -17,6 +17,18 @@ The project is in Phase 0 (Foundations) of the [Technical Plan](docs/Voidforge%2
 - [Version table](docs/versions.md): pinned toolchain and versions.
 - [Pull request template](.github/pull_request_template.md).
 
+## Local stack
+
+Postgres, dex and Grafana otel-lgtm run under Docker Compose. You need Docker with the Compose plugin and [just](https://github.com/casey/just), at the versions in the [version table](docs/versions.md).
+
+```sh
+just up        # start, wait until healthy, verify every service by effect
+just status    # verify again
+just down      # stop; Postgres data is kept
+```
+
+[deploy/README.md](deploy/README.md) lists the addresses, the test-only credentials and troubleshooting.
+
 ## Building
 
 Install [rustup](https://rustup.rs); `rust-toolchain.toml` selects the pinned toolchain. Tests need [cargo-nextest](https://nexte.st) and the supply-chain check needs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny), at the versions in the [version table](docs/versions.md). CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same commands.

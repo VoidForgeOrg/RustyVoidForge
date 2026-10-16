@@ -37,12 +37,23 @@ Used only by `tests/guardrails/run_fixtures.py`, inside a temporary copy of the 
 | toml | 1.1.8 | Proves the float check sees a float read from a dependency |
 | Python | 3, standard library only; CI uses the runner image's `python3`, and the scripts also run on Python 3.9 | Runs the fixture harness and the web check |
 
+## Local stack
+
+Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Dockerfile`](../deploy/dex/Dockerfile) by tag and multi-platform digest ([D-014](decision-log.md#d-014-local-stack)).
+
+| Item | Version | Pin |
+| --- | --- | --- |
+| Postgres | 18.6, Alpine image | `postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873` |
+| dex | v2.46.0 | `ghcr.io/dexidp/dex:v2.46.0@sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777` |
+| otel-lgtm | 0.36.0 | `grafana/otel-lgtm:0.36.0@sha256:57c04cbd8e7022f32bb84c4ac005d79baf8b08e2c5be44facf11f5f1f9944ba2` |
+| Discovery probe (curl) | 8.16.0 | `curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6` |
+| Docker Compose | 5.6.0 verified (needs `up --wait`, Compose 2.17 or later) | Not pinned; installed per machine |
+| just | 1.59.0 verified | Not pinned; installed per machine |
+
 ## Tools: planned, not introduced
 
 | Tool | Introduced by |
 | --- | --- |
-| just | P0.5 |
-| Docker Compose, Postgres, dex, otel-lgtm images | P0.5 |
 | cargo-chef | P5.2 |
 
 ## Crate dependencies

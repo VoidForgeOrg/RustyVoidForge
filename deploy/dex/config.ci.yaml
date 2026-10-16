@@ -1,0 +1,51 @@
+# dex for CI end-to-end runs. It is config.yaml plus the password grant for the static test users
+# (Technical Plan, Auth); keep the two files identical otherwise. TEST-ONLY values throughout.
+# Select it with DEX_CONFIG=config.ci.yaml.
+
+# One issuer for the browser, the host and host-network containers (decision log D-015).
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+  responseTypes: ["code"]
+  # Authorization code (with PKCE) for the web app, device code for bots and the CLI.
+  # CI only: the password grant for the static test users. Still no client credentials.
+  grantTypes:
+    - authorization_code
+    - refresh_token
+    - urn:ietf:params:oauth:grant-type:device_code
+    - password
+  passwordConnector: local
+
+enablePasswordDB: true
+staticPasswords:
+  - email: alice@voidforge.test
+    username: alice
+    userID: 0b6c5a2e-6c1f-4c8e-9a3d-1f2e3d4c5b6a
+    # password: alice-local-test-password
+    hash: "$2y$10$RgAZJYdAG/LQMVL6id8NPe3TyOgHG06LisO13VvRQ68Om5kdpH..u"
+  - email: bob@voidforge.test
+    username: bob
+    userID: 7d4e3f2a-1b0c-4d9e-8f7a-6b5c4d3e2f1a
+    # password: bob-local-test-password
+    hash: "$2y$10$4oJw.MHtDYGkf1atOwyhqeUQEy.SiU2398nVfIh7QtzbIIC4CfC2."
+
+staticClients:
+  # Web frontend: confidential client, authorization code with PKCE.
+  - id: voidforge-web
+    name: Voidforge web
+    secret: voidforge-web-local-test-secret
+    redirectURIs:
+      - http://localhost:8081/callback
+  # Bots and the terminal client: public client, device code grant.
+  - id: voidforge-cli
+    name: Voidforge CLI
+    public: true
+    redirectURIs:
+      - /device/callback
