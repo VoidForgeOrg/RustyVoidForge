@@ -36,6 +36,10 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Web dependency isolation
+        run: python3 tests/guardrails/check_web_deps.py
+      - name: Guardrail fixtures (determinism bans and web isolation)
+        run: python3 tests/guardrails/run_fixtures.py
 
   supply-chain:
     name: supply-chain
