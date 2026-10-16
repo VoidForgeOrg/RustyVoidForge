@@ -190,7 +190,7 @@ An empty but fully guarded workspace, so every later package lands in CI, under 
 
 | ID | Package | Area | Done when |
 | --- | --- | --- | --- |
-| P0.1 | Workspace skeleton in the new repository: every crate as a stub, toolchain pinned, edition 2024, workspace lints, `unsafe` forbidden | repo root | `cargo build` and `cargo nextest run` pass |
+| P0.1 | Workspace skeleton in the new repository: every crate as a stub, toolchain pinned, edition 2024, workspace lints, `unsafe` forbidden | repo root | `cargo build` passes, and `cargo nextest run --no-tests=warn` passes and finds every crate; the stubs have no tests yet, so the plain command exits with nextest's no-tests code until the first real test lands |
 | P0.2 | Agent conventions: root and per-crate `AGENTS.md`, PR template, decision log, version table | repo root | Merged, linked from the README, and every `AGENTS.md` links to the specs |
 | P0.3 | CI baseline: lint, supply chain and test stages, with caching | `.github/workflows` | The checks are required on main |
 | P0.4 | Determinism guardrails: clippy bans on clocks, hash-ordered collections, threads, locks, system randomness, UUID generation and float arithmetic in the core, rules and worldgen, plus a dependency check that keeps `voidforge-web` away from the core, host, store and server | `voidforge-core`, voidforge-rules, voidforge-worldgen, `clippy.toml` | A fixture with each banned call, and one with a forbidden dependency, fails CI |
