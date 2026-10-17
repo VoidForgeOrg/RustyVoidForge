@@ -37,7 +37,15 @@ fn below_rejects_the_partial_top_range() {
     // rejected and every returned value is still below n.
     let mut rng = ChaCha8Rng::seed_from_u64(3);
     let n = (1u64 << 63) + 1;
-    for _ in 0..100 {
-        assert!(below(&mut rng, n) < n);
-    }
+    let got: Vec<u64> = (0..4).map(|_| below(&mut rng, n)).collect();
+    assert!(got.iter().all(|&v| v < n));
+    // Pinned: a biased `v % n` would return v − n for the rejected draws and differ.
+    assert_eq!(got, BELOW_PINNED);
 }
+
+const BELOW_PINNED: [u64; 4] = [
+    1_499_751_601_245_649_308,
+    5_954_713_448_187_445_940,
+    1_542_844_391_795_231_216,
+    3_769_008_187_841_854_481,
+];

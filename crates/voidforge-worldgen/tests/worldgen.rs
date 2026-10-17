@@ -22,12 +22,30 @@ fn dense_rules(side_units: i64) -> Rules {
     rules
 }
 
+/// Rules with every worldgen number changed from Rules v0, so a default hard-coded in the
+/// generator shows up: 25 planets per player, 12-unit spacing, candidates 160 units apart with
+/// 4 neighbors within 110 units, slots and caps changed too.
+fn altered_rules() -> Rules {
+    let mut rules = dense_rules(450);
+    let g = &mut rules.worldgen;
+    g.planets_per_expected_player = 25;
+    g.min_planet_spacing_du = 12 * U;
+    g.homeworld_min_spacing_du = 160 * U;
+    g.homeworld_neighbor_radius_du = 110 * U;
+    g.homeworld_min_neighbors = 4;
+    rules.planet.slots = 6;
+    rules.planet.ore_cap_g = 7_000_000_000;
+    rules.validate().unwrap();
+    rules
+}
+
 /// The worlds every default is checked on: (rules, players, seed).
 fn worlds() -> Vec<(Rules, u32, World)> {
     [
         (v0_rules(), 100, 1),
         (dense_rules(216), 1, 2),
         (dense_rules(413), 7, 3),
+        (altered_rules(), 7, 4),
     ]
     .into_iter()
     .map(|(rules, players, seed)| {
@@ -237,3 +255,22 @@ fn the_100_player_default_generates() {
     let w = generate(2026, 100, &v0_rules()).unwrap();
     assert_eq!(w.planets.len(), 2_000);
 }
+
+#[test]
+fn a_fixed_seed_gives_the_recorded_world() {
+    // A golden: seed 8 at 7 players under the dense rules. Any change to the sampling, the RNG's
+    // use or the shuffle changes it; refresh only on a deliberate change (D-031).
+    let w = generate(8, 7, &dense_rules(413)).unwrap();
+    let first: Vec<(i64, i64, i64)> = w
+        .planets
+        .values()
+        .take(3)
+        .map(|p| (p.position.x / U, p.position.y / U, p.position.z / U))
+        .collect();
+    let candidates: Vec<u64> = w.homeworld_candidates.iter().map(|p| p.0).collect();
+    assert_eq!(first, GOLDEN_FIRST);
+    assert_eq!(candidates, GOLDEN_CANDIDATES);
+}
+
+const GOLDEN_FIRST: [(i64, i64, i64); 3] = [(55, 33, 219), (398, 59, 28), (176, 392, 178)];
+const GOLDEN_CANDIDATES: [u64; 7] = [133, 52, 23, 102, 22, 126, 40];
