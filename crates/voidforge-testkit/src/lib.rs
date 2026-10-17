@@ -5,7 +5,10 @@
 //! the world's own counter, so they are predictable, keeps both sides of every link in step, and
 //! [`WorldBuilder::build`] checks the links before handing the world over. Misuse panics with a
 //! message, because these are test helpers. [`busy_world`] is a ready-made world with every
-//! entity, state and queue kind.
+//! entity, state and queue kind. [`determinism`] holds what the determinism suite's harnesses
+//! share (decision log D-024).
+
+pub mod determinism;
 
 use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::{BuildCost, Rules};

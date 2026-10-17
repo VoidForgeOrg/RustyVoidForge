@@ -10,8 +10,11 @@ repository.workspace = true
 [dependencies]
 voidforge-core.workspace = true
 voidforge-rules.workspace = true
+postcard.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 serde_json.workspace = true
 
 [lints]
