@@ -434,6 +434,25 @@ fn score_rounds_each_resource_once_over_storage_and_cargo() {
     assert_eq!(score(&w, ALICE, 0), fixed + 1);
 }
 
+/// P1.11 QA's carry: ore aboard a fleet counts on its own. With empty storage, 10 t of ore
+/// aboard is exactly 1 point, so leaving fleet ore out of the score loses it.
+#[test]
+fn score_counts_ore_aboard_a_fleet_with_empty_storage() {
+    let mut b = WorldBuilder::new();
+    let home = b.player(ALICE);
+    b.stocks(home, Quantity::new(0, 0, 0), Quantity::new(0, 0, 0));
+    let ship = b.ship(ALICE, ShipKind::CargoVessel, home);
+    b.fleet(
+        &[ship],
+        Cargo {
+            ore_g: 10 * T,
+            ingots_g: 0,
+        },
+    );
+    let w = b.build();
+    assert_eq!(score(&w, ALICE, 0), 1_250 + 150 + 1);
+}
+
 #[test]
 fn score_counts_ships_in_transit_and_cargo_aboard_moving_fleets() {
     let mut b = WorldBuilder::new();

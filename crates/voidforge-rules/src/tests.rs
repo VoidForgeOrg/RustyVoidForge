@@ -400,6 +400,43 @@ fn invariant_violations_name_the_field() {
             "worldgen.min_planet_spacing_du",
             "must be less than cube_size_du",
         ),
+        // Feasibility (P1.2 QA LOW carried to P1.12, D-031).
+        (
+            "cube_size_du = 1_000_000 ",
+            "cube_size_du = 1_000_500 ",
+            "worldgen.cube_size_du",
+            "must be whole world units",
+        ),
+        (
+            "homeworld_min_spacing_du = 150_000 ",
+            "homeworld_min_spacing_du = 5_000 ",
+            "worldgen.homeworld_min_spacing_du",
+            "must be at least min_planet_spacing_du",
+        ),
+        (
+            "homeworld_min_spacing_du = 150_000 ",
+            "homeworld_min_spacing_du = 1_733_000 ",
+            "worldgen.homeworld_min_spacing_du",
+            "must not exceed the cube's diagonal",
+        ),
+        (
+            "homeworld_neighbor_radius_du = 100_000 ",
+            "homeworld_neighbor_radius_du = 5_000 ",
+            "worldgen.homeworld_neighbor_radius_du",
+            "must be at least min_planet_spacing_du (10000) when neighbors are required",
+        ),
+        (
+            "homeworld_min_neighbors = 5",
+            "homeworld_min_neighbors = 10000",
+            "worldgen.homeworld_min_neighbors",
+            "cannot keep min_planet_spacing_du",
+        ),
+        (
+            "planets_per_expected_player = 20 ",
+            "planets_per_expected_player = 5 ",
+            "worldgen.planets_per_expected_player",
+            "at least 1 + homeworld_min_neighbors (6)",
+        ),
     ];
     for (old, new, field, problem) in cases {
         let error = invalid(&edited(old, new));

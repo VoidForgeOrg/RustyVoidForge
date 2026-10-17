@@ -382,6 +382,83 @@ impl Rules {
             "worldgen.homeworld_neighbor_radius_du",
             world.homeworld_neighbor_radius_du,
         )?;
+        // Feasibility that does not depend on the player count (D-031); generation checks the
+        // rest. World generation places planets on whole world units (D-021).
+        for (field, value) in [
+            ("worldgen.cube_size_du", world.cube_size_du),
+            (
+                "worldgen.min_planet_spacing_du",
+                world.min_planet_spacing_du,
+            ),
+            (
+                "worldgen.homeworld_min_spacing_du",
+                world.homeworld_min_spacing_du,
+            ),
+            (
+                "worldgen.homeworld_neighbor_radius_du",
+                world.homeworld_neighbor_radius_du,
+            ),
+        ] {
+            if value % DISTANCE_UNITS_PER_WORLD_UNIT != 0 {
+                return Err(problem(
+                    field,
+                    format!(
+                        "must be whole world units (a multiple of {DISTANCE_UNITS_PER_WORLD_UNIT}), got {value}"
+                    ),
+                ));
+            }
+        }
+        let (side, spacing) = (
+            i128::from(world.cube_size_du),
+            i128::from(world.min_planet_spacing_du),
+        );
+        let (home, radius) = (
+            i128::from(world.homeworld_min_spacing_du),
+            i128::from(world.homeworld_neighbor_radius_du),
+        );
+        if home < spacing {
+            return Err(problem(
+                "worldgen.homeworld_min_spacing_du",
+                format!("must be at least min_planet_spacing_du ({spacing})"),
+            ));
+        }
+        if home * home > 3 * side * side {
+            return Err(problem(
+                "worldgen.homeworld_min_spacing_du",
+                format!("must not exceed the cube's diagonal (side {side})"),
+            ));
+        }
+        let neighbors = i128::from(world.homeworld_min_neighbors);
+        if neighbors > 0 {
+            if radius < spacing {
+                return Err(problem(
+                    "worldgen.homeworld_neighbor_radius_du",
+                    format!(
+                        "must be at least min_planet_spacing_du ({spacing}) when neighbors are required"
+                    ),
+                ));
+            }
+            // Necessary packing bound: the candidate and its neighbors, pairwise `spacing` apart,
+            // fit in a ball of `radius` only if (n + 1) × s³ ≤ (2r + s)³.
+            let reach = 2 * radius + spacing;
+            if (neighbors + 1) * spacing * spacing * spacing > reach * reach * reach {
+                return Err(problem(
+                    "worldgen.homeworld_min_neighbors",
+                    format!(
+                        "{neighbors} neighbors cannot keep min_planet_spacing_du within homeworld_neighbor_radius_du"
+                    ),
+                ));
+            }
+        }
+        if i128::from(world.planets_per_expected_player) < 1 + neighbors {
+            return Err(problem(
+                "worldgen.planets_per_expected_player",
+                format!(
+                    "must be at least 1 + homeworld_min_neighbors ({})",
+                    1 + neighbors
+                ),
+            ));
+        }
         Ok(())
     }
 }

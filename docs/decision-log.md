@@ -493,3 +493,42 @@ Each entry records its date, the package that made it, the decision, the reasons
     - The switch is one match arm in `World::score`. The test name contains "provisional".
   - **Visibility**: planets, `PlanetsNear` and players are public. Fleets are visible only to their owner: the query names the viewer, and no query returns another player's fleets. **Phase 3 obligation**: the host takes the viewer from the auth token, never from the request body.
   - **Determinism**: every observation in the invariance runs takes every view and checks the bytes are unchanged. The done-when (a view at any t before `valid_until` equals the same view after `advance_to(t)`, field for field, and is `Stale` at `valid_until`) is a named test and a property over `Economy` worlds with fleets and commands.
+
+### D-031: World generation
+
+- Date and package: 2026-10-18, P1.12. Proposed by dev-build. **Lead ruling, overnight; advisor review pending** (slice 18, `ruling-lead-overnight.md`). **The placement option is PROVISIONAL, pending Tom (game intent).**
+- Decision:
+  - **Entry point**: `voidforge_worldgen::generate(seed, players, &Rules) -> Result<World, WorldgenError>`.
+    - It produces the universe's first `World`: at time 0 (the host sets the epoch in P2.9), under the rules' version, with the seed recorded.
+    - It holds `players × planets_per_expected_player` unowned planets with the rules' slots and caps and empty stocks, plus `players` homeworld candidates.
+    - Every planet is solved (D-025), and the links hold.
+  - **Placement, option B (PROVISIONAL, pending Tom)**:
+    - Planets are uniform in the cube on whole world units (D-021), each at least `min_planet_spacing_du` from every other.
+    - Candidates are chosen among the planets with at least `homeworld_min_neighbors` others within `homeworld_neighbor_radius_du` (inclusive). The qualifying planets are taken in a seeded shuffle, each kept if it is at least `homeworld_min_spacing_du` from those already kept, until `players` are kept. That order is the candidate order.
+    - This is the Technical Plan's literal "spread uniformly". It works at the 100-player default (cube packing about 0.12).
+    - Under the default rules small worlds fail: `Infeasible("too few planets qualify as homeworld candidates")`, because a fixed 1,000-unit cube at 20 planets per player has density proportional to players, and at 1 player essentially no planet has 5 neighbors within 100 units. Small worlds are tested under denser rules (the cube scaled to keep the 100-player density).
+    - **Alternatives awaiting Tom**:
+      - **A**: build each candidate's neighborhood (sites pairwise apart, `homeworld_min_neighbors` planets uniform within the radius of each), then fill the rest uniformly. Feasible at every size, but clustered.
+      - **C**: scale the cube with the player count (side ∝ players^⅓), uniform and always feasible, but "a 1,000-unit cube" becomes the 100-player size.
+  - **Randomness**: `ChaCha8Rng::seed_from_u64(seed)` is the only source, from `rand_chacha =0.9.0` (default features off).
+    - That version is already in the tree through opentelemetry_sdk's rand 0.9, so the graph gains no crate or duplicate. The guardrail fixture's 0.10.0 is a lint control only.
+    - A unit test pins the first outputs for seed 42, so an upgrade that changed the stream fails before it changes worlds.
+    - If telemetry moves to rand 0.10, the pin is revisited (it would then become a duplicate).
+  - **Integer-exact sampling**:
+    - `below(n)` by rejection of the top partial range: unbiased, with expected draws under 2.
+    - Spacing is checked on exact squared distances in i128 against a `BTreeMap` grid (cell = spacing, 27 cells per check).
+    - Neighbor counts use a grid with cell = radius.
+    - The shuffle is Fisher–Yates with `below`.
+    - Termination: each planet tries at most `MAX_ATTEMPTS` (10,000) draws, then `Exhausted { placed }`, never a loop.
+  - **Feasibility** (the P1.2 QA LOW carry):
+    - **`Rules::validate`** (independent of player count):
+      - cube and spacings are whole world units;
+      - homeworld spacing ≥ planet spacing, and ≤ the cube's diagonal;
+      - with neighbors required, the neighbor radius ≥ planet spacing;
+      - the packing bound `(n + 1) × s³ ≤ (2r + s)³` for one neighborhood;
+      - `planets_per_expected_player ≥ 1 + homeworld_min_neighbors`.
+    - **`generate`** (count-dependent): `NoPlayers`; the packing bounds `N × s³ ≤ (L + s)³` for the planets and for the candidates (`Infeasible`); too few qualifying candidates (`Infeasible`); anything subtler is caught by `Exhausted`.
+  - **Determinism**:
+    - The same seed gives identical canonical postcard bytes, the bytes P2.2's state hash covers (D-024).
+    - worldgen's own `tests/determinism.rs` joins `just determinism`: an in-process double run over generation, a generated world with three players joined and played for 100 hours, and a two-process run (`double-run-worldgen.bin`).
+    - Timing: the 100-player default (2,000 planets) generates in about 0.1 s in a debug build and 0.02 s in release.
