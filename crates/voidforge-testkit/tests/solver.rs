@@ -476,6 +476,47 @@ fn fleet_entries_still_stop_the_engine_until_fleets_exist() {
     );
 }
 
+// --- Error paths: typed errors, and nothing changed (review-r2) ---
+
+/// Valid rules at an extreme rate: two Drills' output leaves 64 bits. The solver returns a typed
+/// error in every build profile (just test runs debug; the proof also runs this in release),
+/// and the world is unchanged.
+#[test]
+fn an_aggregate_rate_beyond_64_bits_is_a_typed_error_not_a_panic_or_a_wrap() {
+    let mut rules = v0_rules();
+    rules.buildings.drill.output_g_per_h = i64::MAX;
+    rules.validate().expect("valid rules, at an extreme rate");
+    let mut b = WorldBuilder::with_rules(rules.clone());
+    let p = b.planet(None);
+    b.building(p, BuildingKind::Drill, BuildingState::Operational);
+    b.building(p, BuildingKind::Drill, BuildingState::Operational);
+    let mut w = b.build();
+    let before = w.clone();
+    let overflow = EngineError::RateOutOfRange {
+        planet: p,
+        what: "Drill output",
+    };
+    assert_eq!(planet_flows(&w, p, &rules), Err(overflow.clone()));
+    assert_eq!(w.solve_planet(p, &rules), Err(overflow));
+    assert_eq!(w, before);
+}
+
+/// A standalone solve that cannot bump the planet's version fails before writing anything.
+#[test]
+fn a_solve_that_cannot_bump_the_version_changes_nothing() {
+    let rules = v0_rules();
+    let (b, p) = planet(1, 1, 100, 100);
+    let mut w = b.build();
+    w.planets.get_mut(&p).unwrap().version = u64::MAX;
+    let before = w.clone();
+    assert_eq!(
+        w.solve_planet(p, &rules),
+        Err(EngineError::VersionExhausted(p.0))
+    );
+    assert_eq!(w, before);
+    assert!(!w.is_poisoned());
+}
+
 // --- The game design's examples, verbatim ---
 
 /// "Ore storage with 1,000 t of free space, gaining 2 t/h, schedules a full-storage event at

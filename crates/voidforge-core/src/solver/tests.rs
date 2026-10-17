@@ -37,6 +37,13 @@ fn even_split_leftover_grams_go_one_at_a_time_to_the_lowest_ids() {
 }
 
 #[test]
+fn even_split_a_demand_equal_to_the_share_is_met_and_the_rest_goes_on() {
+    // 10 among 3, 5 and 5: the share is 3, which exactly meets the first; the other two split
+    // the remaining 7 as 3 each, and the leftover gram goes to the lower ID.
+    assert_eq!(even_split(10, &[(1, 3), (2, 5), (3, 5)]), [3, 4, 3]);
+}
+
+#[test]
 fn even_split_one_consumer_takes_up_to_its_demand() {
     assert_eq!(even_split(7, &[(3, 10)]), [7]);
     assert_eq!(even_split(70, &[(3, 10)]), [10]);

@@ -112,6 +112,14 @@ pub enum EngineError {
         /// Now.
         now: i64,
     },
+    /// A planet's total rate leaves 64 bits: rules that validate, but at extreme rates.
+    #[error("planet {}: the {what} total leaves the 64-bit range", planet.0)]
+    RateOutOfRange {
+        /// The planet.
+        planet: PlanetId,
+        /// Which total.
+        what: &'static str,
+    },
     /// A quantity could not be computed within 64 bits.
     #[error("planet {}: entity {entity}: {error}", planet.0)]
     Quantity {

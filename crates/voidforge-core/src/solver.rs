@@ -121,13 +121,14 @@ pub fn even_split(supply: i64, demands: &[(u64, i64)]) -> Vec<i64> {
     given
 }
 
-/// The flows of `planet` at world time, from its stored state and `rules`. Fails only if the
-/// planet does not exist or a stock cannot be read at world time.
+/// The flows of `planet` at world time, from its stored state and `rules`. Fails if the planet
+/// does not exist, a stock cannot be read at world time, or a total rate leaves 64 bits
+/// ([`EngineError::RateOutOfRange`], never a panic or a wrapped value).
 pub fn planet_flows(
     world: &World,
     planet: PlanetId,
     rules: &Rules,
-) -> Result<PlanetFlows, StateError> {
+) -> Result<PlanetFlows, EngineError> {
     let p = world
         .planets
         .get(&planet)
@@ -139,7 +140,20 @@ pub fn planet_flows(
     };
     let ore = read(p.ore, "ore")?;
     let ingots = read(p.ingots, "ingots")?;
-    Ok(flows_with(world, planet, rules, ore, ingots))
+    flows_with(world, planet, rules, ore, ingots)
+}
+
+/// A checked total of rates, so valid but extreme rules give an error rather than a panic in
+/// debug builds and a wrapped value in release builds.
+fn total(
+    planet: PlanetId,
+    what: &'static str,
+    rates: impl IntoIterator<Item = i64>,
+) -> Result<i64, EngineError> {
+    rates
+        .into_iter()
+        .try_fold(0i64, |sum, rate| sum.checked_add(rate))
+        .ok_or(EngineError::RateOutOfRange { planet, what })
 }
 
 /// The flows of an existing planet whose stocks hold `ore` and `ingots` grams.
@@ -149,7 +163,7 @@ fn flows_with(
     rules: &Rules,
     ore: i64,
     ingots: i64,
-) -> PlanetFlows {
+) -> Result<PlanetFlows, EngineError> {
     let p = &world.planets[&planet];
     let specs = &rules.buildings;
 
@@ -183,9 +197,9 @@ fn flows_with(
     consumers.sort_unstable();
 
     let ratio = specs.refinery.ingots_per_ore;
-    let e: i64 = drills.iter().map(|d| d.1).sum();
-    let q: i64 = refineries.iter().map(|r| r.1).sum();
-    let demand: i64 = consumers.iter().map(|c| c.1).sum();
+    let e = total(planet, "Drill output", drills.iter().map(|d| d.1))?;
+    let q = total(planet, "Refinery demand", refineries.iter().map(|r| r.1))?;
+    let demand = total(planet, "ingot demand", consumers.iter().map(|c| c.1))?;
     let ore_empty = ore <= 0;
     let ore_full = ore >= p.ore_cap_g;
     let ingots_empty = ingots <= 0;
@@ -198,7 +212,10 @@ fn flows_with(
     if ingots_full {
         a = a.min(demand / ratio);
     }
-    let o = ratio * a;
+    let o = ratio.checked_mul(a).ok_or(EngineError::RateOutOfRange {
+        planet,
+        what: "ingot output",
+    })?;
     let delivered = if ingots_empty {
         even_split(o, &consumers)
     } else {
@@ -223,10 +240,13 @@ fn flows_with(
         ship_builds.insert(id, Flow::new(given[&id.0], rated));
     }
     for &yard in &shipyards {
-        let (rate, rated) = active
-            .iter()
-            .filter(|s| s.1 == yard)
-            .fold((0, 0), |(r, d), s| (r + given[&s.0.0], d + s.2));
+        let builds = active.iter().filter(|s| s.1 == yard);
+        let rate = total(
+            planet,
+            "Shipyard delivery",
+            builds.clone().map(|s| given[&s.0.0]),
+        )?;
+        let rated = total(planet, "Shipyard rated rate", builds.map(|s| s.2))?;
         buildings.insert(yard, Flow::new(rate, rated));
     }
     for id in &p.buildings {
@@ -235,8 +255,9 @@ fn flows_with(
         }
     }
 
-    let ingots_delivered: i64 = delivered.iter().sum();
-    PlanetFlows {
+    let ingots_delivered = total(planet, "ingots delivered", delivered.iter().copied())?;
+    // Both differences are of two values in 0..=i64::MAX, so neither can overflow.
+    Ok(PlanetFlows {
         drill_output: e,
         refinery_demand: q,
         refinery_intake: a,
@@ -248,7 +269,7 @@ fn flows_with(
         ingot_net: o - ingots_delivered,
         buildings,
         ship_builds,
-    }
+    })
 }
 
 /// The production steps: a planet change re-solves its planet. Fleet arrivals and returns are
@@ -408,7 +429,7 @@ impl World {
         }
 
         // Steps 3 and 4: flows, on the quantities brought to now, and the net rates.
-        let flows = flows_with(self, planet, rules, ore.value_g(), ingots.value_g());
+        let flows = flows_with(self, planet, rules, ore.value_g(), ingots.value_g())?;
         let quantity = |entity| {
             move |error| EngineError::Quantity {
                 planet,
@@ -460,6 +481,10 @@ impl World {
             && at_ms <= now
         {
             return Err(EngineError::NotAfterNow { at_ms, now });
+        }
+        // Scheduling bumps the version; check it here, so a failure changes nothing.
+        if p.version == u64::MAX {
+            return Err(EngineError::VersionExhausted(planet.0));
         }
 
         // Write, then step 5: schedule.
