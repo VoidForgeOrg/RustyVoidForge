@@ -6,6 +6,7 @@
 
 use super::super::tests::{json, reload, sample_world};
 use super::*;
+use crate::rules::test_rules;
 use crate::state::{FleetState, PlanetId, ShipId};
 
 const P1: PlanetId = PlanetId(1);
@@ -226,7 +227,7 @@ fn advancing_to_now_does_nothing() {
     let mut w = sample_world();
     let before = w.clone();
     assert_eq!(w.advance_with(10, &mut settled()).unwrap(), []);
-    assert_eq!(w.advance_to(10).unwrap(), []);
+    assert_eq!(w.advance_to(10, &test_rules()).unwrap(), []);
     assert_eq!(w, before);
 }
 
@@ -239,7 +240,7 @@ fn advancing_backwards_is_an_error_that_changes_nothing() {
         Err(EngineError::TimeBeforeNow { t: 9, now: 10 })
     );
     assert_eq!(
-        w.advance_to(9),
+        w.advance_to(9, &test_rules()),
         Err(EngineError::TimeBeforeNow { t: 9, now: 10 })
     );
     assert!(!w.is_poisoned());
@@ -321,7 +322,7 @@ fn scheduling_at_or_before_the_instant_being_processed_stops_and_poisons() {
             w.advance_with(400, &mut settled()),
             Err(EngineError::Poisoned)
         );
-        assert_eq!(w.advance_to(400), Err(EngineError::Poisoned));
+        assert_eq!(w.advance_to(400, &test_rules()), Err(EngineError::Poisoned));
         assert_eq!(
             w.schedule_planet(P2, Some(1_000)),
             Err(EngineError::Poisoned)
@@ -371,15 +372,30 @@ fn reschedule_fleet_expecting(w: &mut World, id: FleetId, at_ms: i64) {
 }
 
 #[test]
-fn production_steps_drop_stale_entries_and_refuse_live_ones() {
+fn production_steps_drop_stale_entries_and_refuse_fleet_entries() {
     let mut w = sample_world();
-    assert_eq!(w.advance_to(99).unwrap(), []); // only the stale 50 ms entry was due
-    assert_eq!(w.time_ms, 99);
+    w.schedule_planet(P1, None).unwrap(); // no live planet entry: this test is about the loop
+    assert_eq!(w.advance_to(149, &test_rules()).unwrap(), []); // only stale entries were due
+    assert_eq!(w.time_ms, 149);
     assert_eq!(
-        w.advance_to(100),
-        Err(EngineError::StepNotBuilt(QueueKind::PlanetChange(P1)))
+        w.advance_to(150, &test_rules()),
+        Err(EngineError::StepNotBuilt(QueueKind::FleetReturn(F14)))
     );
     assert!(w.is_poisoned());
+}
+
+#[test]
+fn production_steps_need_the_worlds_rules_version() {
+    let mut w = sample_world();
+    let before = w.clone();
+    let mut other = test_rules();
+    other.version = 1;
+    assert_eq!(
+        w.advance_to(400, &other),
+        Err(EngineError::RulesMismatch { world: 0, given: 1 })
+    );
+    assert!(!w.is_poisoned());
+    assert_eq!(w, before);
 }
 
 #[test]
@@ -556,7 +572,7 @@ fn an_advance_from_inside_a_step_is_refused_and_stops_the_outer_one() {
                 if !swallow {
                     inner?;
                 }
-                let _ = w.advance_to(250);
+                let _ = w.advance_to(250, &test_rules());
             }
             settle(w, kind)
         });

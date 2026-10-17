@@ -957,7 +957,7 @@ impl Serialize for World {
 }
 
 mod engine;
-pub use engine::{DomainEvent, EngineError, Pending, Steps};
+pub use engine::{DomainEvent, EngineError, Steps};
 
 #[cfg(test)]
 mod tests;

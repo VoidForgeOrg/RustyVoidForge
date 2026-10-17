@@ -321,6 +321,27 @@ impl Rules {
             cargo.cargo_capacity_g,
         )?;
 
+        // Every ingot demand must divide by the refining ratio, so a full ingot stock is held
+        // exactly at its cap (decision log D-025).
+        for (field, build) in [
+            ("buildings.drill.cost_g", drill.build),
+            ("buildings.refinery.cost_g", refinery.build),
+            ("buildings.shipyard.cost_g", shipyard.build),
+            ("ships.colony_ship.cost_g", colony.build),
+            ("ships.cargo_vessel.cost_g", cargo.build),
+        ] {
+            let rate = build.rate_g_per_h().unwrap_or_default();
+            if rate % refinery.ingots_per_ore != 0 {
+                return Err(problem(
+                    field,
+                    format!(
+                        "the build's rate of {rate} g/h is not a multiple of ingots_per_ore ({})",
+                        refinery.ingots_per_ore
+                    ),
+                ));
+            }
+        }
+
         let score = &self.scoring;
         not_negative("scoring.planet", score.planet)?;
         not_negative("scoring.drill", score.drill)?;
@@ -358,6 +379,86 @@ impl Rules {
             world.homeworld_neighbor_radius_du,
         )?;
         Ok(())
+    }
+}
+
+/// A valid rules set for core tests, which cannot read rules files. Its numbers are round test
+/// values, not Rules v0; tests of the real files live in voidforge-rules and testkit.
+#[cfg(test)]
+pub(crate) fn test_rules() -> Rules {
+    let build = |tons: i64, hours: i64| BuildCost {
+        cost_g: tons * GRAMS_PER_TON,
+        build_time_ms: hours * MS_PER_HOUR,
+    };
+    Rules {
+        version: 0,
+        name: "core test rules".to_string(),
+        planet: PlanetSpec {
+            slots: 8,
+            ore_cap_g: 10_000 * GRAMS_PER_TON,
+            ingot_cap_g: 5_000 * GRAMS_PER_TON,
+        },
+        homeworld: HomeworldSpec {
+            drills: 1,
+            refineries: 1,
+            ore_g: 2_000 * GRAMS_PER_TON,
+            ingots_g: 1_500 * GRAMS_PER_TON,
+        },
+        buildings: BuildingSpecs {
+            drill: DrillSpec {
+                build: build(150, 3),
+                demolition_time_ms: MS_PER_HOUR,
+                output_g_per_h: 10 * GRAMS_PER_TON,
+            },
+            refinery: RefinerySpec {
+                build: build(240, 4),
+                demolition_time_ms: MS_PER_HOUR,
+                intake_g_per_h: 8 * GRAMS_PER_TON,
+                ingots_per_ore: 2,
+                output_g_per_h: 16 * GRAMS_PER_TON,
+            },
+            shipyard: ShipyardSpec {
+                build: build(1_200, 12),
+                demolition_time_ms: 2 * MS_PER_HOUR,
+                parallel_builds: 3,
+            },
+        },
+        ships: ShipSpecs {
+            colony_ship: ShipSpec {
+                build: build(800, 10),
+                speed_du_per_h: 10 * DISTANCE_UNITS_PER_WORLD_UNIT,
+                cargo_capacity_g: 0,
+            },
+            cargo_vessel: ShipSpec {
+                build: build(300, 4),
+                speed_du_per_h: 15 * DISTANCE_UNITS_PER_WORLD_UNIT,
+                cargo_capacity_g: 500 * GRAMS_PER_TON,
+            },
+        },
+        scoring: ScoringSpecs {
+            planet: 1_000,
+            drill: 100,
+            refinery: 150,
+            shipyard: 500,
+            colony_ship: 400,
+            cargo_vessel: 150,
+            ore: MassPoints {
+                points: 1,
+                per_g: 10 * GRAMS_PER_TON,
+            },
+            ingots: MassPoints {
+                points: 2,
+                per_g: 10 * GRAMS_PER_TON,
+            },
+        },
+        worldgen: WorldgenSpec {
+            planets_per_expected_player: 20,
+            cube_size_du: 1_000 * DISTANCE_UNITS_PER_WORLD_UNIT,
+            min_planet_spacing_du: 10 * DISTANCE_UNITS_PER_WORLD_UNIT,
+            homeworld_min_spacing_du: 150 * DISTANCE_UNITS_PER_WORLD_UNIT,
+            homeworld_neighbor_radius_du: 100 * DISTANCE_UNITS_PER_WORLD_UNIT,
+            homeworld_min_neighbors: 5,
+        },
     }
 }
 
@@ -427,6 +528,11 @@ fn build_cost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_core_test_rules_are_valid() {
+        test_rules().validate().unwrap();
+    }
 
     #[test]
     fn a_build_rate_exists_only_when_exact_and_in_range() {

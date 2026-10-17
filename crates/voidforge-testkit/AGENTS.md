@@ -36,7 +36,7 @@ Every package from P1.6 on joins these harnesses, in `tests/determinism.rs` and 
 
 | A package that adds | Joins | How |
 | --- | --- | --- |
-| A real step (solver P1.6/P1.7, fleets P1.8) | Observation invariance, double run, `check_links` after every advance | Run its scenarios through production `advance_to` once it no longer returns `StepNotBuilt`, alongside the `Churn` runs. Keep `Churn` for the loop itself. Scenarios must produce events; the event-count assertions stay. |
+| A real step (solver P1.6/P1.7, fleets P1.8) | Observation invariance, double run, `check_links` after every advance | Run its scenarios through production `advance_to` once it no longer returns `StepNotBuilt`, alongside the `Churn` runs. Keep `Churn` for the loop itself. Scenarios must produce events; the event-count assertions stay. P1.6 added `Economy` and the `solved_*` tests; P1.7 extends `Economy` with builds that complete and demolitions that end. |
 | A command (`apply`, P1.9/P1.10) | Double run; observation invariance | Generated command sequences run twice give equal bytes. Commands stamped between observation points must not depend on how the span was split. |
 | A view (P1.11) | Observation invariance ("Pure reads") | Call `view` at every observation point. The bytes must not change. |
 | A new entity, state or queue kind | `Scenario`, `Churn` and the property generators | Generate it, so the harnesses reach it. |
@@ -44,11 +44,9 @@ Every package from P1.6 on joins these harnesses, in `tests/determinism.rs` and 
 
 Invariants that wait on the solver and later packages. Add them as properties when their package lands; never fake them before:
 
-- TODO(P1.6/P1.7): no negative or over-cap stock on any planet, at every observation point.
-- TODO(P1.6/P1.7): mass is accounted for within the rounding allowance.
+- Done in P1.6 (`solved_*`, D-025): no negative or over-cap stock at every observation point, and the next event strictly after every solve. Mass is accounted for: an exact scaled ledger between solves, and each snap within one ms of flow plus one gram. These run through the production solver on `Economy` worlds under `slow_build_rules`. P1.7 must let builds complete there and keep these green, with completions moving mass from delivered ingots into buildings and ships.
 - TODO(P1.7, P1.9): slots are respected: buildings, including those under construction or being demolished, never exceed slots.
 - TODO(P1.8): each ship is in exactly one place (one roster or one fleet). `check_links` covers the links, and the property adds conservation across missions.
-- TODO(P1.6+): the next event is strictly in the future after every solve. The loop guard enforces it already; the property then runs through real steps.
 
 Mutations must keep failing the suite: queue insertion-order dependence, a read that writes, a non-carried remainder, a remainder dropped across a rate change (checked against an independent millisecond stepper, because both invariance paths would drop it alike), a stale entry processed, process-level nondeterminism (two-process run only), a deferred entry at `t`, and a late crossing. The P1.5 proof has the table.
 
