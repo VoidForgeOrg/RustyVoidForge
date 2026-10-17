@@ -5,6 +5,12 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, RngSeed};
 
 use super::*;
+use crate::quantity::Quantity;
+use crate::rules::test_rules;
+use crate::state::{
+    Building, BuildingKind, BuildingState, Planet, Player, PlayerId, Position, ShipBuild, ShipKind,
+    World,
+};
 
 const T: i64 = 1_000_000; // grams per ton
 
@@ -81,7 +87,7 @@ proptest! {
         supply in 0i64..1_000,
         demands in prop::collection::vec((0u64..50, 0i64..200), 0..8),
     ) {
-        let mut seen = std::collections::BTreeSet::new();
+        let mut seen = BTreeSet::new();
         let demands: Vec<(u64, i64)> = demands.into_iter().filter(|d| seen.insert(d.0)).collect();
         let given = even_split(supply, &demands);
         let total: i64 = given.iter().sum();
@@ -103,4 +109,105 @@ proptest! {
             }
         }
     }
+}
+
+// --- The loop guard (Next event; D-026) ---
+
+/// A homeworld with a Shipyard (2), an active build already at its cost (3) and a waiting build
+/// already at its cost too (4): completing 3 starts 4, which is due at once, so step 2 needs two
+/// rounds. No command makes such a state; it is built to reach the guard.
+fn two_round_world() -> (World, PlanetId) {
+    let alice = PlayerId(7);
+    let p = PlanetId(1);
+    let mut w = World::new(0, 0, 0);
+    w.players.insert(
+        alice,
+        Player {
+            id: alice,
+            homeworld: p,
+        },
+    );
+    w.planets.insert(
+        p,
+        Planet {
+            id: p,
+            position: Position { x: 0, y: 0, z: 0 },
+            owner: Some(alice),
+            slots: 8,
+            ore_cap_g: 10_000 * T,
+            ingot_cap_g: 5_000 * T,
+            ore: Quantity::new(0, 0, 0),
+            ingots: Quantity::new(0, 0, 0),
+            buildings: [BuildingId(2)].into(),
+            roster: BTreeSet::new(),
+            version: 0,
+            next_event: None,
+        },
+    );
+    w.buildings.insert(
+        BuildingId(2),
+        Building {
+            id: BuildingId(2),
+            planet: p,
+            kind: BuildingKind::Shipyard,
+            state: BuildingState::Operational,
+        },
+    );
+    for (id, status) in [(3, ShipBuildStatus::Active), (4, ShipBuildStatus::Waiting)] {
+        w.ship_builds.insert(
+            ShipBuildId(id),
+            ShipBuild {
+                id: ShipBuildId(id),
+                shipyard: BuildingId(2),
+                kind: ShipKind::CargoVessel,
+                delivered: Quantity::new(300 * T, 0, 0),
+                cost_g: 300 * T,
+                rated_g_per_h: 75 * T,
+                status,
+            },
+        );
+    }
+    w.next_id = 5;
+    w.check_links().unwrap();
+    (w, p)
+}
+
+#[test]
+fn loop_guard_too_many_transition_rounds_stop_the_engine() {
+    let rules = test_rules();
+    let (mut w, p) = two_round_world();
+    assert_eq!(
+        w.settle_transitions(p, &rules, 1),
+        Err(EngineError::TransitionLoop {
+            planet: p,
+            rounds: 2
+        })
+    );
+    // At the bound itself, two rounds are allowed.
+    let (mut w, p) = two_round_world();
+    let events = w.settle_transitions(p, &rules, 2).unwrap();
+    assert_eq!(events.len(), 2);
+}
+
+#[test]
+fn loop_guard_the_production_bound_is_buildings_plus_builds() {
+    let (w, p) = two_round_world();
+    assert_eq!(w.transition_bound(p), 1 + 2);
+    // So the two-round state solves in production.
+    let (mut w, p) = two_round_world();
+    assert_eq!(w.solve_planet(p, &test_rules()).unwrap().len(), 2);
+}
+
+#[test]
+fn loop_guard_a_next_event_not_strictly_after_now_stops_the_engine() {
+    assert_eq!(
+        after_now(Some(10), 10),
+        Err(EngineError::NotAfterNow { at_ms: 10, now: 10 })
+    );
+    assert_eq!(
+        after_now(Some(9), 10),
+        Err(EngineError::NotAfterNow { at_ms: 9, now: 10 })
+    );
+    assert_eq!(after_now(Some(11), 10), Ok(()));
+    assert_eq!(after_now(None, 10), Ok(()));
 }

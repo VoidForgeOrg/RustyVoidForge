@@ -422,40 +422,7 @@ fn halt_chain_ingot_storage_fills_and_halts_the_refinery_then_ore_storage_fills_
     assert_eq!(w.planets[&p].ore.value_at(w.time_ms).unwrap(), 10_000 * T);
 }
 
-// --- Transitions are P1.7's: an explicit error, never a skip ---
-
-#[test]
-fn a_build_reaching_its_cost_stops_the_engine_until_transitions_exist() {
-    let rules = v0_rules();
-    let (mut b, p) = planet(0, 0, 0, 1_000);
-    let drill = b.construction(p, BuildingKind::Drill, 140 * T);
-    let mut w = b.build();
-    w.solve_planet(p, &rules).unwrap();
-    assert_eq!(
-        w.advance_to(H, &rules),
-        Err(EngineError::TransitionNotBuilt {
-            planet: p,
-            entity: drill.0
-        })
-    );
-    assert!(w.is_poisoned());
-}
-
-#[test]
-fn a_demolition_ending_stops_the_engine_until_transitions_exist() {
-    let rules = v0_rules();
-    let (mut b, p) = planet(0, 0, 0, 0);
-    let refinery = b.demolition(p, BuildingKind::Refinery);
-    let mut w = b.build();
-    w.solve_planet(p, &rules).unwrap();
-    assert_eq!(
-        w.advance_to(2 * H, &rules),
-        Err(EngineError::TransitionNotBuilt {
-            planet: p,
-            entity: refinery.0
-        })
-    );
-}
+// Transitions themselves are P1.7's named tests, in `tests/transitions.rs`.
 
 #[test]
 fn fleet_entries_still_stop_the_engine_until_fleets_exist() {
@@ -495,6 +462,31 @@ fn an_aggregate_rate_beyond_64_bits_is_a_typed_error_not_a_panic_or_a_wrap() {
     let overflow = EngineError::RateOutOfRange {
         planet: p,
         what: "Drill output",
+    };
+    assert_eq!(planet_flows(&w, p, &rules), Err(overflow.clone()));
+    assert_eq!(w.solve_planet(p, &rules), Err(overflow));
+    assert_eq!(w, before);
+}
+
+/// Carried from P1.6 (QA's probe): two Refineries at i64::MAX / 2 intake each fit 64 bits,
+/// but the ingot output, ratio × intake, does not. The multiplication is checked.
+#[test]
+fn an_ingot_output_beyond_64_bits_is_a_typed_error() {
+    let mut rules = v0_rules();
+    let half = i64::MAX / 2;
+    rules.buildings.refinery.intake_g_per_h = half;
+    rules.buildings.refinery.output_g_per_h = half * 2;
+    rules.validate().expect("valid rules, at an extreme rate");
+    let mut b = WorldBuilder::with_rules(rules.clone());
+    let p = b.planet(None);
+    b.building(p, BuildingKind::Refinery, BuildingState::Operational);
+    b.building(p, BuildingKind::Refinery, BuildingState::Operational);
+    b.stocks(p, Quantity::new(100 * T, 0, 0), Quantity::new(0, 0, 0));
+    let mut w = b.build();
+    let before = w.clone();
+    let overflow = EngineError::RateOutOfRange {
+        planet: p,
+        what: "ingot output",
     };
     assert_eq!(planet_flows(&w, p, &rules), Err(overflow.clone()));
     assert_eq!(w.solve_planet(p, &rules), Err(overflow));

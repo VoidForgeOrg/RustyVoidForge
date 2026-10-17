@@ -20,13 +20,15 @@ use proptest::test_runner::{Config, RngSeed};
 use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::Rules;
 use voidforge_core::solver::planet_flows;
+use voidforge_core::state::DomainEvent;
 use voidforge_core::state::{
     Cargo, EngineError, FleetId, FleetState, Mission, PlanetId, QueueKind, ShipKind, Steps, World,
 };
 use voidforge_testkit::determinism::{
-    Economy, Scenario, Stepped, canonical_bytes, even_stops, run_bytes, run_economy, run_observed,
-    run_straight, settle_stock, slow_build_rules, solves,
+    Economy, Scenario, Stepped, assert_transition_invariants, canonical_bytes, even_stops,
+    run_bytes, run_economy, run_observed, run_straight, settle_stock, slow_build_rules, solves,
 };
+use voidforge_testkit::v0_rules;
 use voidforge_testkit::{ALICE, WorldBuilder};
 
 /// The architecture's scale: 100 hours, in one advance or in 1,000.
@@ -599,34 +601,57 @@ fn stocks_within_caps(w: &World) {
     }
 }
 
+/// 100 hours in one production advance equals 1,000, through real crossings (and, under Rules
+/// v0, real completions); at every observation the world is linked, stocks are within 0 and
+/// their caps, entries are in the future and the transition invariants hold. Returns the
+/// solves and events of the straight run.
+fn solved_invariance(e: &Economy, rules: &Rules) -> (u64, Vec<DomainEvent>) {
+    let start = e.world(rules);
+    let (straight, straight_events) = run_economy(e, rules, SPAN_MS, 1, |_| {}).unwrap();
+    let (observed, observed_events) = run_economy(e, rules, SPAN_MS, ADVANCES, |w| {
+        w.check_links().expect("linked at every observation");
+        stocks_within_caps(w);
+        assert!(w.queue().iter().all(|q| q.at_ms > w.time_ms));
+        assert_transition_invariants(w, rules);
+    })
+    .unwrap();
+    assert_eq!(observed_events, straight_events);
+    assert_eq!(canonical_bytes(&observed), canonical_bytes(&straight));
+    (solves(&start, &straight), straight_events)
+}
+
+fn solved_double_run(e: &Economy, rules: &Rules) {
+    let a = run_economy(e, rules, SPAN_MS, 1, |_| {}).unwrap();
+    let b = run_economy(e, rules, SPAN_MS, 1, |_| {}).unwrap();
+    assert_eq!(canonical_bytes(&a), canonical_bytes(&b));
+}
+
+/// The audited run; returns its solves and completed builds.
+fn solved_audit(e: &Economy, rules: &Rules) -> (u64, usize) {
+    let mut w = e.world(rules);
+    let mut audit = Audit::new(&w, rules);
+    let events = w.advance_with(SPAN_MS, &mut audit).unwrap();
+    audit.close(&w);
+    stocks_within_caps(&w);
+    assert_transition_invariants(&w, rules);
+    assert_eq!(events.len(), audit.events, "the audit returned every event");
+    (audit.solves, audit.completed)
+}
+
 proptest! {
     #![proptest_config(config(16, 0x0b5e_7a71_0000_0007))]
 
-    /// 100 hours in one production advance equals 1,000, through real crossings; at every
-    /// observation the world is linked, every stock is within 0 and its cap, and every entry is
-    /// in the future.
+    /// Flows only: builds slowed so none completes; demolitions still end.
     #[test]
     fn solved_observation_invariance(e in economy()) {
-        let rules = slow_build_rules();
-        let start = e.world(&rules);
-        let straight = run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap();
-        let observed = run_economy(&e, &rules, SPAN_MS, ADVANCES, |w| {
-            w.check_links().expect("linked at every observation");
-            stocks_within_caps(w);
-            assert!(w.queue().iter().all(|q| q.at_ms > w.time_ms));
-        })
-        .unwrap();
-        prop_assert!(solves(&start, &straight) >= 2, "too few crossings: {}", solves(&start, &straight));
-        prop_assert_eq!(canonical_bytes(&observed), canonical_bytes(&straight));
+        let (solves, _) = solved_invariance(&e, &slow_build_rules());
+        prop_assert!(solves >= 2, "too few crossings: {}", solves);
     }
 
     /// The same economy run twice from separately built worlds gives identical bytes.
     #[test]
     fn solved_double_run_in_process(e in economy()) {
-        let rules = slow_build_rules();
-        let a = run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap();
-        let b = run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap();
-        prop_assert_eq!(canonical_bytes(&a), canonical_bytes(&b));
+        solved_double_run(&e, &slow_build_rules());
     }
 
     /// Mass is accounted for: between solves, each planet's ledger grows by exactly ratio ×
@@ -635,13 +660,32 @@ proptest! {
     /// the solve, and stocks stay within 0 and their caps.
     #[test]
     fn solved_mass_is_accounted_for_and_next_events_are_in_the_future(e in economy()) {
-        let rules = slow_build_rules();
-        let mut w = e.world(&rules);
-        let mut audit = Audit::new(&w, &rules);
-        w.advance_with(SPAN_MS, &mut audit).unwrap();
-        audit.close(&w);
-        prop_assert!(audit.solves >= 2, "too few crossings: {}", audit.solves);
-        stocks_within_caps(&w);
+        let (solves, _) = solved_audit(&e, &slow_build_rules());
+        prop_assert!(solves >= 2, "too few crossings: {}", solves);
+    }
+
+    /// P1.7 under Rules v0: builds complete, ships roll off, queues advance and demolitions end,
+    /// and one advance still equals 1,000 with the same events, every invariant holding.
+    #[test]
+    fn transitions_observation_invariance(e in economy()) {
+        let (_, events) = solved_invariance(&e, &v0_rules());
+        let ships = events.iter().filter(|e| matches!(e, DomainEvent::ShipCompleted { .. })).count();
+        let buildings = events.iter().filter(|e| matches!(e, DomainEvent::BuildingCompleted { .. })).count();
+        let demolitions = events.iter().filter(|e| matches!(e, DomainEvent::DemolitionCompleted { .. })).count();
+        prop_assert!(ships >= 2 && buildings >= 1 && demolitions >= 1, "too few transitions: {:?}", events);
+    }
+
+    #[test]
+    fn transitions_double_run_in_process(e in economy()) {
+        solved_double_run(&e, &v0_rules());
+    }
+
+    /// The mass audit through completions: a completing build leaves the ledger at exactly its
+    /// cost, moving that mass into the building or ship.
+    #[test]
+    fn transitions_mass_is_accounted_for_through_completions(e in economy()) {
+        let (_, completed) = solved_audit(&e, &v0_rules());
+        prop_assert!(completed >= 3, "too few completions: {}", completed);
     }
 }
 
@@ -650,26 +694,29 @@ proptest! {
 /// a cap for a stock, the cost for a build), so a snap can be told from any other change.
 type Part = (Quantity, i128, Option<i64>, i64);
 
-fn ledger(w: &World, p: PlanetId, ratio: i64, at: i64) -> (i128, Vec<Part>) {
+/// Ledger parts by key: (0, planet) ore, (1, planet) ingots, (2, entity) a build's delivered.
+fn ledger(w: &World, p: PlanetId, ratio: i64, at: i64) -> (i128, BTreeMap<(u8, u64), Part>) {
     let planet = &w.planets[&p];
-    let mut parts: Vec<Part> = vec![
+    let mut parts = BTreeMap::new();
+    parts.insert(
+        (0, p.0),
         (planet.ore, i128::from(ratio), Some(0), planet.ore_cap_g),
-        (planet.ingots, 1, Some(0), planet.ingot_cap_g),
-    ];
+    );
+    parts.insert((1, p.0), (planet.ingots, 1, Some(0), planet.ingot_cap_g));
     for id in &planet.buildings {
         if let voidforge_core::state::BuildingState::UnderConstruction {
             delivered, cost_g, ..
         } = w.buildings[id].state
         {
-            parts.push((delivered, 1, None, cost_g));
+            parts.insert((2, id.0), (delivered, 1, None, cost_g));
         }
     }
     for b in w.ship_builds.values() {
         if planet.buildings.contains(&b.shipyard) {
-            parts.push((b.delivered, 1, None, b.cost_g));
+            parts.insert((2, b.id.0), (b.delivered, 1, None, b.cost_g));
         }
     }
-    let total = parts.iter().map(|&(q, k, _, _)| k * scaled(q, at)).sum();
+    let total = parts.values().map(|&(q, k, _, _)| k * scaled(q, at)).sum();
     (total, parts)
 }
 
@@ -702,6 +749,10 @@ struct Audit<'a> {
     /// Per planet: the ledger after its last solve, that solve's instant and its Drill actual.
     planets: BTreeMap<PlanetId, (i128, i64, i64)>,
     solves: u64,
+    /// Domain events the solves returned.
+    events: usize,
+    /// Builds that completed, leaving the ledger at their cost.
+    completed: usize,
 }
 
 impl<'a> Audit<'a> {
@@ -720,6 +771,8 @@ impl<'a> Audit<'a> {
             ratio,
             planets,
             solves: 0,
+            events: 0,
+            completed: 0,
         }
     }
 
@@ -742,9 +795,13 @@ impl<'a> Audit<'a> {
 }
 
 impl Steps for Audit<'_> {
-    type Event = ();
+    type Event = DomainEvent;
 
-    fn planet_change(&mut self, w: &mut World, p: PlanetId) -> Result<Vec<()>, EngineError> {
+    fn planet_change(
+        &mut self,
+        w: &mut World,
+        p: PlanetId,
+    ) -> Result<Vec<DomainEvent>, EngineError> {
         let now = w.time_ms;
         let (before, parts) = ledger(w, p, self.ratio, now);
         assert_eq!(
@@ -754,12 +811,29 @@ impl Steps for Audit<'_> {
             p.0,
             now
         );
-        w.solve_planet(p, self.rules)?;
+        let events = w.solve_planet(p, self.rules)?;
+        self.events += events.len();
         let (after, after_parts) = ledger(w, p, self.ratio, now);
         // Snaps are the only change at a solve. A quantity crossing now lands on its boundary
         // with remainder 0, moved by less than one ms of its flow plus one gram; every other
         // quantity is unchanged to the scaled unit, remainder included.
-        for (&(old, _, floor, top), &(new, _, _, _)) in parts.iter().zip(&after_parts) {
+        assert!(
+            after_parts.keys().all(|k| parts.contains_key(k)),
+            "a solve creates no ledger part"
+        );
+        for (key, &(old, _, floor, top)) in &parts {
+            let Some(&(new, _, _, _)) = after_parts.get(key) else {
+                // Completed: it left the ledger at exactly its cost, now in a building or ship.
+                let reached = crossing_now(old, floor, top, now).is_some()
+                    || old.advanced_to(now).unwrap().value_g() >= top;
+                assert!(
+                    reached,
+                    "planet {}: entity {} vanished before its cost",
+                    p.0, key.1
+                );
+                self.completed += 1;
+                continue;
+            };
             let delta = scaled(new, now) - scaled(old, now);
             match crossing_now(old, floor, top, now) {
                 Some(boundary) => {
@@ -798,14 +872,18 @@ impl Steps for Audit<'_> {
         let actual = planet_flows(w, p, self.rules).unwrap().drill_actual;
         self.planets.insert(p, (after, now, actual));
         self.solves += 1;
-        Ok(vec![])
+        Ok(events)
     }
 
-    fn fleet_arrival(&mut self, _: &mut World, _: FleetId) -> Result<Vec<()>, EngineError> {
+    fn fleet_arrival(
+        &mut self,
+        _: &mut World,
+        _: FleetId,
+    ) -> Result<Vec<DomainEvent>, EngineError> {
         unreachable!("economies have no fleets")
     }
 
-    fn fleet_return(&mut self, _: &mut World, _: FleetId) -> Result<Vec<()>, EngineError> {
+    fn fleet_return(&mut self, _: &mut World, _: FleetId) -> Result<Vec<DomainEvent>, EngineError> {
         unreachable!("economies have no fleets")
     }
 }
@@ -844,6 +922,14 @@ fn recorded_runs() -> Vec<u8> {
             let e = Economy {
                 seed: 0x3_0000 + i,
                 planets: 1 + i,
+            };
+            canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
+        }))
+        .chain((0..4u64).map(|i| {
+            let rules = v0_rules();
+            let e = Economy {
+                seed: 0x4_0000 + i,
+                planets: 2 + i,
             };
             canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
         }))

@@ -23,7 +23,9 @@ use voidforge_core::state::{
     Cargo, EngineError, FleetId, FleetState, Mission, PlanetId, QueueKind, ShipKind, Steps, World,
 };
 
-use voidforge_core::state::{BuildingKind, BuildingState, ShipBuildStatus};
+use std::collections::BTreeMap;
+
+use voidforge_core::state::{BuildingKind, BuildingState, DomainEvent, ShipBuildStatus};
 
 use crate::{ALICE, WorldBuilder, v0_rules};
 
@@ -326,10 +328,11 @@ pub fn slow_build_rules() -> Rules {
     rules
 }
 
-/// A generated economy: planets with operational Drills and Refineries, constructions and a
-/// Shipyard with ship builds (never more buildings than Rules v0's 8 slots), and stocks anywhere from 0 to their caps (often exactly at one),
-/// every planet solved at time 0 under [`slow_build_rules`]. Planet 1 is always busy: a Drill
-/// and a Refinery with both stores nearly full, so every run crosses boundaries.
+/// A generated economy: Alice's planets with operational Drills and Refineries, constructions,
+/// demolitions and a Shipyard with ship builds (never more buildings than Rules v0's 8 slots), and stocks anywhere from 0 to their caps (often exactly at one),
+/// every planet solved at time 0. Planet 0 is always busy: her homeworld with both stores
+/// nearly full, a construction, a demolition and a Shipyard with two active and two waiting
+/// builds, so every run crosses boundaries and, under Rules v0, completes builds (P1.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Economy {
     /// Drives every choice.
@@ -344,11 +347,25 @@ impl Economy {
         let mut b = WorldBuilder::with_rules(rules.clone()).seed(self.seed);
         let mut planets = Vec::new();
         for i in 0..self.planets.max(1) {
-            let p = b.planet(None);
+            // Planet 0 is Alice's homeworld (1 Drill, 1 Refinery); the others are her colonies.
+            let p = if i == 0 {
+                b.player(ALICE)
+            } else {
+                b.planet(Some(ALICE))
+            };
             let r = |k: u64| mix(self.seed ^ i.rotate_left(20) ^ k);
-            let (drills, refineries) = if i == 0 { (1, 1) } else { (r(1) % 4, r(2) % 4) };
-            let constructions = r(3) % 2; // at most 3 + 3 + 1 + 1 = 8 slots
-            let shipyard = r(4) % 3 == 0;
+            // At most 2 + 2 + 1 + 1 + 1 = 7 of the 8 slots.
+            let (drills, refineries) = if i == 0 { (0, 0) } else { (r(1) % 3, r(2) % 3) };
+            let constructions = if i == 0 { 1 } else { r(3) % 2 };
+            let shipyard = i == 0 || r(4) % 3 == 0;
+            if i == 0 || r(6) % 4 == 0 {
+                let kind = if r(7) % 2 == 0 {
+                    BuildingKind::Drill
+                } else {
+                    BuildingKind::Refinery
+                };
+                b.demolition(p, kind);
+            }
             for _ in 0..drills {
                 b.building(p, BuildingKind::Drill, BuildingState::Operational);
             }
@@ -365,7 +382,8 @@ impl Economy {
             }
             if shipyard {
                 let yard = b.building(p, BuildingKind::Shipyard, BuildingState::Operational);
-                for k in 0..r(8) % 5 {
+                let builds = if i == 0 { 4 } else { r(8) % 5 };
+                for k in 0..builds {
                     let kind = if r(9 + k) % 2 == 0 {
                         ShipKind::CargoVessel
                     } else {
@@ -427,24 +445,71 @@ impl Economy {
 }
 
 /// An economy run to `to_ms` through production `advance_to`, in `advances` equal advances (the
-/// last takes the rest), with `observe` reading the world after each one.
+/// last takes the rest), with `observe` reading the world after each one. Returns the world and
+/// every domain event, in order.
 pub fn run_economy(
     e: &Economy,
     rules: &Rules,
     to_ms: i64,
     advances: i64,
     mut observe: impl FnMut(&World),
-) -> Result<World, EngineError> {
+) -> Result<(World, Vec<DomainEvent>), EngineError> {
     let mut w = e.world(rules);
+    let mut events = Vec::new();
     for k in 1..=advances {
-        let events = w.advance_to(to_ms * k / advances, rules)?;
-        assert!(
-            events.is_empty(),
-            "the solver produces no domain events yet"
-        );
+        events.extend(w.advance_to(to_ms * k / advances, rules)?);
         observe(&w);
     }
-    Ok(w)
+    Ok((w, events))
+}
+
+/// The invariants transitions must keep (P1.7): no planet holds more buildings than its slots;
+/// every ship is in exactly one place, one roster or one fleet; and no Shipyard has more active
+/// builds than the rules allow.
+pub fn assert_transition_invariants(w: &World, rules: &Rules) {
+    for p in w.planets.values() {
+        assert!(
+            p.buildings.len() <= p.slots as usize,
+            "planet {} over its slots",
+            p.id.0
+        );
+    }
+    let mut places: BTreeMap<u64, usize> = BTreeMap::new();
+    for p in w.planets.values() {
+        for s in &p.roster {
+            *places.entry(s.0).or_default() += 1;
+        }
+    }
+    for f in w.fleets.values() {
+        for s in &f.ships {
+            *places.entry(s.0).or_default() += 1;
+        }
+    }
+    for s in w.ships.keys() {
+        assert_eq!(
+            places.get(&s.0),
+            Some(&1),
+            "ship {} is not in exactly one place",
+            s.0
+        );
+    }
+    assert_eq!(
+        places.len(),
+        w.ships.len(),
+        "a roster or fleet lists a ship that does not exist"
+    );
+    let mut active: BTreeMap<u64, u32> = BTreeMap::new();
+    for b in w.ship_builds.values() {
+        if b.status == ShipBuildStatus::Active {
+            *active.entry(b.shipyard.0).or_default() += 1;
+        }
+    }
+    for (yard, n) in active {
+        assert!(
+            n <= rules.buildings.shipyard.parallel_builds,
+            "Shipyard {yard} has {n} active builds"
+        );
+    }
 }
 
 /// How many times the economy's planets were solved past the first solve: one version per solve.

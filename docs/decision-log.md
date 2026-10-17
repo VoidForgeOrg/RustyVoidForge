@@ -342,3 +342,30 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Determinism**:
     - Solved-planet scenarios join the D-024 harnesses through production `advance_to`, with real stock crossings, and with build costs out of reach so no transition fires.
     - New properties: no negative or over-cap stock; the next event strictly after t; mass accounted for within the allowance P1.1 already states (D-018), with no new tolerance. Each quantity is exact up to its carried remainder and read flooring. Each crossing snap moves it by less than one millisecond of flow plus one gram.
+
+### D-026: Per-planet solver part 2: transitions, their order, events and the loop guard
+
+- Date and package: 2026-10-17, P1.7. Proposed by dev-build and agreed with orch-advisor.
+- Decision:
+  - **Step 2** replaces P1.6's `TransitionNotBuilt`. It collects every transition due at t on the planet, applies them in ascending entity ID (one global counter, D-022), and repeats until a round finds none.
+    - The transitions are a construction whose delivered ingots reach its cost, an active ship build that reaches its cost, and a demolition at its end time.
+    - The source gives no order between them, and none affects another within a round, so ID order exists for determinism only.
+    - Step 3's flows include whatever the transitions changed (cascade within the solve).
+  - **Construction complete**: the building becomes `Operational`; its delivered ingots and start terms are dropped. Event `BuildingCompleted { planet, building, kind }`.
+  - **Ship build complete**:
+    - The build is removed. A new `Ship` takes the next ID from `World.next_id`, with the build's kind, owned by the Shipyard planet's owner, and joins that planet's roster. A Shipyard on an unowned planet is a typed error, since only owners build.
+    - After the round, each Shipyard that completed a build starts its waiting builds in ascending ID order until `parallel_builds` are active. Each starts from its delivered ingots, normally 0, checkpointed at t.
+    - Event `ShipCompleted { planet, shipyard, ship, kind }`. It is not named in the architecture, whose event list says "such as".
+  - **Start terms are the order's terms**: a waiting build keeps the cost and rated rate stored when it was queued. Starting it does not re-read the rules: what a player queued is what they get, and a start needs no rules access. This is how D-022's "builds keep their start terms" is read.
+  - **Demolition end**:
+    - At its end time exactly, the building is removed from `buildings` and from its planet, which frees the slot.
+    - An end time strictly before t is a missed event, `MissedCrossing`, under the same rule as stock crossings, because the planet always schedules its earliest demolition end.
+    - A Shipyard being demolished with builds is a typed error.
+    - Event `DemolitionCompleted { planet, building, kind }`.
+  - **Loop guard**: step-2 rounds that apply transitions may not exceed the planet's buildings plus its ship builds, counted at the start of the solve. Exceeding it is `TransitionLoop`, which poisons inside an advance (D-023).
+    - Every transition consumes an item, so consistent state never reaches the guard; it guards against bugs.
+    - It is proven by an internal call with a lowered bound on a state that needs two rounds, and by a test pinning the production bound.
+    - A next event not strictly after t remains `NotAfterNow`, proven through the internal seam that hands the scheduler its candidate.
+  - **Events**: `solve_planet` returns its events in application order (round, then ID); `advance_to` concatenates them in queue order.
+  - **Atomic solve**: a standalone solve that fails leaves the planet, its buildings and builds, the ship map and the ID counter as they were (restored from a copy taken at the start). Inside an advance, a failure poisons as before.
+  - **Determinism**: `Economy` worlds run real completions, ship creation and demolitions. New properties: slots respected; each ship in exactly one place; active builds per Shipyard within `parallel_builds`; mass accounted for, with each completion moving its cost out of the delivered ingots.
