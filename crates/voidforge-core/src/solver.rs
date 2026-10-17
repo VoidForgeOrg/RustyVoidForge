@@ -601,7 +601,7 @@ impl World {
 
     /// Starts a Shipyard's waiting builds in ascending ID order until `limit` are active, each
     /// on the terms it was queued with (D-026), checkpointed at now.
-    fn start_waiting_builds(
+    pub(crate) fn start_waiting_builds(
         &mut self,
         yard: BuildingId,
         limit: u32,

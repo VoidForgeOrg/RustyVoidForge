@@ -16,6 +16,8 @@
 //! - [`Economy`] and [`slow_build_rules`]: solved planets (P1.6) whose stocks cross 0 and their
 //!   caps through the production solver, with builds slowed so no transition (P1.7) comes due.
 //!   With `fleets`, real fleets fly every mission, race to one planet and are recalled (P1.8).
+//!   With `commands`, a generated script of player commands, accepted and rejected, is applied
+//!   at whole hours, often the instant an event fires (P1.9).
 
 use serde::Serialize;
 use voidforge_core::quantity::{Quantity, QuantityError};
@@ -29,7 +31,13 @@ use std::collections::BTreeMap;
 
 use voidforge_core::state::{BuildingKind, BuildingState, DomainEvent, ShipBuildStatus};
 
+use voidforge_core::command::{Action, Command, Rejection};
+
 use crate::{ALICE, BOB, WorldBuilder, v0_rules};
+
+/// A third test player, who has not joined in any generated world.
+pub const CAROL: voidforge_core::state::PlayerId =
+    voidforge_core::state::PlayerId(0x0192_8c5e_7a3b_7c2d_9e4f_5a6b_7c8d_9e11);
 
 /// The canonical bytes of a value: its postcard encoding. Two runs are the same run when these
 /// are equal.
@@ -359,6 +367,9 @@ pub struct Economy {
     pub planets: u64,
     /// Whether fleets fly (P1.8).
     pub fleets: bool,
+    /// How many generated commands the run applies (P1.9); 0 for none. With commands, two
+    /// unowned homeworld candidates are added.
+    pub commands: u64,
 }
 
 /// A recall planned for a run: the fleet is recalled once world time reaches `at_ms`.
@@ -483,6 +494,10 @@ impl Economy {
         } else {
             Vec::new()
         };
+        if self.commands > 0 {
+            let candidates = [b.planet(None), b.planet(None)];
+            b.candidates(&candidates);
+        }
         let mut w = b.build();
         for &p in &planets {
             w.solve_planet(p, rules).expect("a generated planet solves");
@@ -502,6 +517,127 @@ impl Economy {
             }
         }
         (w, recalls)
+    }
+
+    /// The command script: (instant, index) pairs in the order they are applied. Instants are
+    /// whole hours, where builds started at time 0 complete, so many commands meet an event at
+    /// their instant; several can share one.
+    pub fn script(&self) -> Vec<(i64, u64)> {
+        let mut script: Vec<(i64, u64)> = (0..self.commands)
+            .map(|k| {
+                let hour = 1 + (mix(self.seed ^ 0xc0de_0000 ^ k) % 99) as i64;
+                (hour * voidforge_core::quantity::MS_PER_HOUR, k)
+            })
+            .collect();
+        script.sort_unstable();
+        script
+    }
+
+    /// Every instant a run must stop at besides its even advances: recalls and commands.
+    pub fn instants(&self, recalls: &[Recall]) -> Vec<i64> {
+        recalls
+            .iter()
+            .map(|r| r.at_ms)
+            .chain(self.script().into_iter().map(|(t, _)| t))
+            .collect()
+    }
+
+    /// Command `k` of the script, chosen against the world at its instant (equal in every run
+    /// of the economy). Types cycle in order. Half the time the target is one the command can act
+    /// on (any player's), issued, three times in four, by that target's owner; otherwise the
+    /// player is mostly Alice, sometimes Bob (joined only with fleets) or Carol (never joined at
+    /// the start), and the target is any of its kind or, one time in eight, an ID nothing holds.
+    /// Rejections follow from the mix.
+    pub fn command(&self, k: u64, w: &World) -> Command {
+        use voidforge_core::state::{BuildingId, ShipBuildId};
+        let r = |i: u64| mix(self.seed ^ 0xc0de_0001 ^ (k << 8) ^ i);
+        let mut player = [ALICE, ALICE, ALICE, BOB, CAROL][(r(1) % 5) as usize];
+        // Picks (ID, planet) from `fitting` half the time, else from `any`, else an unheld ID.
+        let pick = |fitting: Vec<(u64, PlanetId)>, any: Vec<(u64, PlanetId)>, i: u64| {
+            let fit = r(i) % 2 == 0 && !fitting.is_empty();
+            let from = if fit { fitting } else { any };
+            if from.is_empty() || (!fit && r(i + 1) % 8 == 0) {
+                (w.next_id + r(i + 2) % 3, None)
+            } else {
+                let (id, planet) = from[(r(i + 3) % from.len() as u64) as usize];
+                (id, fit.then_some(planet))
+            }
+        };
+        let buildings = |f: &dyn Fn(&voidforge_core::state::Building) -> bool| {
+            w.buildings
+                .values()
+                .filter(|b| f(b))
+                .map(|b| (b.id.0, b.planet))
+                .collect::<Vec<_>>()
+        };
+        let building_kind = [
+            BuildingKind::Drill,
+            BuildingKind::Refinery,
+            BuildingKind::Shipyard,
+        ][(r(4) % 3) as usize];
+        let ship_kind = [ShipKind::CargoVessel, ShipKind::ColonyShip][(r(5) % 2) as usize];
+        let (action, fitted) = match k % 6 {
+            0 => (Action::JoinGame, None),
+            1 => {
+                let planets = |owned: bool| {
+                    w.planets
+                        .values()
+                        .filter(|p| !owned || p.owner.is_some())
+                        .map(|p| (p.id.0, p.id))
+                        .collect::<Vec<_>>()
+                };
+                let (id, fit) = pick(planets(true), planets(false), 10);
+                let action = Action::BuildBuilding {
+                    planet: PlanetId(id),
+                    kind: building_kind,
+                };
+                (action, fit)
+            }
+            2 => {
+                let fitting =
+                    buildings(&|b| matches!(b.state, BuildingState::UnderConstruction { .. }));
+                let (id, fit) = pick(fitting, buildings(&|_| true), 20);
+                let building = BuildingId(id);
+                (Action::CancelConstruction { building }, fit)
+            }
+            3 => {
+                // Shipyards are demolished only through `any`, so most runs keep one to queue at.
+                let fitting = buildings(&|b| {
+                    b.state == BuildingState::Operational && b.kind != BuildingKind::Shipyard
+                });
+                let (id, fit) = pick(fitting, buildings(&|_| true), 30);
+                let building = BuildingId(id);
+                (Action::DemolishBuilding { building }, fit)
+            }
+            4 => {
+                let fitting = buildings(&|b| {
+                    b.kind == BuildingKind::Shipyard && b.state == BuildingState::Operational
+                });
+                let (id, fit) = pick(fitting, buildings(&|_| true), 40);
+                let action = Action::QueueShip {
+                    shipyard: BuildingId(id),
+                    kind: ship_kind,
+                };
+                (action, fit)
+            }
+            _ => {
+                let builds: Vec<_> = w
+                    .ship_builds
+                    .values()
+                    .map(|s| (s.id.0, w.buildings[&s.shipyard].planet))
+                    .collect();
+                let (id, fit) = pick(builds.clone(), builds, 50);
+                let build = ShipBuildId(id);
+                (Action::CancelShipBuild { build }, fit)
+            }
+        };
+        if let Some(planet) = fitted
+            && let Some(owner) = w.planets[&planet].owner
+            && r(6) % 4 != 0
+        {
+            player = owner;
+        }
+        Command { player, action }
     }
 
     /// Where Alice's planet `i` sits with fleets: 50 world units apart along x, scattered over
@@ -605,32 +741,72 @@ fn fleet(
     b.fleet(&ships, cargo)
 }
 
+/// A finished economy run: the world, every domain event in order, and each command with its
+/// outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EconomyRun {
+    /// The world at the end.
+    pub world: World,
+    /// Every domain event: of advances, then of each accepted command, in order.
+    pub events: Vec<DomainEvent>,
+    /// Each command applied, accepted or rejected with its reason.
+    pub outcomes: Vec<(Command, Result<(), Rejection>)>,
+}
+
 /// An economy run to `to_ms` through production `advance_to`, in `advances` equal advances (the
-/// last takes the rest), with `observe` reading the world after each one. Returns the world and
-/// every domain event, in order.
+/// last takes the rest), also stopping at each planned recall and command (applied in that
+/// order at their instant). `observe` reads the world after each stop and after each command.
+/// A rejected command must leave the world's bytes as they were.
 pub fn run_economy(
     e: &Economy,
     rules: &Rules,
     to_ms: i64,
     advances: i64,
     mut observe: impl FnMut(&World),
-) -> Result<(World, Vec<DomainEvent>), EngineError> {
-    let (mut w, recalls) = e.start(rules);
+) -> Result<EconomyRun, EngineError> {
+    let (mut world, recalls) = e.start(rules);
+    let script = e.script();
     let mut events = Vec::new();
-    for t in stops(to_ms, advances, &recalls) {
-        events.extend(w.advance_to(t, rules)?);
-        recall_due(&mut w, &recalls)?;
-        observe(&w);
+    let mut outcomes = Vec::new();
+    for t in stops(to_ms, advances, &e.instants(&recalls)) {
+        events.extend(world.advance_to(t, rules)?);
+        recall_due(&mut world, &recalls)?;
+        for &(_, k) in script.iter().filter(|(at, _)| *at == t) {
+            let command = e.command(k, &world);
+            let before = canonical_bytes(&world);
+            let applied = world.apply(&command, t, rules)?;
+            events.extend(applied.advanced);
+            match applied.outcome {
+                Ok(produced) => {
+                    events.extend(produced);
+                    outcomes.push((command, Ok(())));
+                }
+                Err(rejection) => {
+                    assert!(
+                        canonical_bytes(&world) == before,
+                        "rejected {command:?} changed the world"
+                    );
+                    outcomes.push((command, Err(rejection)));
+                }
+            }
+            observe(&world);
+        }
+        observe(&world);
     }
-    Ok((w, events))
+    Ok(EconomyRun {
+        world,
+        events,
+        outcomes,
+    })
 }
 
 /// The instants a run stops at: `advances` equal advances to `to_ms` (the last takes the rest)
-/// and every planned recall, so a recall happens at the same instant however a run is split.
-pub fn stops(to_ms: i64, advances: i64, recalls: &[Recall]) -> Vec<i64> {
+/// and every extra instant up to `to_ms` (recalls, commands), so those happen at the same
+/// instant however a run is split.
+pub fn stops(to_ms: i64, advances: i64, instants: &[i64]) -> Vec<i64> {
     let mut stops: Vec<i64> = (1..=advances)
         .map(|k| to_ms * k / advances)
-        .chain(recalls.iter().map(|r| r.at_ms).filter(|&t| t <= to_ms))
+        .chain(instants.iter().copied().filter(|&t| t <= to_ms))
         .collect();
     stops.sort_unstable();
     stops.dedup();

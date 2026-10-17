@@ -250,6 +250,13 @@ pub enum EngineError {
     /// Colony Ship carries nothing, and never resolved by destroying the cargo.
     #[error("fleet {} has cargo aboard but no ships left", .0.0)]
     CargoWithoutShips(FleetId),
+    /// A command's effect has a value outside 64 bits, or a build rate the rules cannot give
+    /// exactly (validated rules always can).
+    #[error("the command's {what} is out of range")]
+    CommandOutOfRange {
+        /// Which value.
+        what: &'static str,
+    },
     /// An entity's version counter is exhausted.
     #[error("entity {0} has no versions left")]
     VersionExhausted(u64),
@@ -474,6 +481,12 @@ impl World {
                 now: self.time_ms,
             })
         }
+    }
+
+    /// Marks the world unusable after a failure that may have left it half changed (a
+    /// command's effect, D-028).
+    pub(crate) fn poison(&mut self) {
+        self.poisoned = true;
     }
 
     fn usable(&self) -> Result<(), EngineError> {

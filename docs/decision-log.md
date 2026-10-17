@@ -392,3 +392,35 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Same-moment order**: two colony fleets reaching one planet at the same ms run by fleet ID (rank 1), so the lower ID claims it and the other fails as an owned target. IDs increase, so lower = assembled first. A planet change at the same ms runs before the arrival (rank 0). No extra rule.
   - **Events**, in this order within an arrival: `FleetArrived { fleet, planet, mission }` at every arrival; then `PlanetColonized { planet, owner, fleet, ship }` (the consumed Colony Ship) or `ColonizationFailed { planet, fleet }`; then `CargoUnloaded { planet, fleet, cargo }` with the grams unloaded, only when something unloaded; then `FleetRemoved { fleet, planet }` for an emptied fleet; then the target's re-solve events. A return gives `FleetReturned { fleet, planet }`. `StepNotBuilt` is removed: every queue kind has its production step.
   - **Determinism**: `Economy { fleets: true }` adds Bob, three unowned planets and seven fleets sent at time 0 through `send_fleet`: a same-ms colonization race decided by fleet ID, a Transport, a lone Colony Ship, a refused Colonize, a Move with cargo, and a Colonize recalled halfway. The recall is an intervention at a fixed time, at which both the straight and the observed runs stop. New properties: ships conserved (start + `ShipCompleted` − `PlanetColonized`), fleet cargo within 0 and capacity, and mass accounted for with cargo aboard (each arrival's target gains exactly what its fleet unloaded, as `CargoUnloaded` reports, and the cargo aboard closes exactly).
+
+### D-028: Commands, part 1: `apply`, Join game, the planet and Shipyard commands, and their reason codes
+
+- Date and package: 2026-10-17, P1.9. Proposed by dev-build and agreed with orch-advisor, who ruled on six questions (the idempotency key, the Cancel ship build payload, errors after validation, events from commands, Join game on an occupied candidate, the reason codes).
+- Decision:
+  - **What the core takes**: `voidforge_core::command::Command { player, action }`, where `Action` is `JoinGame`, `BuildBuilding { planet, kind }`, `CancelConstruction { building }`, `DemolishBuilding { building }`, `QueueShip { shipyard, kind }` or `CancelShipBuild { build }`. It serializes snake_case and externally tagged (`{"build_building": {...}}`), so a log payload is this value; the API's JSON mapping is Phase 3's.
+    - The idempotency key stays with the host, which looks it up before `apply` and logs it; the core never reads it.
+    - `game_time` is `apply`'s `t`, and `seq` is the order of calls.
+    - Cancel ship build names the build alone, which determines its Shipyard.
+  - **`World::apply(&Command, t, &Rules) -> Result<Applied, EngineError>`**, where `Applied { advanced, outcome: Result<Vec<DomainEvent>, Rejection> }`:
+    1. `advance_to(t)`, so events at t run first. Its errors pass through unchanged.
+    2. Validate against the state at t. A rejection returns `Ok` with `Err(rejection)`, and the world is byte-identical to one that only advanced.
+    3. Apply the effect, then re-solve the touched planet; the command's events are that re-solve's.
+    - After validation, the effect can fail only through `IdsExhausted` or an engine error in the re-solve (`RateOutOfRange`, the new `CommandOutOfRange`). Those poison the world, like errors inside an advance (D-023). A rejection never poisons.
+  - **No events for commands**: the log record (command and outcome) is the record, as with P1.8's send and recall. `advanced` and the command's own events are kept apart.
+  - **The six commands** (accepted when → effect; then re-solve):
+    - Join game: a new player, and the first homeworld candidate in list order that nobody owns → a `Player`; the planet's owner; the rules' Drills then Refineries, operational, on fresh IDs; ore and ingot stocks set to the rules' amounts at t with remainder 0. A candidate's stocks are 0 in the MVP, so "fills" sets them. Other players' ships and fleets on the candidate (reachable by Move) stay where they are; there is no combat.
+    - Build building: the player owns the planet, and its buildings, counting construction and demolition, are fewer than its slots → a construction with delivered 0 at t on the rules' current cost and rate (D-022 start terms).
+    - Cancel construction: under construction on the player's planet → removed; delivered ingots lost; the slot frees at once.
+    - Demolish building: operational on the player's planet; a Shipyard with no builds, active or waiting → `Demolishing { ends_at_ms: t + demolition time }`, with checked addition.
+    - Queue ship: an operational Shipyard on the player's planet → a build on the rules' current terms, active below `parallel_builds`, otherwise waiting; delivered 0 at t.
+    - Cancel ship build: the build's Shipyard is on the player's planet → removed with no refund. If it was active, waiting builds start in ID order up to the limit (P1.7's rule).
+  - **Reason codes** (`Rejection`; `code()` equals the serialized name), checked in a fixed order, who → what → whose → state, with the first failure the code:
+    - `already_joined`, `no_free_homeworld`, `not_joined`;
+    - `unknown_planet`, `unknown_building`, `unknown_ship_build`;
+    - `not_owner`;
+    - `no_free_slot`, `not_under_construction`, `not_operational`, `shipyard_has_builds`, `not_a_shipyard`, `shipyard_not_operational`.
+
+    An entity that existed and is gone is `unknown_*`, since IDs are never reused. These codes are the API contract. P1.10 keeps the architecture's examples verbatim (`insufficient_stock`, `cargo_aboard`) and adds `unknown_fleet` to the `unknown_*` family, so the list reads as one vocabulary.
+  - **Determinism**: `Economy { commands: n }` adds two unowned homeworld candidates and a script of n commands at whole hours, often the instant a build completes. Each is chosen against the state at its instant, half the time a fitting target issued mostly by its owner, otherwise a mix that is rejected. Both runs stop at every command instant (`determinism::stops`).
+    - New properties: equal events and outcomes in 1 against 1,000 advances; a rejected command leaves the world's bytes unchanged; every invariant holds after every command; each action type is both accepted and rejected in every case.
+    - The mass audit through commands: a cancelled construction or build takes exactly its delivered ingots out of the ledger; Join game sets exactly the starting stocks on an empty candidate; nothing else moves mass.
