@@ -14,3 +14,4 @@ pub mod quantity;
 pub mod rules;
 pub mod solver;
 pub mod state;
+pub mod view;
