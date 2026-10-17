@@ -202,3 +202,34 @@ Each entry records its date, the package that made it, the decision, the reasons
   - Targets: cargo-deny checks only the targets we build (x86_64 and aarch64, Linux and macOS), so wasm and Windows-only crates are not allowlisted.
   - Allowlist: the 98 crates the telemetry stack brings in, listed by name.
   - Duplicates: one skip, `syn@2.0.119`. Proc-macro crates are mid-way from syn 2 to syn 3 (prost-derive and tracing-attributes use 2; async-trait and displaydoc use 3). Both are compile-time only. `multiple-versions = "deny"` otherwise stays.
+
+### D-018: Quantities and crossing times
+
+- Date and package: 2026-10-17, P1.1. Agreed with orch-advisor; the Architectural Design's Rounding formulas and Determinism rules were corrected in the same pull request.
+- Decision: `voidforge_core::quantity::Quantity` holds:
+  - a value in grams;
+  - a rate in grams per hour;
+  - a remainder in `0..3_600_000` (units of 1/3,600,000 g);
+  - a checkpoint time in milliseconds.
+
+  The API:
+  - `value_at(t)` reads purely: `value + floor((rate·Δt + remainder) / 3,600,000)`, with Euclidean division and a non-negative remainder, in 128-bit intermediates.
+  - `advanced_to(t)` checkpoints, carrying the remainder; `with_rate(t, rate)` checkpoints and then changes the rate.
+  - `rising_crossing(B)` and `falling_crossing(B)` return the first millisecond at or after the checkpoint at which that read reaches B, or `None` when the rate never gets there.
+  - `snapped(B, t)` sets the value to B and the remainder to 0.
+
+  `MS_PER_HOUR` is fixed at 3,600,000 and never scaled by rules.
+- Crossing formulas: rising Δ = ⌈((B − v)·H − ρ) / r⌉; falling Δ = ⌊((v − B − 1)·H + ρ) / s⌋ + 1 with s = −r; Δ = 0 if already there. The architecture's "mirrored form" would be ⌈((v − B)·H + ρ) / s⌉. It disagreed with millisecond stepping in about half of generated falling cases: 1 g at −1 g/h reads 0 at 1 ms, while the mirror says one hour. So the architecture now states the falling form and the crossing definition, and a crossing discards less than one millisecond of flow plus one gram, which bounds the conservation-test tolerance.
+- Errors (`QuantityError`):
+  - a remainder outside its range;
+  - a time before the checkpoint;
+  - a value outside `i64`;
+  - a crossing time outside `i64`.
+
+  Nothing wraps or saturates.
+- Proof: proptest with a fixed seed and 512 cases per property compares reads, checkpoints, rising and falling crossings, partitioned checkpointing and snapping against a reference that steps one millisecond at a time through a gram accumulator, with no division or crossing formula. A coverage test asserts that every class of generated case is sampled. There are named cases for the game design's hour-500 example, falling debit, remainders, exact and one-short boundaries, overshoot and snap, zero rate, already-past, rate changes, and each error. Six deliberately planted arithmetic defects each fail at least one generated oracle property.
+
+### D-019: Test-only dev-dependencies in the core
+
+- Date and package: 2026-10-17, P1.1. Agreed with orch-advisor.
+- Decision: Project layering's "serde and thiserror only" for `voidforge-core` means runtime dependencies. Test tooling from the Tech stack may be a `[dev-dependencies]` entry, which never links into the library. The first is proptest 1.12.0 (std only: no fork or timeout features), with a fixed seed and no failure-persistence files, so every run explores the same cases. The determinism clippy bans still apply to test code (`--all-targets`). The MIR float check covers library code only (D-013). `deny.toml` allowlists proptest and its eight dependencies.
