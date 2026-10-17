@@ -23,12 +23,49 @@ pub const MS_PER_HOUR: i64 = 3_600_000;
 const H: i128 = MS_PER_HOUR as i128;
 
 /// A continuous quantity at a checkpoint. See the module documentation for the arithmetic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Deserializing goes through [`Quantity::from_parts`], so a stored remainder outside its range
+/// is rejected rather than accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "QuantityParts", into = "QuantityParts")]
 pub struct Quantity {
     value_g: i64,
     rate_g_per_h: i64,
     remainder: i64,
     checkpoint_ms: i64,
+}
+
+/// The serialized form of a [`Quantity`].
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuantityParts {
+    value_g: i64,
+    rate_g_per_h: i64,
+    remainder: i64,
+    checkpoint_ms: i64,
+}
+
+impl TryFrom<QuantityParts> for Quantity {
+    type Error = QuantityError;
+
+    fn try_from(parts: QuantityParts) -> Result<Self, QuantityError> {
+        Self::from_parts(
+            parts.value_g,
+            parts.rate_g_per_h,
+            parts.remainder,
+            parts.checkpoint_ms,
+        )
+    }
+}
+
+impl From<Quantity> for QuantityParts {
+    fn from(q: Quantity) -> Self {
+        Self {
+            value_g: q.value_g,
+            rate_g_per_h: q.rate_g_per_h,
+            remainder: q.remainder,
+            checkpoint_ms: q.checkpoint_ms,
+        }
+    }
 }
 
 /// Why a quantity operation has no valid result.

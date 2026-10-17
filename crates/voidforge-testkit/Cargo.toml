@@ -7,5 +7,12 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[dependencies]
+voidforge-core.workspace = true
+voidforge-rules.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true
