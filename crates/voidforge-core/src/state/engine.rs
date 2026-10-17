@@ -118,6 +118,10 @@ pub enum EngineError {
     /// schedule inconsistent.
     #[error(transparent)]
     State(#[from] StateError),
+    /// A step called `advance_to` or `advance_with` while an advance was running. Rejected before
+    /// anything changes, and it stops the outer advance.
+    #[error("cannot advance from inside a step: an advance is already running")]
+    NestedAdvance,
     /// An earlier advance failed; the world may be mid-instant and must be discarded.
     #[error("the world is poisoned by a failed advance and must be discarded")]
     Poisoned,
@@ -138,11 +142,16 @@ impl World {
     /// `t` before world time is [`EngineError::TimeBeforeNow`] and changes nothing. Any other
     /// error may leave the world mid-instant, so it poisons the world: advancing, scheduling and
     /// serializing it then fail with [`EngineError::Poisoned`], and the caller must discard it.
+    /// A step that calls this gets [`EngineError::NestedAdvance`], which also stops the running
+    /// advance, even if the step ignores it.
     pub fn advance_with<S: Steps>(
         &mut self,
         t: i64,
         steps: &mut S,
     ) -> Result<Vec<S::Event>, EngineError> {
+        if self.advancing {
+            return Err(self.latch(EngineError::NestedAdvance));
+        }
         self.usable()?;
         if t < self.time_ms {
             return Err(EngineError::TimeBeforeNow {

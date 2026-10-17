@@ -542,3 +542,32 @@ fn a_crowded_instant_inside_a_longer_advance_runs_in_order() {
     );
     assert_eq!(w.time_ms, 700);
 }
+
+/// review-r2: a step must not run a second loop. The inner call is refused before it changes
+/// anything, and the outer advance stops whether the step propagates or ignores the refusal.
+#[test]
+fn an_advance_from_inside_a_step_is_refused_and_stops_the_outer_one() {
+    for swallow in [false, true] {
+        let mut w = sample_world();
+        let mut nested = Probe(|w: &mut World, kind| {
+            if kind == QueueKind::PlanetChange(P1) {
+                let inner = w.advance_with(250, &mut settled());
+                assert_eq!(inner, Err(EngineError::NestedAdvance));
+                if !swallow {
+                    inner?;
+                }
+                let _ = w.advance_to(250);
+            }
+            settle(w, kind)
+        });
+        assert_eq!(
+            w.advance_with(400, &mut nested),
+            Err(EngineError::NestedAdvance)
+        );
+        assert!(w.is_poisoned());
+        assert_eq!(w.time_ms, 100);
+        // The inner calls processed nothing: fleet 14's return at 150 is still pending.
+        assert!(matches!(w.fleets[&F14].state, FleetState::Returning { .. }));
+        assert!(serde_json::to_string(&w).is_err());
+    }
+}
