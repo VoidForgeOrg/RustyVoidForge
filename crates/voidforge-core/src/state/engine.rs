@@ -3,8 +3,8 @@
 //!
 //! The loop owns order, staleness, time and the guards. What happens at a planet change or a
 //! fleet arrival belongs to [`Steps`]. [`World::advance_to`] runs the production steps,
-//! [`crate::solver::Solver`] (D-025): planet changes re-solve the planet, and fleet entries stop
-//! the engine until fleets land (P1.8).
+//! [`crate::solver::Solver`] (D-025): planet changes re-solve the planet, and fleet entries run
+//! their arrival or return (D-027).
 
 use crate::quantity::QuantityError;
 use crate::rules::Rules;
@@ -13,8 +13,9 @@ use crate::solver::Solver;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BuildingId, BuildingKind, EntryStatus, FleetId, PlanetId, QueueEntry, QueueKind,
-    ScheduledEvent, ShipId, ShipKind, StateError, World, expected_entry, link,
+    BuildingId, BuildingKind, Cargo, EntryStatus, FleetId, FleetState, Mission, PlanetId, PlayerId,
+    QueueEntry, QueueKind, ScheduledEvent, ShipId, ShipKind, StateError, World, expected_entry,
+    link,
 };
 
 /// What happens when a live entry is popped. The loop has already set world time to the entry's
@@ -47,7 +48,8 @@ pub trait Steps {
     ) -> Result<Vec<Self::Event>, EngineError>;
 }
 
-/// The engine's domain events, returned by `advance_to` in the order they happened (D-026).
+/// The engine's domain events, returned by `advance_to` in the order they happened (D-026,
+/// D-027).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainEvent {
     /// A construction reached its cost and is operational.
@@ -78,6 +80,56 @@ pub enum DomainEvent {
         building: BuildingId,
         /// What it was.
         kind: BuildingKind,
+    },
+    /// A fleet reached its target; first of an arrival's events. It is stationed there now.
+    FleetArrived {
+        /// The fleet.
+        fleet: FleetId,
+        /// Its target.
+        planet: PlanetId,
+        /// The mission it flew.
+        mission: Mission,
+    },
+    /// A Colony Ship was consumed and the planet is the fleet owner's.
+    PlanetColonized {
+        /// The planet.
+        planet: PlanetId,
+        /// Its new owner.
+        owner: PlayerId,
+        /// The fleet.
+        fleet: FleetId,
+        /// The Colony Ship consumed.
+        ship: ShipId,
+    },
+    /// A colony fleet found its target owned: nothing consumed, cargo still aboard.
+    ColonizationFailed {
+        /// The planet.
+        planet: PlanetId,
+        /// The fleet.
+        fleet: FleetId,
+    },
+    /// Cargo went into the planet's storage; only when something did.
+    CargoUnloaded {
+        /// The planet.
+        planet: PlanetId,
+        /// The fleet.
+        fleet: FleetId,
+        /// The grams unloaded, per resource.
+        cargo: Cargo,
+    },
+    /// Colonizing used the fleet's last ship, so the fleet is gone.
+    FleetRemoved {
+        /// The fleet.
+        fleet: FleetId,
+        /// Where it arrived.
+        planet: PlanetId,
+    },
+    /// A recalled fleet is back, stationed at its origin.
+    FleetReturned {
+        /// The fleet.
+        fleet: FleetId,
+        /// Its origin.
+        planet: PlanetId,
     },
 }
 
@@ -112,9 +164,6 @@ pub enum EngineError {
     /// Only a fleet in transit or returning has an entry to schedule.
     #[error("fleet {} is stationed, so it has nothing to schedule", .0.0)]
     FleetNotMoving(FleetId),
-    /// A live entry whose step has not been built yet.
-    #[error("no step is built yet for {0:?}")]
-    StepNotBuilt(QueueKind),
     /// `advance_to` was given rules other than the world's version. Checked first; the world is
     /// unchanged and not poisoned.
     #[error("the world runs rules version {world}, but rules version {given} were given")]
@@ -178,6 +227,29 @@ pub enum EngineError {
         /// What went wrong.
         error: QuantityError,
     },
+    /// A fleet's distance, travel time, arrival time or capacity leaves 64 bits: valid rules
+    /// and coordinates, but extreme ones.
+    #[error("fleet {}: the {what} leaves the 64-bit range", fleet.0)]
+    FleetOutOfRange {
+        /// The fleet.
+        fleet: FleetId,
+        /// Which value.
+        what: &'static str,
+    },
+    /// Only a stationed fleet can be sent.
+    #[error("fleet {} is not stationed", .0.0)]
+    FleetNotStationed(FleetId),
+    /// Only a fleet in transit can be recalled, and so only once.
+    #[error("fleet {} is not in transit", .0.0)]
+    FleetNotInTransit(FleetId),
+    /// A Colonize arrival on an unowned planet with no Colony Ship aboard: a bug, since the
+    /// send requires one, not a failed colonization.
+    #[error("fleet {} arrived to colonize without a Colony Ship", .0.0)]
+    NoColonyShip(FleetId),
+    /// Colonizing used a fleet's last ship while cargo stayed aboard: unreachable while a
+    /// Colony Ship carries nothing, and never resolved by destroying the cargo.
+    #[error("fleet {} has cargo aboard but no ships left", .0.0)]
+    CargoWithoutShips(FleetId),
     /// An entity's version counter is exhausted.
     #[error("entity {0} has no versions left")]
     VersionExhausted(u64),
@@ -271,9 +343,18 @@ impl World {
                     self.check_planet_schedule(self.planet(id, "processed entry")?)?;
                 }
                 QueueKind::FleetArrival(id) => {
+                    // An arrival re-solves its target, so the target's schedule is checked
+                    // too, even if the step removed the fleet (D-023, D-027).
+                    let target = match self.fleets.get(&id).map(|f| f.state) {
+                        Some(FleetState::InTransit { target, .. }) => Some(target),
+                        _ => None,
+                    };
                     events.extend(steps.fleet_arrival(self, id)?);
                     self.stop_on_fault()?;
                     self.check_fleet_after_step(id)?;
+                    if let Some(target) = target {
+                        self.check_planet_schedule(self.planet(target, "arrival target")?)?;
+                    }
                 }
                 QueueKind::FleetReturn(id) => {
                     events.extend(steps.fleet_return(self, id)?);

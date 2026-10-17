@@ -10,7 +10,7 @@
 //!
 //! The event queue is private: [`World::schedule_planet`] and [`World::schedule_fleet`] are the
 //! only way in, and [`World::advance_to`] the way out (the `engine` submodule, decision log
-//! D-023). The solver, fleet missions and commands come with later packages.
+//! D-023). The solver and fleets act on it from their own modules; commands come later.
 
 use std::collections::{BTreeMap, BTreeSet};
 

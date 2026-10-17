@@ -8,6 +8,8 @@
 //! | Property tests | the invariants that apply before the solver | `queue_order_*`, `stale_*`, `new_entries_*`, `check_links_*`, `quantities_*` |
 //! | Double run | Total order | `double_run_in_process`, `two_process_double_run` |
 //! | Solved planets (P1.6) | One rounding rule; Total order; the solver invariants | `solved_*` |
+//! | Transitions (P1.7) | the same, with builds completing | `transitions_*` |
+//! | Fleets (P1.8) | the same, with fleets arriving, colonizing, unloading and recalled | `fleets_*` |
 //!
 //! Every property runs a fixed number of cases from a fixed seed with no failure files, so a
 //! failure reproduces by rerunning (decision log D-024). Later packages extend these harnesses:
@@ -19,14 +21,15 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, RngSeed};
 use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::Rules;
-use voidforge_core::solver::planet_flows;
+use voidforge_core::solver::{Solver, planet_flows};
 use voidforge_core::state::DomainEvent;
 use voidforge_core::state::{
     Cargo, EngineError, FleetId, FleetState, Mission, PlanetId, QueueKind, ShipKind, Steps, World,
 };
 use voidforge_testkit::determinism::{
-    Economy, Scenario, Stepped, assert_transition_invariants, canonical_bytes, even_stops,
-    run_bytes, run_economy, run_observed, run_straight, settle_stock, slow_build_rules, solves,
+    Economy, Scenario, Stepped, assert_fleet_invariants, assert_ships_conserved,
+    assert_transition_invariants, canonical_bytes, even_stops, recall_due, run_bytes, run_economy,
+    run_observed, run_straight, settle_stock, slow_build_rules, solves, stops,
 };
 use voidforge_testkit::v0_rules;
 use voidforge_testkit::{ALICE, WorldBuilder};
@@ -574,7 +577,19 @@ fn quantities_report_overflow_instead_of_wrapping() {
 // --- Solved planets (P1.6): the production solver through real stock crossings ---
 
 fn economy() -> impl Strategy<Value = Economy> {
-    (any::<u64>(), 1u64..=10).prop_map(|(seed, planets)| Economy { seed, planets })
+    (any::<u64>(), 1u64..=10).prop_map(|(seed, planets)| Economy {
+        seed,
+        planets,
+        fleets: false,
+    })
+}
+
+fn fleet_economy() -> impl Strategy<Value = Economy> {
+    (any::<u64>(), 2u64..=6).prop_map(|(seed, planets)| Economy {
+        seed,
+        planets,
+        fleets: true,
+    })
 }
 
 /// Every stock on every planet lies within 0 and its cap at world time.
@@ -602,9 +617,10 @@ fn stocks_within_caps(w: &World) {
 }
 
 /// 100 hours in one production advance equals 1,000, through real crossings (and, under Rules
-/// v0, real completions); at every observation the world is linked, stocks are within 0 and
-/// their caps, entries are in the future and the transition invariants hold. Returns the
-/// solves and events of the straight run.
+/// v0, real completions; with fleets, real arrivals and a recall, both runs stopping at the
+/// recall); at every observation the world is linked, stocks are within 0 and their caps,
+/// entries are in the future and the transition and fleet invariants hold; ships are conserved.
+/// Returns the solves and events of the straight run.
 fn solved_invariance(e: &Economy, rules: &Rules) -> (u64, Vec<DomainEvent>) {
     let start = e.world(rules);
     let (straight, straight_events) = run_economy(e, rules, SPAN_MS, 1, |_| {}).unwrap();
@@ -613,10 +629,12 @@ fn solved_invariance(e: &Economy, rules: &Rules) -> (u64, Vec<DomainEvent>) {
         stocks_within_caps(w);
         assert!(w.queue().iter().all(|q| q.at_ms > w.time_ms));
         assert_transition_invariants(w, rules);
+        assert_fleet_invariants(w, rules);
     })
     .unwrap();
     assert_eq!(observed_events, straight_events);
     assert_eq!(canonical_bytes(&observed), canonical_bytes(&straight));
+    assert_ships_conserved(&start, &straight, &straight_events);
     (solves(&start, &straight), straight_events)
 }
 
@@ -626,16 +644,21 @@ fn solved_double_run(e: &Economy, rules: &Rules) {
     assert_eq!(canonical_bytes(&a), canonical_bytes(&b));
 }
 
-/// The audited run; returns its solves and completed builds.
-fn solved_audit(e: &Economy, rules: &Rules) -> (u64, usize) {
-    let mut w = e.world(rules);
+/// The audited run, stopping at any recall; returns the audit.
+fn solved_audit<'a>(e: &Economy, rules: &'a Rules) -> Audit<'a> {
+    let (mut w, recalls) = e.start(rules);
     let mut audit = Audit::new(&w, rules);
-    let events = w.advance_with(SPAN_MS, &mut audit).unwrap();
+    let mut events = Vec::new();
+    for t in stops(SPAN_MS, 1, &recalls) {
+        events.extend(w.advance_with(t, &mut audit).unwrap());
+        recall_due(&mut w, &recalls).unwrap();
+    }
     audit.close(&w);
     stocks_within_caps(&w);
     assert_transition_invariants(&w, rules);
+    assert_fleet_invariants(&w, rules);
     assert_eq!(events.len(), audit.events, "the audit returned every event");
-    (audit.solves, audit.completed)
+    audit
 }
 
 proptest! {
@@ -660,7 +683,8 @@ proptest! {
     /// the solve, and stocks stay within 0 and their caps.
     #[test]
     fn solved_mass_is_accounted_for_and_next_events_are_in_the_future(e in economy()) {
-        let (solves, _) = solved_audit(&e, &slow_build_rules());
+        let rules = slow_build_rules();
+        let solves = solved_audit(&e, &rules).solves;
         prop_assert!(solves >= 2, "too few crossings: {}", solves);
     }
 
@@ -684,8 +708,49 @@ proptest! {
     /// cost, moving that mass into the building or ship.
     #[test]
     fn transitions_mass_is_accounted_for_through_completions(e in economy()) {
-        let (_, completed) = solved_audit(&e, &v0_rules());
+        let rules = v0_rules();
+        let completed = solved_audit(&e, &rules).completed;
         prop_assert!(completed >= 3, "too few completions: {}", completed);
+    }
+}
+
+proptest! {
+    #![proptest_config(config(16, 0x0b5e_7a71_0000_0008))]
+
+    /// P1.8: fleets fly every mission, race to one planet, colonize, unload and are recalled,
+    /// and one advance still equals 1,000 with the same events; ships are conserved and every
+    /// invariant holds at every observation.
+    #[test]
+    fn fleets_observation_invariance(e in fleet_economy()) {
+        let (_, events) = solved_invariance(&e, &v0_rules());
+        let count = |f: fn(&DomainEvent) -> bool| events.iter().filter(|e| f(e)).count();
+        let arrived = count(|e| matches!(e, DomainEvent::FleetArrived { .. }));
+        let colonized = count(|e| matches!(e, DomainEvent::PlanetColonized { .. }));
+        let failed = count(|e| matches!(e, DomainEvent::ColonizationFailed { .. }));
+        let unloaded = count(|e| matches!(e, DomainEvent::CargoUnloaded { .. }));
+        let removed = count(|e| matches!(e, DomainEvent::FleetRemoved { .. }));
+        let returned = count(|e| matches!(e, DomainEvent::FleetReturned { .. }));
+        prop_assert_eq!(
+            (arrived, colonized, failed, removed, returned),
+            (6, 2, 2, 1, 1),
+            "{:?}", events
+        );
+        prop_assert!(unloaded >= 1, "nothing unloaded: {:?}", events);
+    }
+
+    #[test]
+    fn fleets_double_run_in_process(e in fleet_economy()) {
+        solved_double_run(&e, &v0_rules());
+    }
+
+    /// The mass audit with fleets: each arrival's target gains exactly what its fleet unloaded,
+    /// as the unload events report, and the cargo aboard closes exactly at the end.
+    #[test]
+    fn fleets_mass_is_accounted_for_including_cargo_aboard(e in fleet_economy()) {
+        let rules = v0_rules();
+        let audit = solved_audit(&e, &rules);
+        prop_assert_eq!((audit.arrivals, audit.returns), (6, 1));
+        prop_assert!(audit.unloaded > 0, "nothing unloaded");
     }
 }
 
@@ -753,6 +818,12 @@ struct Audit<'a> {
     events: usize,
     /// Builds that completed, leaving the ledger at their cost.
     completed: usize,
+    /// Fleet arrivals and returns audited.
+    arrivals: usize,
+    returns: usize,
+    /// Cargo aboard every fleet at the start, and unloaded since, in scaled ledger units.
+    aboard: i128,
+    unloaded: i128,
 }
 
 impl<'a> Audit<'a> {
@@ -773,6 +844,10 @@ impl<'a> Audit<'a> {
             solves: 0,
             events: 0,
             completed: 0,
+            arrivals: 0,
+            returns: 0,
+            aboard: cargo_aboard(w, ratio),
+            unloaded: 0,
         }
     }
 
@@ -791,7 +866,29 @@ impl<'a> Audit<'a> {
                 p.0
             );
         }
+        assert_eq!(
+            cargo_aboard(w, self.ratio),
+            self.aboard - self.unloaded,
+            "cargo aboard at the end"
+        );
     }
+
+    /// Records a planet's ledger, the instant and its Drill actual after a change at now.
+    fn settle(&mut self, w: &World, p: PlanetId) {
+        let now = w.time_ms;
+        let actual = planet_flows(w, p, self.rules).unwrap().drill_actual;
+        self.planets
+            .insert(p, (ledger(w, p, self.ratio, now).0, now, actual));
+    }
+}
+
+/// Cargo aboard every fleet, weighted like the ledger (ore × ratio) and scaled like it (× H).
+fn cargo_aboard(w: &World, ratio: i64) -> i128 {
+    w.fleets.values().map(|f| weighted(f.cargo, ratio)).sum()
+}
+
+fn weighted(c: Cargo, ratio: i64) -> i128 {
+    (i128::from(ratio) * i128::from(c.ore_g) + i128::from(c.ingots_g)) * i128::from(MS_PER_HOUR)
 }
 
 impl Steps for Audit<'_> {
@@ -875,16 +972,68 @@ impl Steps for Audit<'_> {
         Ok(events)
     }
 
+    /// The production arrival, audited: the target's ledger was on course before it, and after
+    /// it has grown by exactly what left the fleet's cargo, which the unload event reports. The
+    /// target is brought to now without a crossing (its own changes at now ran first), so nothing
+    /// snaps.
     fn fleet_arrival(
         &mut self,
-        _: &mut World,
-        _: FleetId,
+        w: &mut World,
+        f: FleetId,
     ) -> Result<Vec<DomainEvent>, EngineError> {
-        unreachable!("economies have no fleets")
+        let now = w.time_ms;
+        let FleetState::InTransit { target, .. } = w.fleets[&f].state else {
+            panic!("fleet {} arrived but is not in transit", f.0)
+        };
+        let before = ledger(w, target, self.ratio, now).0;
+        assert_eq!(
+            before,
+            self.expected(target, now),
+            "planet {} drifted before an arrival at {}",
+            target.0,
+            now
+        );
+        let aboard = w.fleets[&f].cargo;
+        let events = Solver { rules: self.rules }.fleet_arrival(w, f)?;
+        let left = w.fleets.get(&f).map_or(Cargo::default(), |f| f.cargo);
+        let moved = Cargo {
+            ore_g: aboard.ore_g - left.ore_g,
+            ingots_g: aboard.ingots_g - left.ingots_g,
+        };
+        let reported = events.iter().find_map(|e| match e {
+            DomainEvent::CargoUnloaded { cargo, .. } => Some(*cargo),
+            _ => None,
+        });
+        assert_eq!(reported.unwrap_or_default(), moved, "fleet {} unload", f.0);
+        let gained = weighted(moved, self.ratio);
+        assert_eq!(
+            ledger(w, target, self.ratio, now).0,
+            before + gained,
+            "planet {} after fleet {} arrived at {}",
+            target.0,
+            f.0,
+            now
+        );
+        self.unloaded += gained;
+        self.settle(w, target);
+        self.arrivals += 1;
+        self.events += events.len();
+        Ok(events)
     }
 
-    fn fleet_return(&mut self, _: &mut World, _: FleetId) -> Result<Vec<DomainEvent>, EngineError> {
-        unreachable!("economies have no fleets")
+    /// The production return, audited: it changes neither the cargo nor the origin.
+    fn fleet_return(&mut self, w: &mut World, f: FleetId) -> Result<Vec<DomainEvent>, EngineError> {
+        let now = w.time_ms;
+        let FleetState::Returning { origin, .. } = w.fleets[&f].state else {
+            panic!("fleet {} returned but is not returning", f.0)
+        };
+        let (cargo, before) = (w.fleets[&f].cargo, ledger(w, origin, self.ratio, now).0);
+        let events = Solver { rules: self.rules }.fleet_return(w, f)?;
+        assert_eq!(w.fleets[&f].cargo, cargo);
+        assert_eq!(ledger(w, origin, self.ratio, now).0, before);
+        self.returns += 1;
+        self.events += events.len();
+        Ok(events)
     }
 }
 
@@ -922,6 +1071,7 @@ fn recorded_runs() -> Vec<u8> {
             let e = Economy {
                 seed: 0x3_0000 + i,
                 planets: 1 + i,
+                fleets: false,
             };
             canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
         }))
@@ -930,6 +1080,16 @@ fn recorded_runs() -> Vec<u8> {
             let e = Economy {
                 seed: 0x4_0000 + i,
                 planets: 2 + i,
+                fleets: false,
+            };
+            canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
+        }))
+        .chain((0..4u64).map(|i| {
+            let rules = v0_rules();
+            let e = Economy {
+                seed: 0x5_0000 + i,
+                planets: 2 + i,
+                fleets: true,
             };
             canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
         }))
