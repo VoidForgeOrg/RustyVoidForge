@@ -2,12 +2,13 @@
 
 The engine: world state, the per-planet solver, commands, domain events and views. It is a pure, single-threaded state machine with three entry points, `advance_to(t)`, `apply(command, t)` and `view(query, t)`, and each call returns the domain events it produced.
 
-Library. It is a stub today; P1.1 is the first package that fills it. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+Library. P1.1 delivered `quantity` ([D-018](../../docs/decision-log.md#d-018-quantities-and-crossing-times)); the rest arrives with P1.2 to P1.11. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 
 - Workspace: None. No workspace crate may be a dependency of the core.
-- External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): serde and thiserror only.
+- External at runtime, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): serde and thiserror only (thiserror today; serde arrives with P1.3).
+- Dev-dependencies, for tests only and never linked into the library: proptest ([D-019](../../docs/decision-log.md#d-019-test-only-dev-dependencies-in-the-core)).
 - Never: Anything else, including tokio, tracing and uuid. The core must not depend on the shell.
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
@@ -17,7 +18,7 @@ Library. It is a stub today; P1.1 is the first package that fills it. The layeri
 - Integers only: 64-bit storage, 128-bit intermediates, masses in grams, rates in grams per hour. No float types ([State model](../../docs/Voidforge%20Architectural%20Design.md#state-model)).
 - Every collection iterates in ID order. Entities refer to each other by integer ID, never by pointer.
 - New entities take `World.next_id`. Player UUIDs and other external keys arrive in commands; the core never generates them.
-- One rounding rule: values round down with a carried remainder, crossing times round up, and a crossing quantity snaps to its boundary with its remainder reset to 0 ([Rounding formulas](../../docs/Voidforge%20Architectural%20Design.md#rounding-formulas)).
+- One rounding rule: values round down with a carried remainder (floor division, non-negative remainder, never Rust's truncating `/`). A crossing is the first millisecond at which that read reaches the boundary; falling crossings are not the mirror of rising ones. A crossing quantity snaps to its boundary with its remainder reset to 0 ([Rounding formulas](../../docs/Voidforge%20Architectural%20Design.md#rounding-formulas)). `quantity::Quantity` implements this; every result outside 64 bits is a `QuantityError`, never wrapped or saturated.
 - Total order: the queue is ordered by (time, kind rank, entity ID). At one instant, `PlanetChange` entries run by planet ID, then fleet entries by fleet ID, then commands by sequence number. A step never schedules work at its own instant ([Engine core](../../docs/Voidforge%20Architectural%20Design.md#engine-core)).
 - `view` never writes; checkpoints happen only on events and commands.
 - A command is validated against the state at its stamped time and applied atomically, or rejected with a reason code and no change ([Commands](../../docs/Voidforge%20Architectural%20Design.md#commands)).
@@ -31,10 +32,10 @@ Library. It is a stub today; P1.1 is the first package that fills it. The layeri
 ```sh
 cargo build -p voidforge-core
 cargo clippy -p voidforge-core --all-targets -- -D warnings
-cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-core` alone exits 4
+cargo nextest run -p voidforge-core
 ```
 
-P1.1 to P1.11 add the solver, fleet, command and view tests, and P1.5 adds the determinism suite: property tests, observation invariance and an in-process double run. Every later package must keep that suite green ([Phase 1](../../docs/Voidforge%20Technical%20Plan.md#phase-1-core-engine), [Testing strategy](../../docs/Voidforge%20Architectural%20Design.md#testing-strategy)).
+P1.1's quantity tests compare reads, checkpoints and crossings on generated cases against an independent millisecond-stepping reference, plus named boundary and error cases (`src/quantity/tests.rs`; proptest runs with a fixed seed). P1.2 to P1.11 add the solver, fleet, command and view tests, and P1.5 adds the determinism suite: property tests, observation invariance and an in-process double run. Every later package must keep that suite green ([Phase 1](../../docs/Voidforge%20Technical%20Plan.md#phase-1-core-engine), [Testing strategy](../../docs/Voidforge%20Architectural%20Design.md#testing-strategy)).
 
 ## Specs
 

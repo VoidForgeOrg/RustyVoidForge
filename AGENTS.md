@@ -26,7 +26,7 @@ Twelve crates in three layers; dependencies only point down. Each crate's `AGENT
 
 | Crate | Kind | May depend on (workspace) |
 | --- | --- | --- |
-| [voidforge-core](crates/voidforge-core/AGENTS.md) | library | none; external crates serde and thiserror only |
+| [voidforge-core](crates/voidforge-core/AGENTS.md) | library | none; runtime crates serde and thiserror only, test-only dev-dependencies allowed |
 | [voidforge-rules](crates/voidforge-rules/AGENTS.md) | library | core |
 | [voidforge-testkit](crates/voidforge-testkit/AGENTS.md) | library, dev only | core, rules |
 | [voidforge-worldgen](crates/voidforge-worldgen/AGENTS.md) | library | core, rules |

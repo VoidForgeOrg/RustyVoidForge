@@ -7,5 +7,13 @@ rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+# Runtime dependencies: serde and thiserror only (Project layering). Dev-dependencies serve tests
+# only and never link into the library (decision log D-019).
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

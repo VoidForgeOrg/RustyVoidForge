@@ -146,6 +146,17 @@ allow = [
     { crate = "zerotrie" },
     { crate = "zerovec" },
     { crate = "zerovec-derive" },
+    # voidforge-core dev-dependency proptest (P1.1, decision log D-019): tests only, never linked
+    # into the library.
+    { crate = "proptest" },
+    { crate = "autocfg" },
+    { crate = "chacha20" },
+    { crate = "core_detect" },
+    { crate = "cpufeatures" },
+    { crate = "num-traits" },
+    { crate = "rand_xorshift" },
+    { crate = "regex-syntax" },
+    { crate = "unarray" },
 ]
 # Duplicates allowed by name and version, each with its reason (decision log D-017).
 skip = [

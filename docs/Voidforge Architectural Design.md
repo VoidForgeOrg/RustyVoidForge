@@ -225,7 +225,7 @@ Ten rules make the engine reproducible. Each is enforced by a lint rule or a tes
 | --- | --- | --- |
 | Time is an input | The core never reads a clock; the shell stamps t = max(wall clock, last t) and logs it | Lint: no clock APIs in the core |
 | Integer arithmetic | Units from the state model; 64-bit storage, 128-bit intermediates | Lint: no float types in the core |
-| One rounding rule | Values round down with a carried remainder; crossing times round up; a crossing quantity snaps to its boundary | Observation invariance test |
+| One rounding rule | Values round down with a carried remainder; a crossing is the first millisecond at which that read reaches the boundary; a crossing quantity snaps to its boundary | Observation invariance test |
 | Total order | Queue order (time, kind rank, entity ID); events at t before commands at t; commands by sequence number | Double-run test |
 | Ordered iteration | Every collection iterates in ID order | Lint: no hash-ordered maps or sets in the core |
 | Engine-assigned IDs | New entities take `World.next_id`; player IDs (UUIDs) and other external keys arrive in commands and are logged | Lint: no GUID generation in the core |
@@ -250,19 +250,23 @@ Where:
 - ⌊ ⌋ and mod: rounding down, and the non-negative remainder of that division
 - v, v\_cp, t, t\_cp and r: as in Time model
 
-A rising quantity reaches boundary B after Δ milliseconds; falling quantities use the mirrored form. Tests check both against millisecond-by-millisecond stepping.
+A quantity crosses boundary B at the first millisecond at which the formula above reads a value that has reached B: at least B for a rising quantity (r > 0), at most B for a falling one (r < 0). The read and the event therefore always agree. The crossing comes Δ milliseconds after the checkpoint, and Δ = 0 when the value has already reached B. Tests check both forms against millisecond-by-millisecond stepping.
 
 ```latex
-\Delta = \left\lceil \frac{(B - v_{cp}) \cdot 3\,600\,000 - \rho}{r} \right\rceil
+\Delta_{rising} = \left\lceil \frac{(B - v_{cp}) \cdot 3\,600\,000 - \rho}{r} \right\rceil, \qquad
+\Delta_{falling} = \left\lfloor \frac{(v_{cp} - B - 1) \cdot 3\,600\,000 + \rho}{s} \right\rfloor + 1
 ```
 
 Where:
 
 - Δ: milliseconds from the checkpoint until the quantity reaches B
-- ⌈ ⌉: rounding up, so the boundary has really been reached when the event fires
-- B, v\_cp, ρ and r: as above, for a rising quantity (r > 0)
+- s: the falling speed, −r
+- ⌈ ⌉ and ⌊ ⌋: rounding up and down; with these the boundary has really been reached, under the read above, when the event fires
+- B, v\_cp, ρ and r: as above
 
-At the crossing the quantity is set exactly to B and its remainder to 0. At most one millisecond of flow is discarded per crossing, and conservation tests allow for it.
+The falling form is not the mirror of the rising one. Because values round down, a falling quantity reads one gram lower as soon as its exact value drops below a whole gram. For example, 1 g falling at 1 g/h reads 0 after 1 ms, so its crossing to 0 is at 1 ms, not at one hour.
+
+At the crossing the quantity is set exactly to B and its remainder to 0. A crossing therefore discards less than one millisecond of flow plus one gram: the flow past the boundary within the crossing millisecond, and, for a falling quantity, the remainder that rounding down had already debited. Conservation tests allow for that much per crossing.
 
 ## Engine host and write path
 

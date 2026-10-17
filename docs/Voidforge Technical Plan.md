@@ -73,7 +73,7 @@ Only `voidforge-host` changes the live `World`, and only the binaries talk to th
 
 | Crate | Role | May depend on |
 | --- | --- | --- |
-| `voidforge-core` | Engine: state, solver, commands, events and views | No workspace crate; serde and thiserror only |
+| `voidforge-core` | Engine: state, solver, commands, events and views | No workspace crate; runtime dependencies serde and thiserror only (dev-dependencies for tests per the Tech stack) |
 | `voidforge-rules` | Rules files and a pure parser into the core's typed specs | core |
 | `voidforge-testkit` | Test builders and golden logs, dev only | core, rules |
 | `voidforge-worldgen` | Seeded world generation | core, rules |

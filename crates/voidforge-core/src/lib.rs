@@ -7,3 +7,5 @@
     clippy::disallowed_types,
     clippy::float_arithmetic
 )]
+
+pub mod quantity;
