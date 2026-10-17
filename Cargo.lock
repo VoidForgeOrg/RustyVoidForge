@@ -1274,6 +1274,12 @@ dependencies = [
 [[package]]
 name = "voidforge-worldgen"
 version = "0.1.0"
+dependencies = [
+ "rand_chacha",
+ "thiserror",
+ "voidforge-core",
+ "voidforge-testkit",
+]
 
 [[package]]
 name = "want"

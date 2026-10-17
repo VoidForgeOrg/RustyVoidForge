@@ -203,6 +203,10 @@ pub struct WorldgenSpec {
     pub homeworld_min_neighbors: u32,
 }
 
+/// The largest worldgen distance supported, in distance units: 10^12, a billion world units. It
+/// keeps every feasibility product exact in i128 (D-031); the defaults are a million times smaller.
+pub const MAX_WORLDGEN_DU: i64 = 1_000_000_000_000;
+
 /// A rules value that breaks an invariant, naming the field.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("rules field `{field}`: {problem}")]
@@ -382,6 +386,96 @@ impl Rules {
             "worldgen.homeworld_neighbor_radius_du",
             world.homeworld_neighbor_radius_du,
         )?;
+        // Feasibility that does not depend on the player count (D-031); generation checks the
+        // rest. World generation places planets on whole world units (D-021).
+        for (field, value) in [
+            ("worldgen.cube_size_du", world.cube_size_du),
+            (
+                "worldgen.min_planet_spacing_du",
+                world.min_planet_spacing_du,
+            ),
+            (
+                "worldgen.homeworld_min_spacing_du",
+                world.homeworld_min_spacing_du,
+            ),
+            (
+                "worldgen.homeworld_neighbor_radius_du",
+                world.homeworld_neighbor_radius_du,
+            ),
+        ] {
+            // The supported range keeps every feasibility product exact in i128 (D-031).
+            if value > MAX_WORLDGEN_DU {
+                return Err(problem(
+                    field,
+                    format!("must be at most {MAX_WORLDGEN_DU} (the supported range), got {value}"),
+                ));
+            }
+            if value % DISTANCE_UNITS_PER_WORLD_UNIT != 0 {
+                return Err(problem(
+                    field,
+                    format!(
+                        "must be whole world units (a multiple of {DISTANCE_UNITS_PER_WORLD_UNIT}), got {value}"
+                    ),
+                ));
+            }
+        }
+        let (side, spacing) = (
+            i128::from(world.cube_size_du),
+            i128::from(world.min_planet_spacing_du),
+        );
+        let (home, radius) = (
+            i128::from(world.homeworld_min_spacing_du),
+            i128::from(world.homeworld_neighbor_radius_du),
+        );
+        if home < spacing {
+            return Err(problem(
+                "worldgen.homeworld_min_spacing_du",
+                format!("must be at least min_planet_spacing_du ({spacing})"),
+            ));
+        }
+        // Every value is at most MAX_WORLDGEN_DU, so these products are exact.
+        if home * home > 3 * side * side {
+            return Err(problem(
+                "worldgen.homeworld_min_spacing_du",
+                format!("must not exceed the cube's diagonal (side {side})"),
+            ));
+        }
+        let neighbors = i128::from(world.homeworld_min_neighbors);
+        if neighbors > 0 {
+            if radius < spacing {
+                return Err(problem(
+                    "worldgen.homeworld_neighbor_radius_du",
+                    format!(
+                        "must be at least min_planet_spacing_du ({spacing}) when neighbors are required"
+                    ),
+                ));
+            }
+            // Necessary packing bound: balls of radius s/2 around the candidate and its
+            // neighbors are disjoint and lie in the ball of radius r + s/2, so
+            // (n + 1) × s³ ≤ (2r + s)³. The right side is exact (r, s ≤ MAX_WORLDGEN_DU); a
+            // left side beyond i128 is larger still.
+            let reach = 2 * radius + spacing;
+            let fits = (neighbors + 1)
+                .checked_mul(spacing * spacing * spacing)
+                .is_some_and(|need| need <= reach * reach * reach);
+            if !fits {
+                return Err(problem(
+                    "worldgen.homeworld_min_neighbors",
+                    format!(
+                        "{neighbors} neighbors cannot keep min_planet_spacing_du within homeworld_neighbor_radius_du"
+                    ),
+                ));
+            }
+        }
+        if i128::from(world.planets_per_expected_player) < 1 + neighbors {
+            return Err(problem(
+                "worldgen.planets_per_expected_player",
+                format!(
+                    "must be at least 1 + homeworld_min_neighbors ({})",
+                    1 + neighbors
+                ),
+            ));
+        }
         Ok(())
     }
 }

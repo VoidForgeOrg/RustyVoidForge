@@ -2,7 +2,7 @@
 
 Seeded world generation: it places the planets at 3D coordinates and produces the ordered list of homeworld candidates. Its output is the universe's first snapshot.
 
-Library. It is a stub today; P1.12 is the first package that fills it. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+Library. P1.12 delivered `generate`: seed and expected player count in, a solved first `World` out, with planets placed uniformly and homeworld candidates chosen and shuffled from the seed ([D-031](../../docs/decision-log.md#d-031-world-generation); the placement option is provisional pending Tom). The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 
@@ -23,10 +23,10 @@ Library. It is a stub today; P1.12 is the first package that fills it. The layer
 ```sh
 cargo build -p voidforge-worldgen
 cargo clippy -p voidforge-worldgen --all-targets -- -D warnings
-cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-worldgen` alone exits 4
+cargo nextest run -p voidforge-worldgen
 ```
 
-P1.12: the same seed always yields the same state hash, and every world-generation default holds.
+P1.12: `src/tests.rs` pins the RNG stream and the unbiased sampler; `tests/worldgen.rs` checks every default by brute force on 100-player Rules v0 worlds and on denser rules for 1 and 7 players, plus feasibility errors and Join game; `tests/determinism.rs` is part of `just determinism` (in-process and two-process double runs over generation and a generated world played for 100 hours).
 
 ## Specs
 

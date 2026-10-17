@@ -9,3 +9,11 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+rand_chacha.workspace = true
+thiserror.workspace = true
+voidforge-core.workspace = true
+
+[dev-dependencies]
+voidforge-testkit.workspace = true
