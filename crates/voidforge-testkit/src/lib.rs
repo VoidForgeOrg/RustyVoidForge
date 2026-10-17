@@ -11,8 +11,8 @@ use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::{BuildCost, Rules};
 use voidforge_core::state::{
     Building, BuildingId, BuildingKind, BuildingState, Cargo, Fleet, FleetId, FleetState, Mission,
-    Planet, PlanetId, Player, PlayerId, Position, QueueEntry, QueueKind, ScheduledEvent, Ship,
-    ShipBuild, ShipBuildId, ShipBuildStatus, ShipId, ShipKind, ShipLocation, StateError, World,
+    Planet, PlanetId, Player, PlayerId, Position, Ship, ShipBuild, ShipBuildId, ShipBuildStatus,
+    ShipId, ShipKind, ShipLocation, StateError, World,
 };
 
 /// The text of `rules/v0.toml`.
@@ -309,7 +309,7 @@ impl WorldBuilder {
     }
 
     /// Sends a stationed fleet: departing now, arriving at `arrives_at_ms`, with its arrival
-    /// queued.
+    /// queued through [`World::schedule_fleet`] (which bumps its version).
     pub fn send(&mut self, fleet: FleetId, target: PlanetId, mission: Mission, arrives_at_ms: i64) {
         let now = self.now();
         let f = self.world.fleets.get_mut(&fleet).expect("the fleet exists");
@@ -323,12 +323,9 @@ impl WorldBuilder {
             departed_at_ms: now,
             arrives_at_ms,
         };
-        let version = f.version;
-        self.world.queue.insert(QueueEntry {
-            at_ms: arrives_at_ms,
-            kind: QueueKind::FleetArrival(fleet),
-            version,
-        });
+        self.world
+            .schedule_fleet(fleet)
+            .expect("the arrival is after now");
     }
 
     /// Recalls a fleet in transit: it returns in the time already traveled, with its version
@@ -345,31 +342,21 @@ impl WorldBuilder {
             panic!("fleet {} is not in transit", fleet.0)
         };
         let arrives_at_ms = now + (now - departed_at_ms);
-        f.version += 1;
         f.state = FleetState::Returning {
             origin,
             arrives_at_ms,
         };
-        let version = f.version;
-        self.world.queue.insert(QueueEntry {
-            at_ms: arrives_at_ms,
-            kind: QueueKind::FleetReturn(fleet),
-            version,
-        });
+        self.world
+            .schedule_fleet(fleet)
+            .expect("the return is after now");
     }
 
-    /// Schedules a planet's next event: bumps its version, records the event on the planet and
-    /// adds the queue entry. An earlier entry for the planet stays in the queue as stale.
+    /// Schedules a planet's next event through [`World::schedule_planet`]: its version goes up and
+    /// an earlier entry for the planet stays in the queue as stale.
     pub fn schedule(&mut self, planet: PlanetId, at_ms: i64) {
-        let p = self.planet_mut(planet);
-        p.version += 1;
-        let version = p.version;
-        p.next_event = Some(ScheduledEvent { at_ms, version });
-        self.world.queue.insert(QueueEntry {
-            at_ms,
-            kind: QueueKind::PlanetChange(planet),
-            version,
-        });
+        self.world
+            .schedule_planet(planet, Some(at_ms))
+            .expect("the event is after now");
     }
 
     /// Appends homeworld candidates in order.

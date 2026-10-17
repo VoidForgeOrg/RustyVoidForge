@@ -2,6 +2,7 @@
 //! apply, IDs are deterministic, and the busy world covers every variant and round-trips.
 
 use voidforge_core::rules::DISTANCE_UNITS_PER_WORLD_UNIT;
+use voidforge_core::state::{EngineError, QueueKind, Steps};
 
 use super::*;
 
@@ -66,7 +67,7 @@ fn census(w: &World) -> Census {
             }] += 1;
         }
     }
-    for e in &w.queue {
+    for e in w.queue() {
         let (index, current) = match e.kind {
             QueueKind::PlanetChange(p) => (0, w.planets[&p].version),
             QueueKind::FleetArrival(f) => (1, w.fleets[&f].version),
@@ -255,18 +256,19 @@ fn fleets_move_ships_off_the_roster_and_recall_rewinds() {
             arrives_at_ms: 790
         }
     );
-    assert_eq!(f.version, 1);
+    // Each schedule bumps the version: 1 at send, 2 at recall.
+    assert_eq!(f.version, 2);
     assert_eq!(w.ships[&ship].location, ShipLocation::Fleet(fleet));
     let kinds: Vec<_> = w
-        .queue
+        .queue()
         .iter()
         .map(|e| (e.at_ms, e.kind, e.version))
         .collect();
     assert_eq!(
         kinds,
         [
-            (790, QueueKind::FleetReturn(fleet), 1),
-            (1_000, QueueKind::FleetArrival(fleet), 0)
+            (790, QueueKind::FleetReturn(fleet), 2),
+            (1_000, QueueKind::FleetArrival(fleet), 1)
         ]
     );
 }
@@ -316,6 +318,42 @@ fn a_fleet_takes_ships_from_one_roster() {
     b.fleet(&[a, c], Cargo::default());
 }
 
+/// Stands in for P1.8's return step: the fleet is stationed at its origin. Nothing else is due.
+struct Returns;
+
+impl Steps for Returns {
+    type Event = FleetId;
+
+    fn planet_change(
+        &mut self,
+        _: &mut World,
+        planet: PlanetId,
+    ) -> Result<Vec<FleetId>, EngineError> {
+        panic!("no planet change is due, but planet {} was", planet.0)
+    }
+
+    fn fleet_arrival(
+        &mut self,
+        _: &mut World,
+        fleet: FleetId,
+    ) -> Result<Vec<FleetId>, EngineError> {
+        panic!("no arrival is live, but fleet {} arrived", fleet.0)
+    }
+
+    fn fleet_return(
+        &mut self,
+        world: &mut World,
+        fleet: FleetId,
+    ) -> Result<Vec<FleetId>, EngineError> {
+        let f = world.fleets.get_mut(&fleet).unwrap();
+        let FleetState::Returning { origin, .. } = f.state else {
+            panic!("fleet {} is not returning", fleet.0)
+        };
+        f.state = FleetState::Stationed { at: origin };
+        Ok(vec![fleet])
+    }
+}
+
 /// review-r1's repro: sent at 0 to arrive at 10 s, recalled at 1 s, back at 2 s, disbanded at
 /// 3 s. The stale 10 s arrival entry stays queued for a fleet that no longer exists.
 #[test]
@@ -328,17 +366,16 @@ fn a_world_with_a_disbanded_fleets_stale_arrival_loads() {
     b.send(fleet, target, Mission::Move, 10_000);
     let mut b = b.at(1_000);
     b.recall(fleet);
-    // Unchecked: until the return is popped, a live entry due before world time is invalid.
-    let mut w = b.at(3_000).world().clone();
-    // The return was popped at 2 s; Disband puts the ship back on the roster and removes the
-    // fleet. Neither searches the queue.
-    w.queue.retain(|e| e.kind != QueueKind::FleetReturn(fleet));
+    let mut w = b.build();
+    assert_eq!(w.advance_with(3_000, &mut Returns).unwrap(), [fleet]);
+    // Disband at 3 s puts the ship back on the roster and removes the fleet, without searching
+    // the queue.
     w.fleets.remove(&fleet);
     w.ships.get_mut(&ship).unwrap().location = ShipLocation::Roster(home);
     let _ = w.planets.get_mut(&home).unwrap().roster.insert(ship);
 
     assert_eq!(
-        w.queue
+        w.queue()
             .iter()
             .map(|e| (e.at_ms, e.kind))
             .collect::<Vec<_>>(),
@@ -347,4 +384,7 @@ fn a_world_with_a_disbanded_fleets_stale_arrival_loads() {
     w.check_links().expect("the stale entry is allowed");
     let text = serde_json::to_string(&w).unwrap();
     assert_eq!(serde_json::from_str::<World>(&text).unwrap(), w);
+    // And the loop drops it when its time comes.
+    assert_eq!(w.advance_with(20_000, &mut Returns).unwrap(), []);
+    assert!(w.queue().is_empty());
 }
