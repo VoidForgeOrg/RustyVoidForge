@@ -10,9 +10,11 @@ use crate::quantity::QuantityError;
 use crate::rules::Rules;
 use crate::solver::Solver;
 
+use serde::{Deserialize, Serialize};
+
 use super::{
-    EntryStatus, FleetId, PlanetId, QueueEntry, QueueKind, ScheduledEvent, StateError, World,
-    expected_entry, link,
+    BuildingId, BuildingKind, EntryStatus, FleetId, PlanetId, QueueEntry, QueueKind,
+    ScheduledEvent, ShipId, ShipKind, StateError, World, expected_entry, link,
 };
 
 /// What happens when a live entry is popped. The loop has already set world time to the entry's
@@ -45,9 +47,39 @@ pub trait Steps {
     ) -> Result<Vec<Self::Event>, EngineError>;
 }
 
-/// The engine's domain events. Empty until the packages that produce them add their variants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DomainEvent {}
+/// The engine's domain events, returned by `advance_to` in the order they happened (D-026).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DomainEvent {
+    /// A construction reached its cost and is operational.
+    BuildingCompleted {
+        /// Its planet.
+        planet: PlanetId,
+        /// The building.
+        building: BuildingId,
+        /// What it is.
+        kind: BuildingKind,
+    },
+    /// A ship build reached its cost; the ship joined the planet's roster.
+    ShipCompleted {
+        /// The Shipyard's planet.
+        planet: PlanetId,
+        /// The Shipyard.
+        shipyard: BuildingId,
+        /// The new ship.
+        ship: ShipId,
+        /// What it is.
+        kind: ShipKind,
+    },
+    /// A demolition ended; the building is gone and its slot free.
+    DemolitionCompleted {
+        /// Its planet.
+        planet: PlanetId,
+        /// The building removed.
+        building: BuildingId,
+        /// What it was.
+        kind: BuildingKind,
+    },
+}
 
 /// Why the engine stopped. Except for [`EngineError::TimeBeforeNow`], an error from an advance
 /// poisons the world (D-023).
@@ -92,13 +124,29 @@ pub enum EngineError {
         /// The given rules' version.
         given: u32,
     },
-    /// A build reached its cost, or a demolition its end: a transition, which P1.7 builds.
-    #[error("planet {}: entity {entity} has a transition due, and transitions are not built yet", planet.0)]
-    TransitionNotBuilt {
+    /// Step 2 repeated more often than the planet has buildings and builds: a bug (Next event).
+    #[error("planet {}: {rounds} rounds of transitions at one instant", planet.0)]
+    TransitionLoop {
         /// The planet being solved.
         planet: PlanetId,
-        /// The construction, ship build or demolishing building.
-        entity: u64,
+        /// The rounds reached.
+        rounds: usize,
+    },
+    /// A ship completed at a Shipyard on a planet nobody owns, so the ship has no owner.
+    #[error("planet {}: Shipyard {} completed a ship, but the planet has no owner", planet.0, shipyard.0)]
+    UnownedShipyard {
+        /// The planet.
+        planet: PlanetId,
+        /// The Shipyard.
+        shipyard: BuildingId,
+    },
+    /// A Shipyard finished demolition while it still had builds.
+    #[error("planet {}: Shipyard {} was demolished with builds", planet.0, shipyard.0)]
+    DemolishedShipyardHasBuilds {
+        /// The planet.
+        planet: PlanetId,
+        /// The Shipyard.
+        shipyard: BuildingId,
     },
     /// A quantity's crossing lies before now: its event was missed.
     #[error("planet {}: entity {entity} crossed its boundary at {at_ms} ms, before now ({now} ms)", planet.0)]
