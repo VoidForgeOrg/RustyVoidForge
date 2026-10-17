@@ -50,7 +50,7 @@ Invariants that wait on the solver and later packages. Add them as properties wh
 - TODO(P1.8): each ship is in exactly one place (one roster or one fleet). `check_links` covers the links, and the property adds conservation across missions.
 - TODO(P1.6+): the next event is strictly in the future after every solve. The loop guard enforces it already; the property then runs through real steps.
 
-Mutations must keep failing the suite: queue insertion-order dependence, a read that writes, a non-carried remainder, a stale entry processed, process-level nondeterminism (two-process run only), a deferred entry at `t`, and a late crossing. The P1.5 proof has the table.
+Mutations must keep failing the suite: queue insertion-order dependence, a read that writes, a non-carried remainder, a remainder dropped across a rate change (checked against an independent millisecond stepper, because both invariance paths would drop it alike), a stale entry processed, process-level nondeterminism (two-process run only), a deferred entry at `t`, and a late crossing. The P1.5 proof has the table.
 
 ## Specs
 

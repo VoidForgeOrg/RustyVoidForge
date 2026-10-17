@@ -186,11 +186,11 @@ proptest! {
     fn observation_invariance_over_quantities((q, cap) in stock()) {
         let from = q.checkpoint_ms();
         let stops = even_stops(from, from + SPAN_MS, ADVANCES);
-        let (stepped, reads) = settle_stock(q, cap, &stops).unwrap();
-        let (straight, _) = settle_stock(q, cap, &[from + SPAN_MS]).unwrap();
+        let (stepped, reads) = settle_stock(q, cap, &[], &stops).unwrap();
+        let (straight, _) = settle_stock(q, cap, &[], &[from + SPAN_MS]).unwrap();
         prop_assert_eq!(canonical_bytes(&stepped), canonical_bytes(&straight));
         for (&t, &read) in stops.iter().zip(&reads) {
-            prop_assert_eq!(read, settle_stock(q, cap, &[t]).unwrap().1[0], "read at {}", t);
+            prop_assert_eq!(read, settle_stock(q, cap, &[], &[t]).unwrap().1[0], "read at {}", t);
         }
     }
 }
@@ -202,13 +202,114 @@ fn observation_invariance_through_a_crossing_with_a_remainder() {
     let q = Quantity::from_parts(0, 7_000_001, 1_234_567, 0).unwrap();
     let cap = 350_000_000;
     let stops = even_stops(0, SPAN_MS, ADVANCES);
-    let (stepped, reads) = settle_stock(q, cap, &stops).unwrap();
-    let (straight, _) = settle_stock(q, cap, &[SPAN_MS]).unwrap();
+    let (stepped, reads) = settle_stock(q, cap, &[], &stops).unwrap();
+    let (straight, _) = settle_stock(q, cap, &[], &[SPAN_MS]).unwrap();
     assert_eq!(stepped, straight);
     assert_eq!(stepped.value_g(), cap);
     assert!(reads.iter().any(|&r| r > 0 && r < cap), "it fills part-way");
     let crossing = q.rising_crossing(cap).unwrap().unwrap();
     assert!(0 < crossing && crossing < SPAN_MS);
+}
+
+/// An independent reference for the rounding rule: a stock stepped one millisecond at a time,
+/// carrying the remainder in 128-bit integers. It never calls `Quantity`.
+#[derive(Debug, Clone, Copy)]
+struct Stepper {
+    value: i128,
+    remainder: i128,
+    rate: i128,
+}
+
+impl Stepper {
+    fn of(q: Quantity) -> Self {
+        Self {
+            value: q.value_g().into(),
+            remainder: q.remainder().into(),
+            rate: q.rate_g_per_h().into(),
+        }
+    }
+
+    fn step(&mut self) {
+        let total = self.remainder + self.rate;
+        self.value += total.div_euclid(MS_PER_HOUR.into());
+        self.remainder = total.rem_euclid(MS_PER_HOUR.into());
+    }
+}
+
+/// review-r1 / QA Q1: a rate change carries the remainder. Against the stepper, a stock with a
+/// remainder changes rate three times, including two sign changes, and every later read and
+/// remainder matches.
+#[test]
+fn a_rate_change_carries_the_remainder() {
+    let mut q = Quantity::from_parts(5_000_000, 7_000_001, 2_345_678, 0).unwrap();
+    let mut s = Stepper::of(q);
+    let changes = [(1_000, -3_600_011), (2_500, 999_999), (4_000, -1)];
+    let mut next = 0;
+    for t in 1..=6_000i64 {
+        s.step();
+        if let Some(&(at, rate)) = changes.get(next)
+            && at == t
+        {
+            q = q.with_rate(t, rate).unwrap();
+            assert_eq!(
+                i128::from(q.remainder()),
+                s.remainder,
+                "remainder after the change at {t}"
+            );
+            s.rate = rate.into();
+            next += 1;
+        }
+        assert_eq!(i128::from(q.value_at(t).unwrap()), s.value, "read at {t}");
+        let here = q.advanced_to(t).unwrap();
+        assert_eq!(
+            (i128::from(here.value_g()), i128::from(here.remainder())),
+            (s.value, s.remainder),
+            "checkpoint at {t}"
+        );
+    }
+    assert_eq!(next, changes.len());
+}
+
+proptest! {
+    #![proptest_config(config(64, 0x0b5e_7a71_0000_0006))]
+
+    /// Rate changes while a remainder is carried: settled in one step or 1,000 gives the same
+    /// bytes, and both equal the independent stepper. The span is short enough to step every
+    /// millisecond, and the stock stays clear of its boundaries, so only the rate changes matter.
+    #[test]
+    fn observation_invariance_through_rate_changes_with_a_remainder(
+        remainder in 1i64..MS_PER_HOUR,
+        rate in -1_000_000_000i64..=1_000_000_000,
+        mut changes in prop::collection::vec((1i64..200_000, -1_000_000_000i64..=1_000_000_000), 1..6),
+    ) {
+        const SPAN: i64 = 200_000;
+        changes.sort_unstable_by_key(|c| c.0);
+        changes.dedup_by_key(|c| c.0);
+        let (cap, start) = (1_000_000_000_000, 500_000_000_000);
+        let q = Quantity::from_parts(start, rate, remainder, 0).unwrap();
+        let (stepped, reads) = settle_stock(q, cap, &changes, &even_stops(0, SPAN, ADVANCES)).unwrap();
+        let (straight, _) = settle_stock(q, cap, &changes, &[SPAN]).unwrap();
+        prop_assert_eq!(canonical_bytes(&stepped), canonical_bytes(&straight));
+
+        let mut s = Stepper::of(q);
+        let mut next = 0;
+        let mut stepped_reads = Vec::new();
+        for t in 1..=SPAN {
+            s.step();
+            if let Some(&(at, r)) = changes.get(next) && at == t {
+                s.rate = r.into();
+                next += 1;
+            }
+            if t % (SPAN / ADVANCES) == 0 {
+                stepped_reads.push(s.value);
+            }
+        }
+        prop_assert_eq!(
+            (i128::from(straight.value_g()), i128::from(straight.remainder())),
+            (s.value, s.remainder)
+        );
+        prop_assert_eq!(reads.iter().map(|&r| i128::from(r)).collect::<Vec<_>>(), stepped_reads);
+    }
 }
 
 // --- Property tests ---
@@ -422,7 +523,7 @@ proptest! {
         let from = q.checkpoint_ms();
         let stops: Vec<i64> = stops.into_iter().map(|t| from + t).collect();
         for k in 1..=stops.len() {
-            let (s, reads) = settle_stock(q, cap, &stops[..k]).unwrap();
+            let (s, reads) = settle_stock(q, cap, &[], &stops[..k]).unwrap();
             prop_assert!((0..MS_PER_HOUR).contains(&s.remainder()), "{:?}", s);
             prop_assert!((0..=cap).contains(&s.value_g()), "{:?}", s);
             prop_assert_eq!(s.checkpoint_ms(), stops[k - 1]);

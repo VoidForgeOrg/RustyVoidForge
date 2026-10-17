@@ -248,35 +248,49 @@ pub fn run_bytes(world: &World, events: &[Stepped]) -> Vec<u8> {
     canonical_bytes(&(world, events))
 }
 
-/// A stock settled event by event up to each stop in turn: when it reaches 0 (falling) or
-/// `cap_g` (rising) it snaps there and stops, and at each stop it is checkpointed and read. One
+/// A stock settled event by event up to each stop in turn. Each `(at_ms, rate)` in `changes`
+/// (in time order, none before the start) sets a new rate at its instant, the way a re-solve
+/// does, with the remainder carried. When the stock reaches 0 (falling) or `cap_g` (rising) it
+/// snaps there and stops until the next change. At each stop it is checkpointed and read. One
 /// stop or a thousand, the result is the same if the rounding rule holds. Returns the final
 /// quantity and the read at every stop.
 pub fn settle_stock(
     start: Quantity,
     cap_g: i64,
+    changes: &[(i64, i64)],
     stops: &[i64],
 ) -> Result<(Quantity, Vec<i64>), QuantityError> {
     let mut q = start;
+    let mut next = 0;
     let mut reads = Vec::with_capacity(stops.len());
     for &t in stops {
-        let rate = q.rate_g_per_h();
-        let crossing = if rate > 0 {
-            q.rising_crossing(cap_g)?.map(|c| (c, cap_g))
-        } else if rate < 0 {
-            q.falling_crossing(0)?.map(|c| (c, 0))
-        } else {
-            None
-        };
-        if let Some((at, boundary)) = crossing
-            && at <= t
-        {
-            q = q.snapped(boundary, at)?.with_rate(at, 0)?;
+        loop {
+            let change = changes.get(next).copied().filter(|&(at, _)| at <= t);
+            q = settle_crossing(q, cap_g, change.map_or(t, |(at, _)| at))?;
+            let Some((at, rate)) = change else { break };
+            q = q.with_rate(at, rate)?;
+            next += 1;
         }
         q = q.advanced_to(t)?;
         reads.push(q.value_at(t)?);
     }
     Ok((q, reads))
+}
+
+/// Snaps a stock that reaches its boundary by `until`, and stops it there.
+fn settle_crossing(q: Quantity, cap_g: i64, until: i64) -> Result<Quantity, QuantityError> {
+    let rate = q.rate_g_per_h();
+    let crossing = if rate > 0 {
+        q.rising_crossing(cap_g)?.map(|c| (c, cap_g))
+    } else if rate < 0 {
+        q.falling_crossing(0)?.map(|c| (c, 0))
+    } else {
+        None
+    };
+    match crossing {
+        Some((at, boundary)) if at <= until => q.snapped(boundary, at)?.with_rate(at, 0),
+        _ => Ok(q),
+    }
 }
 
 /// `n` stops evenly spread over `(from, to]`, ending exactly at `to`.
