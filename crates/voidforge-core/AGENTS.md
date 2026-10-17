@@ -2,7 +2,7 @@
 
 The engine: world state, the per-planet solver, commands, domain events and views. It is a pure, single-threaded state machine with three entry points, `advance_to(t)`, `apply(command, t)` and `view(query, t)`, and each call returns the domain events it produced.
 
-Library. P1.1 delivered `quantity` ([D-018](../../docs/decision-log.md#d-018-quantities-and-crossing-times)); the rest arrives with P1.2 to P1.11. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+Library. P1.1 delivered `quantity` ([D-018](../../docs/decision-log.md#d-018-quantities-and-crossing-times)). P1.2 delivered `rules`: the typed specs and `Rules::validate`, which holds the rules invariants every caller relies on ([D-020](../../docs/decision-log.md#d-020-rules-data-files-and-ids)). The rest arrives with P1.3 to P1.11. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 

@@ -233,3 +233,27 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 - Date and package: 2026-10-17, P1.1. Agreed with orch-advisor.
 - Decision: Project layering's "serde and thiserror only" for `voidforge-core` means runtime dependencies. Test tooling from the Tech stack may be a `[dev-dependencies]` entry, which never links into the library. The first is proptest 1.12.0 (std only: no fork or timeout features), with a fixed seed and no failure-persistence files, so every run explores the same cases. The determinism clippy bans still apply to test code (`--all-targets`). The MIR float check covers library code only (D-013). `deny.toml` allowlists proptest and its eight dependencies.
+
+### D-020: Rules data, files and IDs
+
+- Date and package: 2026-10-17, P1.2. The IDs and the validation split were agreed with orch-advisor.
+- Typed specs in `voidforge_core::rules`: `Rules` holds `version`, `name`, `planet`, `homeworld`, `buildings` (drill, refinery, shipyard), `ships` (colony_ship, cargo_vessel), `scoring` and `worldgen` (the P1.12 defaults). Fields are fixed per kind, with no maps. Masses are grams, durations milliseconds, rates grams per hour, distances distance units (D-021). Counts are `u32`; everything else is `i64`.
+- Validation in core, `Rules::validate`, on the first broken invariant, naming the field:
+  - positive slots, caps, costs, times, rates, speeds, parallel builds and worldgen sizes;
+  - homeworld buildings fit the slots, and stocks fit within the caps;
+  - every build's cost over its time is an exact whole number of grams per hour within 64 bits (`BuildCost::rate_g_per_h` is `Some`), so a build fed at that rate takes exactly its build time;
+  - refinery output = intake × `ingots_per_ore`;
+  - Cargo Vessel capacity is positive, while other ships may carry nothing;
+  - score points are not negative and `per_g` is positive;
+  - planet spacing is less than the cube.
+
+  It lives in core so every source of rules gets the same checks.
+- Parsing in `voidforge-rules`: `parse(text)` reads TOML with serde into raw structs that reject unknown fields, require every field, and accept integers only. It converts them into the core types and validates. It does no I/O. Schema errors carry the field and line, invariant errors the field path.
+- Files: `rules/v0.toml` is the game design's Rules v0 plus the P1.12 world generation defaults, in base units with the source values as comments. `rules/v0-fast.toml` is v0 with rates and speeds ×3,600 and durations ÷3,600. Masses, capacities, slots, starting stocks, scoring and distances are unchanged, and so is the clock. A test proves the fast file equals that transform of v0, and every v0 duration divides exactly.
+- IDs: each file has an integer `version` (the `rules_version` in log records and snapshots) and a `name`: v0 is 0 "v0", v0-fast is 1 "v0-fast". An ID identifies a rule set and doesn't order balancing generations. An ID is assigned once and never reused or edited; a changed rule set gets a new ID.
+
+### D-021: Fixed-point distance units
+
+- Date and package: 2026-10-17, P1.2. Chosen by orch-advisor; the Architectural Design's State model row now states the scale.
+- Decision: 1 world unit = 1,000 distance units (`DISTANCE_UNITS_PER_WORLD_UNIT`). Coordinates, distances and speeds are integer distance units (speeds per hour). Rules v0 speeds are 10,000 and 15,000 distance units per hour; fast speeds are 36,000,000 and 54,000,000. World generation still places planets on whole world units (P1.12) and stores them ×1,000. Rules worldgen distances are in distance units.
+- Why: the architecture calls these fixed-point. With whole world units, the integer square root in the distance formula would lose up to one world unit, about six minutes of Colony Ship travel, on every trip. Post-MVP interception needs positions mid-flight. The values stay small: coordinates up to 1e6, summed squares about 3e12, distance × 3,600,000 about 6e12, all within `i64`.

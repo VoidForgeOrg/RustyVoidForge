@@ -1,0 +1,70 @@
+# Voidforge Rules v0: the game design's placeholder numbers (MVP Game Design, Rules v0;
+# Technical Plan, P1.12 world generation defaults). Parsed by voidforge-rules (decision log D-020).
+#
+# Units: grams (1 t = 1,000,000 g), milliseconds (1 h = 3,600,000 ms), grams per hour, and
+# distance units (1 world unit = 1,000 distance units, D-021). Comments give the source values.
+# A rules ID is assigned once and never reused or edited; a changed rule set gets a new ID.
+
+version = 0
+name = "v0"
+
+[planet]
+slots = 8                             # 8
+ore_cap_g = 10_000_000_000            # 10,000 t
+ingot_cap_g = 5_000_000_000           # 5,000 t
+
+[homeworld]
+drills = 1                            # 1 Drill, operational
+refineries = 1                        # 1 Refinery, operational
+ore_g = 2_000_000_000                 # 2,000 t of Iron Ore
+ingots_g = 1_500_000_000              # 1,500 t of Iron Ingots
+
+[buildings.drill]
+cost_g = 150_000_000                  # 150 t of ingots
+build_time_ms = 10_800_000            # 3 h
+demolition_time_ms = 3_600_000        # 1 h
+output_g_per_h = 10_000_000           # 10 t of ore per hour
+
+[buildings.refinery]
+cost_g = 250_000_000                  # 250 t
+build_time_ms = 14_400_000            # 4 h
+demolition_time_ms = 3_600_000        # 1 h
+intake_g_per_h = 8_000_000            # takes 8 t of ore per hour
+ingots_per_ore = 2                    # 1 t of ore gives 2 t of ingots
+output_g_per_h = 16_000_000           # makes 16 t of ingots per hour
+
+[buildings.shipyard]
+cost_g = 1_200_000_000                # 1,200 t
+build_time_ms = 43_200_000            # 12 h
+demolition_time_ms = 7_200_000        # 2 h
+parallel_builds = 3                   # up to 3 ships at once
+
+[ships.colony_ship]
+cost_g = 800_000_000                  # 800 t
+build_time_ms = 36_000_000            # 10 h
+speed_du_per_h = 10_000               # 10 units per hour
+cargo_capacity_g = 0                  # none
+
+[ships.cargo_vessel]
+cost_g = 300_000_000                  # 300 t
+build_time_ms = 14_400_000            # 4 h
+speed_du_per_h = 15_000               # 15 units per hour
+cargo_capacity_g = 500_000_000        # 500 t
+
+[scoring]
+planet = 1_000
+drill = 100
+refinery = 150
+shipyard = 500
+colony_ship = 400
+cargo_vessel = 150
+ore = { points = 1, per_g = 10_000_000 }      # 1 per 10 t
+ingots = { points = 2, per_g = 10_000_000 }   # 2 per 10 t
+
+[worldgen]
+planets_per_expected_player = 20              # 20 planets per expected player
+cube_size_du = 1_000_000                      # a 1,000-unit cube
+min_planet_spacing_du = 10_000                # at least 10 units apart
+homeworld_min_spacing_du = 150_000            # candidates at least 150 units apart
+homeworld_neighbor_radius_du = 100_000        # with at least 5 planets within 100 units
+homeworld_min_neighbors = 5

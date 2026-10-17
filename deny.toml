@@ -146,6 +146,15 @@ allow = [
     { crate = "zerotrie" },
     { crate = "zerovec" },
     { crate = "zerovec-derive" },
+    # voidforge-rules parsing (P1.2, decision log D-020): serde and toml with what they pull in.
+    { crate = "serde" },
+    { crate = "serde_core" },
+    { crate = "serde_derive" },
+    { crate = "serde_spanned" },
+    { crate = "toml" },
+    { crate = "toml_datetime" },
+    { crate = "toml_parser" },
+    { crate = "winnow" },
     # voidforge-core dev-dependency proptest (P1.1, decision log D-019): tests only, never linked
     # into the library.
     { crate = "proptest" },

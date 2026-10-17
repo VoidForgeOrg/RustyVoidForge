@@ -26,7 +26,9 @@ opentelemetry = { version = "=0.33.1", default-features = false, features = ["tr
 opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 opentelemetry_sdk = { version = "=0.33.1", default-features = false, features = ["trace"] }
 proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
+serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
 thiserror = "=2.0.21"
+toml = { version = "=1.1.8", default-features = false, features = ["std", "parse", "serde"] }
 tracing = "=0.1.44"
 tracing-opentelemetry = { version = "=0.34.0", default-features = false }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["std", "fmt", "registry"] }
