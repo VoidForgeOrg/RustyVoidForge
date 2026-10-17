@@ -14,6 +14,7 @@ Library, dev only. P1.3 delivered `WorldBuilder`, `busy_world`, `v0_rules` and t
 ## Invariants
 
 - Builders create valid entities from the rules' defaults (Rules v0 unless given others), allocate IDs from the world's own counter (predictable and dense), keep both sides of every link in step, and check links in `build()`. Misuse panics with a message; `try_build()` returns the first broken link.
+- Builders schedule only through the core's `World::schedule_planet` and `World::schedule_fleet` (D-023), so every send, recall and planet event bumps a version as the engine does.
 - `busy_world()` holds every entity, state, mission and queue kind, including a stale entry. Its test has an exhaustive variant census, so a new variant must be added there.
 - It holds the determinism suite from P1.5, which every later package must keep green ([Phase 1](../../docs/Voidforge%20Technical%20Plan.md#phase-1-core-engine)).
 - Golden files in `tests/golden/` change only through `just bless`, and a reviewer checks every change ([Agent factory rules](../../docs/Voidforge%20Technical%20Plan.md#agent-factory-rules)). Both arrive with P2.6.

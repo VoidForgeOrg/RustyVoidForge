@@ -6,12 +6,15 @@
 //! IDs are UUIDs chosen outside the core and arrive in commands. The child of a relationship
 //! holds the truth (a building's planet, a ship's location) and the parent keeps an ordered set
 //! of child IDs for lookup. [`World::check_links`] checks both directions and runs whenever a
-//! world is deserialized. This module is data only: event processing, the solver and commands
-//! come with later packages.
+//! world is deserialized.
+//!
+//! The event queue is private: [`World::schedule_planet`] and [`World::schedule_fleet`] are the
+//! only way in, and [`World::advance_to`] the way out (the `engine` submodule, decision log
+//! D-023). The solver, fleet missions and commands come with later packages.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::quantity::Quantity;
 
@@ -356,8 +359,8 @@ pub struct QueueEntry {
 }
 
 /// The whole universe: the unit of a snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "WorldData", into = "WorldData")]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "WorldData")]
 pub struct World {
     /// Game time in milliseconds since the universe epoch.
     pub time_ms: i64,
@@ -381,8 +384,25 @@ pub struct World {
     pub fleets: BTreeMap<FleetId, Fleet>,
     /// Homeworld candidates in world generation order; Join game takes the next unowned one.
     pub homeworld_candidates: Vec<PlanetId>,
-    /// Scheduled entries in queue order.
-    pub queue: BTreeSet<QueueEntry>,
+    /// Scheduled entries in queue order. Private, so scheduling always goes through the guard.
+    queue: BTreeSet<QueueEntry>,
+    /// Set by a failed advance: the world may be mid-instant and must be discarded. Never
+    /// serialized.
+    poisoned: bool,
+    /// True while an advance runs, so a scheduling error inside a step is latched.
+    advancing: bool,
+    /// The first scheduling error inside the current advance; it stops the advance even if the
+    /// step that hit it carried on.
+    fault: Option<EngineError>,
+}
+
+/// Whether a queue entry still stands for its entity's current schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryStatus {
+    /// At its entity's version: processed when popped.
+    Live,
+    /// Superseded, or its fleet was removed: dropped when popped.
+    Stale,
 }
 
 /// Why a world or an ID request is not valid.
@@ -426,7 +446,116 @@ impl World {
             fleets: BTreeMap::new(),
             homeworld_candidates: Vec::new(),
             queue: BTreeSet::new(),
+            poisoned: false,
+            advancing: false,
+            fault: None,
         }
+    }
+
+    /// The event queue, in queue order.
+    pub fn queue(&self) -> &BTreeSet<QueueEntry> {
+        &self.queue
+    }
+
+    /// Whether a failed advance has left this world unusable.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    /// Classifies a queue entry against the current state; the one predicate the event loop and
+    /// [`World::check_links`] share. An entry newer than its entity, or one naming an ID that
+    /// was never allocated or that belongs to a different kind of entity, is an error.
+    pub fn entry_status(&self, entry: &QueueEntry) -> Result<EntryStatus, StateError> {
+        let (what, id, version) = match entry.kind {
+            QueueKind::PlanetChange(planet) => (
+                "planet",
+                planet.0,
+                self.planet(planet, "queue entry")?.version,
+            ),
+            QueueKind::FleetArrival(id) | QueueKind::FleetReturn(id) => {
+                let Some(fleet) = self.fleets.get(&id) else {
+                    // A fleet removed while an entry for it was queued (disbanded after an early
+                    // recall, say) leaves that entry stale, and the queue is never searched to
+                    // purge it. IDs are never reused, so an allocated ID that no entity holds
+                    // can only be such a fleet.
+                    if id.0 >= self.next_id || self.holds_id(id.0) {
+                        return Err(link(format!(
+                            "queue entry {entry:?}: fleet {} does not exist",
+                            id.0
+                        )));
+                    }
+                    return Ok(EntryStatus::Stale);
+                };
+                ("fleet", id.0, fleet.version)
+            }
+        };
+        match entry.version.cmp(&version) {
+            std::cmp::Ordering::Less => Ok(EntryStatus::Stale),
+            std::cmp::Ordering::Equal => Ok(EntryStatus::Live),
+            std::cmp::Ordering::Greater => Err(link(format!(
+                "queue entry {entry:?} is newer than {what} {id}, at version {version}"
+            ))),
+        }
+    }
+
+    /// Whether a planet, building, ship build or ship holds `id`.
+    fn holds_id(&self, id: u64) -> bool {
+        self.planets.contains_key(&PlanetId(id))
+            || self.buildings.contains_key(&BuildingId(id))
+            || self.ship_builds.contains_key(&ShipBuildId(id))
+            || self.ships.contains_key(&ShipId(id))
+    }
+
+    /// A planet's stored next event is at its version, after world time and in the queue.
+    fn check_planet_schedule(&self, planet: &Planet) -> Result<(), StateError> {
+        let Some(next) = planet.next_event else {
+            return Ok(());
+        };
+        if next.at_ms <= self.time_ms {
+            return Err(link(format!(
+                "planet {}: next event at {} ms is not after world time {}",
+                planet.id.0, next.at_ms, self.time_ms
+            )));
+        }
+        if next.version != planet.version {
+            return Err(link(format!(
+                "planet {}: next event has version {}, but the planet is at version {}",
+                planet.id.0, next.version, planet.version
+            )));
+        }
+        let entry = QueueEntry {
+            at_ms: next.at_ms,
+            kind: QueueKind::PlanetChange(planet.id),
+            version: next.version,
+        };
+        if !self.queue.contains(&entry) {
+            return Err(link(format!(
+                "planet {}: next event at {} ms is not in the queue",
+                planet.id.0, next.at_ms
+            )));
+        }
+        Ok(())
+    }
+
+    /// A moving fleet's expected live entry is after world time and in the queue. Whether a
+    /// stationed fleet has none needs a full queue scan, so only [`World::check_links`] checks it.
+    fn check_fleet_schedule(&self, fleet: &Fleet) -> Result<(), StateError> {
+        let Some(entry) = expected_entry(fleet) else {
+            return Ok(());
+        };
+        if entry.at_ms <= self.time_ms {
+            return Err(link(format!(
+                "fleet {}: arrival at {} ms is not after world time {}",
+                fleet.id.0, entry.at_ms, self.time_ms
+            )));
+        }
+        if !self.queue.contains(&entry) {
+            return Err(link(format!(
+                "fleet {} in state {:?} has no live queue entry {entry:?}",
+                fleet.id.0, fleet.state
+            )));
+        }
+        Ok(())
     }
 
     /// Takes the next entity ID. Fails, rather than wrapping, when the counter is exhausted.
@@ -514,31 +643,7 @@ impl World {
                     )));
                 }
             }
-            if let Some(next) = planet.next_event {
-                if next.at_ms <= self.time_ms {
-                    return Err(link(format!(
-                        "planet {}: next event at {} ms is not after world time {}",
-                        planet.id.0, next.at_ms, self.time_ms
-                    )));
-                }
-                if next.version != planet.version {
-                    return Err(link(format!(
-                        "planet {}: next event has version {}, but the planet is at version {}",
-                        planet.id.0, next.version, planet.version
-                    )));
-                }
-                let entry = QueueEntry {
-                    at_ms: next.at_ms,
-                    kind: QueueKind::PlanetChange(planet.id),
-                    version: next.version,
-                };
-                if !self.queue.contains(&entry) {
-                    return Err(link(format!(
-                        "planet {}: next event at {} ms is not in the queue",
-                        planet.id.0, next.at_ms
-                    )));
-                }
-            }
+            self.check_planet_schedule(planet)?;
             for id in &planet.buildings {
                 let building = self.buildings.get(id).ok_or_else(|| {
                     link(format!(
@@ -686,49 +791,23 @@ impl World {
 
         let mut live_fleet_entries = BTreeMap::new();
         for entry in &self.queue {
+            if self.entry_status(entry)? == EntryStatus::Stale {
+                continue;
+            }
             match entry.kind {
-                QueueKind::PlanetChange(planet) => {
-                    let planet = self.planet(planet, "queue entry")?;
-                    // A live entry (at the planet's version) must be the planet's next event;
-                    // entries at older versions are stale and are skipped when popped.
+                QueueKind::PlanetChange(id) => {
+                    // A live entry must be the planet's next event.
+                    let planet = &self.planets[&id];
                     let next = planet.next_event.map(|n| (n.at_ms, n.version));
-                    if entry.version > planet.version {
-                        return Err(link(format!(
-                            "queue entry {entry:?} is newer than planet {}, at version {}",
-                            planet.id.0, planet.version
-                        )));
-                    }
-                    if entry.version == planet.version && next != Some((entry.at_ms, entry.version))
-                    {
+                    if next != Some((entry.at_ms, entry.version)) {
                         return Err(link(format!(
                             "queue entry {entry:?} is live for planet {}, whose next event is {:?}",
-                            planet.id.0, planet.next_event
+                            id.0, planet.next_event
                         )));
                     }
                 }
                 QueueKind::FleetArrival(id) | QueueKind::FleetReturn(id) => {
-                    let Some(fleet) = self.fleets.get(&id) else {
-                        // A fleet removed while an entry for it was queued (disbanded after an
-                        // early recall, say) leaves that entry stale, and the queue is never
-                        // searched to purge it. IDs are never reused, so an allocated ID that no
-                        // entity holds can only be such a fleet.
-                        if id.0 >= self.next_id || ids.contains(&id.0) {
-                            return Err(link(format!(
-                                "queue entry {entry:?}: fleet {} does not exist",
-                                id.0
-                            )));
-                        }
-                        continue;
-                    };
-                    if entry.version > fleet.version {
-                        return Err(link(format!(
-                            "queue entry {entry:?} is newer than fleet {}, at version {}",
-                            id.0, fleet.version
-                        )));
-                    }
-                    if entry.version == fleet.version
-                        && live_fleet_entries.insert(id, *entry).is_some()
-                    {
+                    if live_fleet_entries.insert(id, *entry).is_some() {
                         return Err(link(format!("fleet {} has two live queue entries", id.0)));
                     }
                 }
@@ -738,28 +817,9 @@ impl World {
         // Each moving fleet has exactly one live entry, of its kind and at its arrival time; a
         // stationed fleet has none.
         for fleet in self.fleets.values() {
-            let expected = match fleet.state {
-                FleetState::Stationed { .. } => None,
-                FleetState::InTransit { arrives_at_ms, .. } => Some(QueueEntry {
-                    at_ms: arrives_at_ms,
-                    kind: QueueKind::FleetArrival(fleet.id),
-                    version: fleet.version,
-                }),
-                FleetState::Returning { arrives_at_ms, .. } => Some(QueueEntry {
-                    at_ms: arrives_at_ms,
-                    kind: QueueKind::FleetReturn(fleet.id),
-                    version: fleet.version,
-                }),
-            };
+            self.check_fleet_schedule(fleet)?;
+            let expected = expected_entry(fleet);
             let live = live_fleet_entries.get(&fleet.id).copied();
-            if let Some(entry) = expected
-                && entry.at_ms <= self.time_ms
-            {
-                return Err(link(format!(
-                    "fleet {}: arrival at {} ms is not after world time {}",
-                    fleet.id.0, entry.at_ms, self.time_ms
-                )));
-            }
             if live != expected {
                 return Err(link(format!(
                     "fleet {} in state {:?} has live queue entry {live:?}, expected {expected:?}",
@@ -777,6 +837,25 @@ impl World {
     }
 }
 
+/// The live entry a fleet's state calls for: an arrival in transit, a return when returning, and
+/// none when stationed.
+fn expected_entry(fleet: &Fleet) -> Option<QueueEntry> {
+    let (at_ms, kind) = match fleet.state {
+        FleetState::Stationed { .. } => return None,
+        FleetState::InTransit { arrives_at_ms, .. } => {
+            (arrives_at_ms, QueueKind::FleetArrival(fleet.id))
+        }
+        FleetState::Returning { arrives_at_ms, .. } => {
+            (arrives_at_ms, QueueKind::FleetReturn(fleet.id))
+        }
+    };
+    Some(QueueEntry {
+        at_ms,
+        kind,
+        version: fleet.version,
+    })
+}
+
 fn keyed(key: u64, id: u64, what: &str) -> Result<(), StateError> {
     if key == id {
         Ok(())
@@ -791,8 +870,9 @@ fn link(message: String) -> StateError {
     StateError::Link(message)
 }
 
-/// The serialized form of a [`World`]. Deserializing a world checks its links.
-#[derive(Serialize, Deserialize)]
+/// The serialized form of a [`World`]. Deserializing a world checks its links. Field order must
+/// match [`WorldDataRef`], which serializes it.
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorldData {
     time_ms: i64,
@@ -826,30 +906,58 @@ impl TryFrom<WorldData> for World {
             fleets: d.fleets,
             homeworld_candidates: d.homeworld_candidates,
             queue: d.queue,
+            poisoned: false,
+            advancing: false,
+            fault: None,
         };
         world.check_links()?;
         Ok(world)
     }
 }
 
-impl From<World> for WorldData {
-    fn from(w: World) -> Self {
-        Self {
-            time_ms: w.time_ms,
-            rules_version: w.rules_version,
-            seed: w.seed,
-            next_id: w.next_id,
-            players: w.players,
-            planets: w.planets,
-            buildings: w.buildings,
-            ship_builds: w.ship_builds,
-            ships: w.ships,
-            fleets: w.fleets,
-            homeworld_candidates: w.homeworld_candidates,
-            queue: w.queue,
+/// A borrowed [`WorldData`], so serializing a world does not copy it.
+#[derive(Serialize)]
+struct WorldDataRef<'a> {
+    time_ms: i64,
+    rules_version: u32,
+    seed: u64,
+    next_id: u64,
+    players: &'a BTreeMap<PlayerId, Player>,
+    planets: &'a BTreeMap<PlanetId, Planet>,
+    buildings: &'a BTreeMap<BuildingId, Building>,
+    ship_builds: &'a BTreeMap<ShipBuildId, ShipBuild>,
+    ships: &'a BTreeMap<ShipId, Ship>,
+    fleets: &'a BTreeMap<FleetId, Fleet>,
+    homeworld_candidates: &'a Vec<PlanetId>,
+    queue: &'a BTreeSet<QueueEntry>,
+}
+
+/// A poisoned world does not serialize: it may be mid-instant (D-023).
+impl Serialize for World {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.poisoned {
+            return Err(serde::ser::Error::custom(EngineError::Poisoned));
         }
+        WorldDataRef {
+            time_ms: self.time_ms,
+            rules_version: self.rules_version,
+            seed: self.seed,
+            next_id: self.next_id,
+            players: &self.players,
+            planets: &self.planets,
+            buildings: &self.buildings,
+            ship_builds: &self.ship_builds,
+            ships: &self.ships,
+            fleets: &self.fleets,
+            homeworld_candidates: &self.homeworld_candidates,
+            queue: &self.queue,
+        }
+        .serialize(serializer)
     }
 }
+
+mod engine;
+pub use engine::{DomainEvent, EngineError, Pending, Steps};
 
 #[cfg(test)]
 mod tests;

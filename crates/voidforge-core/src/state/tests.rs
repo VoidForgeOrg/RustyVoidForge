@@ -32,7 +32,7 @@ fn planet(id: u64, owner: Option<PlayerId>) -> Planet {
 
 /// Every entity, every state and status, both ship locations, all three fleet states and
 /// missions, every queue kind, a stale queue entry and quantities with remainders.
-fn sample_world() -> World {
+pub(super) fn sample_world() -> World {
     let mut w = World::new(10, 0, 0xdead_beef);
     w.players.insert(
         ALICE,
@@ -222,11 +222,11 @@ fn sample_world() -> World {
     w
 }
 
-fn json(w: &World) -> String {
+pub(super) fn json(w: &World) -> String {
     serde_json::to_string(w).expect("serialize")
 }
 
-fn reload(text: &str) -> Result<World, serde_json::Error> {
+pub(super) fn reload(text: &str) -> Result<World, serde_json::Error> {
     serde_json::from_str(text)
 }
 
