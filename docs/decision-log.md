@@ -424,3 +424,36 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Determinism**: `Economy { commands: n }` adds two unowned homeworld candidates and a script of n commands at whole hours, often the instant a build completes. Each is chosen against the state at its instant, half the time a fitting target issued mostly by its owner, otherwise a mix that is rejected. Both runs stop at every command instant (`determinism::stops`).
     - New properties: equal events and outcomes in 1 against 1,000 advances; a rejected command leaves the world's bytes unchanged; every invariant holds after every command; each action type is both accepted and rejected in every case.
     - The mass audit through commands: a cancelled construction or build takes exactly its delivered ingots out of the ledger; Join game sets exactly the starting stocks on an empty candidate; nothing else moves mass.
+
+### D-029: Commands, part 2: the five fleet commands and their reason codes
+
+- Date and package: 2026-10-17, P1.10. Proposed by dev-build. **Lead ruling, overnight; advisor review pending**: orch-advisor was held at a hook prompt, and orch-lead ruled on the six API-shape questions as proposed (slice 16, `ruling-lead-overnight.md`). Any amendment from the advisor's review lands as a follow-up before Phase 3.
+- Decision:
+  - **Payloads** (new `Action` variants): `AssembleFleet { planet, ships: BTreeSet<ShipId>, cargo: Cargo }`, `SendFleet { fleet, target, mission }`, `RecallFleet { fleet }`, `DisbandFleet { fleet }`, `TriggerUnload { fleet }`.
+    - Cargo is grams per resource; zero is "no cargo". The design's "spread across Cargo Vessels by tonnage" needs nothing more, since cargo is a fleet total (D-022).
+    - `ships` is a set, so `Action` and `Command` are `Clone`, no longer `Copy`.
+    - **Phase 3 obligation**: the API rejects duplicate ship IDs at its edge, so a client's duplicate never collapses silently.
+  - **The rules**, checked in D-028's order (who → what → whose → state), with the first failure as the code:
+    - **Assemble fleet**: `not_joined`; `unknown_planet`, `unknown_ship`, `no_ships`, `invalid_cargo` (a negative amount); `not_owner` (a ship not the player's, then cargo at a planet not the player's); `ship_not_on_roster`, `insufficient_stock` (either resource above its stock at t), `insufficient_capacity` (ore + ingots above the summed ship capacities, D-027).
+      - Effect: a new fleet stationed there; its ships leave the roster. Cargo leaves storage exactly, each stock keeping its remainder at rate 0 (the mirror of D-027's unload), and the planet is re-solved only when cargo was loaded.
+      - Without cargo, any planet's roster works, owned or not.
+    - **Send fleet**: `not_joined`; `unknown_fleet`, `unknown_planet`; `not_owner`; `fleet_not_stationed`, `same_planet`; then by mission:
+      - Colonize: `no_colony_ship`, `target_owned`;
+      - Transport: `no_cargo_vessel`, `target_not_owned`;
+      - Move: nothing further.
+
+      Then `unreachable_target` (zero travel time, or an arrival outside 64 bits), so a player's command never poisons the world. Of the five fleet commands, only Send and Recall compute a time from player input; Assemble and Trigger unload bound every amount by stock, capacity or free storage, and Disband moves only IDs (review-r2's audit, confirmed). Effect: D-027's `send_fleet`.
+    - **Recall fleet**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_in_transit` (stationed), `already_recalled` (returning), then `unreachable_target` (the return, now plus the time traveled, past the end of time; review-r2's repair, so a recall too can never poison). Effect: D-027's `recall_fleet`, including its departure-instant rule; its own checked error stays as the engine's defense.
+      - The Commands table's recall row omits "the player's"; it is read as brevity, not permission, because fleets are visible only to their owner and every other fleet row says so.
+      - A recall at the arrival instant is `fleet_not_in_transit`, because events at t run first.
+    - **Disband fleet**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_stationed`, `cargo_aboard`. Effect: the ships join the station planet's roster and the fleet is removed (any stale entry stays stale, D-022). It works at any planet. The design's "Move to an owned planet and unload first" follows from `cargo_aboard` and Trigger unload's rule.
+    - **Trigger unload**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_stationed`, `planet_not_owned`. Effect: D-027's unload (each resource up to free storage, the rest aboard, remainder kept), then re-solve. Nothing aboard, or no room, is accepted and moves nothing.
+    - `planet_not_owned` and `target_not_owned` are state codes, not `not_owner`, because which planet matters is known only from the fleet's state. That keeps D-028's rule that `not_owner` always precedes state codes.
+  - **The vocabulary** grows by 18 codes, all API contract: `unknown_fleet`, `unknown_ship`, `no_ships`, `invalid_cargo`, `ship_not_on_roster`, `insufficient_stock`, `insufficient_capacity`, `fleet_not_stationed`, `fleet_not_in_transit`, `already_recalled`, `same_planet`, `no_colony_ship`, `target_owned`, `no_cargo_vessel`, `target_not_owned`, `unreachable_target`, `cargo_aboard`, `planet_not_owned`. The architecture's `insufficient_stock` and `cargo_aboard` are kept verbatim.
+  - **Ownership before state** (review-r1's carry from P1.9): another player's building or fleet in any state is `not_owner`. It is pinned for Cancel construction, Demolish, Queue ship and the fleet commands.
+  - **Determinism**:
+    - Command scripts cycle all eleven actions, 165 per script, on spread-out planets so trips take hours.
+    - The mass audit's command step covers Assemble (the planet loses exactly the cargo, and the cargo aboard gains it) and Trigger unload (the reverse). The cargo aboard closes as start − unloaded + loaded.
+    - Coverage (each action type accepted and rejected) is asserted over eight fixed economies rather than per generated case.
+    - Ship conservation now allows a consumed Colony Ship that was completed during the run.
+    - A planned recall leaves alone a fleet that a generated command already moved out of transit.

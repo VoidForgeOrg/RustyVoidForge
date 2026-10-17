@@ -27,7 +27,9 @@ fn command(player: PlayerId, action: Action) -> Command {
 
 /// Applies an accepted command at `t` and returns its events.
 fn accept(w: &mut World, player: PlayerId, action: Action, t: i64) -> Vec<DomainEvent> {
-    let applied = w.apply(&command(player, action), t, &v0_rules()).unwrap();
+    let applied = w
+        .apply(&command(player, action.clone()), t, &v0_rules())
+        .unwrap();
     applied
         .outcome
         .unwrap_or_else(|r| panic!("{action:?} by {player:?} was rejected: {}", r.code()))
@@ -39,7 +41,9 @@ fn reject(w: &mut World, player: PlayerId, action: Action, t: i64, reason: Rejec
     let rules = v0_rules();
     let mut advanced = w.clone();
     let events = advanced.advance_to(t, &rules).unwrap();
-    let applied = w.apply(&command(player, action), t, &rules).unwrap();
+    let applied = w
+        .apply(&command(player, action.clone()), t, &rules)
+        .unwrap();
     assert_eq!(
         applied,
         Applied {
@@ -264,7 +268,7 @@ fn build_fills_the_last_slot_and_then_finds_none_counting_demolitions() {
         kind: BuildingKind::Refinery,
     };
     assert_eq!(w.planets[&home].buildings.len(), 7);
-    accept(&mut w, ALICE, build, 0);
+    accept(&mut w, ALICE, build.clone(), 0);
     reject(&mut w, ALICE, build, 0, Rejection::NoFreeSlot);
 }
 
@@ -328,7 +332,7 @@ fn cancel_construction_rejects_an_unknown_or_already_cancelled_building() {
     let site = b.construction(home, BuildingKind::Drill, 0);
     let mut w = b.build();
     let cancel = Action::CancelConstruction { building: site };
-    accept(&mut w, ALICE, cancel, 0);
+    accept(&mut w, ALICE, cancel.clone(), 0);
     reject(&mut w, ALICE, cancel, 0, Rejection::UnknownBuilding);
 }
 
@@ -566,8 +570,8 @@ fn cancel_ship_build_of_a_waiting_build_starts_nothing() {
 fn cancel_ship_build_rejects_an_unknown_or_already_cancelled_build_and_one_not_the_players() {
     let (mut w, _, _, builds) = shipyard(1, 0);
     let cancel = Action::CancelShipBuild { build: builds[0] };
-    reject(&mut w, BOB, cancel, 0, Rejection::NotOwner);
-    accept(&mut w, ALICE, cancel, 0);
+    reject(&mut w, BOB, cancel.clone(), 0, Rejection::NotOwner);
+    accept(&mut w, ALICE, cancel.clone(), 0);
     reject(&mut w, ALICE, cancel, 0, Rejection::UnknownShipBuild);
 }
 
@@ -626,8 +630,42 @@ fn apply_checks_who_then_what_then_whose_then_state() {
         shipyard: site,
         kind: ShipKind::CargoVessel,
     };
-    reject(&mut w, ALICE, queue, 0, Rejection::NotOwner);
+    reject(&mut w, ALICE, queue.clone(), 0, Rejection::NotOwner);
     reject(&mut w, BOB, queue, 0, Rejection::NotAShipyard);
+}
+
+/// R1's carry from P1.9: another player's building in the wrong state is `not_owner`, never
+/// the state code, so the API never reveals the state of what the player does not own.
+#[test]
+fn apply_checks_ownership_before_state_for_another_players_buildings() {
+    let mut b = WorldBuilder::new();
+    b.player(ALICE);
+    let bob = b.player(BOB);
+    let site = b.construction(bob, BuildingKind::Drill, 0);
+    let going = b.demolition(bob, BuildingKind::Refinery);
+    let yard_site = b.construction(bob, BuildingKind::Shipyard, 0);
+    let mut w = b.build();
+    let operational = buildings_of(&w, bob, BuildingKind::Drill)
+        .into_iter()
+        .find(|id| w.buildings[id].state == BuildingState::Operational)
+        .unwrap();
+    // Cancel construction of an operational building: not_owner, not not_under_construction.
+    let cancel = Action::CancelConstruction {
+        building: operational,
+    };
+    reject(&mut w, ALICE, cancel, 0, Rejection::NotOwner);
+    // Demolish of one under construction and one being demolished: not_owner, not
+    // not_operational.
+    for building in [site, going] {
+        let demolish = Action::DemolishBuilding { building };
+        reject(&mut w, ALICE, demolish, 0, Rejection::NotOwner);
+    }
+    // Queue ship at a Shipyard under construction: not_owner, not shipyard_not_operational.
+    let queue = Action::QueueShip {
+        shipyard: yard_site,
+        kind: ShipKind::CargoVessel,
+    };
+    reject(&mut w, ALICE, queue, 0, Rejection::NotOwner);
 }
 
 #[test]
@@ -643,7 +681,7 @@ fn apply_runs_events_at_t_before_the_command() {
     reject(
         &mut w,
         ALICE,
-        demolish,
+        demolish.clone(),
         3 * H - 1,
         Rejection::NotOperational,
     );
@@ -730,7 +768,29 @@ fn apply_reason_codes_are_their_serialized_names() {
         Rejection::ShipyardHasBuilds,
         Rejection::NotAShipyard,
         Rejection::ShipyardNotOperational,
+        Rejection::UnknownFleet,
+        Rejection::UnknownShip,
+        Rejection::NoShips,
+        Rejection::InvalidCargo,
+        Rejection::ShipNotOnRoster,
+        Rejection::InsufficientStock,
+        Rejection::InsufficientCapacity,
+        Rejection::FleetNotStationed,
+        Rejection::FleetNotInTransit,
+        Rejection::AlreadyRecalled,
+        Rejection::SamePlanet,
+        Rejection::NoColonyShip,
+        Rejection::TargetOwned,
+        Rejection::NoCargoVessel,
+        Rejection::TargetNotOwned,
+        Rejection::UnreachableTarget,
+        Rejection::CargoAboard,
+        Rejection::PlanetNotOwned,
     ];
+    // The architecture's own examples, verbatim (D-028's note for P1.10).
+    for code in ["no_free_slot", "insufficient_stock", "cargo_aboard"] {
+        assert!(all.iter().any(|r| r.code() == code), "{code}");
+    }
     for r in all {
         assert_eq!(
             serde_json::to_value(r).unwrap(),
