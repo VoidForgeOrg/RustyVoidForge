@@ -8,6 +8,7 @@
     clippy::float_arithmetic
 )]
 
+pub mod fleet;
 pub mod quantity;
 pub mod rules;
 pub mod solver;

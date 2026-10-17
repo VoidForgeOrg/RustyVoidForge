@@ -9,8 +9,9 @@
 //!
 //! [`World::solve_planet`] is the solve itself (steps 1 to 5): bring every quantity to now,
 //! snapping crossings due now; refuse transitions, which are P1.7's; solve the flows; set net
-//! rates; schedule the earliest crossing or timer. [`Solver`] is the production step that runs it
-//! for each `PlanetChange` (D-025).
+//! rates; schedule the earliest crossing or timer. [`Solver`] is the production steps: it runs the
+//! solve for each `PlanetChange` (D-025) and the fleet arrivals and returns of [`crate::fleet`]
+//! (D-027).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,8 +19,8 @@ use crate::quantity::Quantity;
 use crate::rules::Rules;
 use crate::state::{
     Building, BuildingId, BuildingKind, BuildingState, DomainEvent, EngineError, FleetId, Planet,
-    PlanetId, QueueKind, Ship, ShipBuild, ShipBuildId, ShipBuildStatus, ShipId, ShipLocation,
-    StateError, Steps, World,
+    PlanetId, Ship, ShipBuild, ShipBuildId, ShipBuildStatus, ShipId, ShipLocation, StateError,
+    Steps, World,
 };
 
 /// A building's or build's state of work, for the read side. Labels change nothing.
@@ -273,8 +274,8 @@ fn flows_with(
     })
 }
 
-/// The production steps: a planet change re-solves its planet. Fleet arrivals and returns are
-/// P1.8's and stop the engine until then.
+/// The production steps: a planet change re-solves its planet; a fleet arrival runs its mission
+/// and re-solves its target; a return stations the fleet at its origin (D-027).
 #[derive(Debug, Clone, Copy)]
 pub struct Solver<'a> {
     /// The rules in force; their version matches the world's.
@@ -294,18 +295,18 @@ impl Steps for Solver<'_> {
 
     fn fleet_arrival(
         &mut self,
-        _world: &mut World,
+        world: &mut World,
         fleet: FleetId,
     ) -> Result<Vec<DomainEvent>, EngineError> {
-        Err(EngineError::StepNotBuilt(QueueKind::FleetArrival(fleet)))
+        world.arrive(fleet, self.rules)
     }
 
     fn fleet_return(
         &mut self,
-        _world: &mut World,
+        world: &mut World,
         fleet: FleetId,
     ) -> Result<Vec<DomainEvent>, EngineError> {
-        Err(EngineError::StepNotBuilt(QueueKind::FleetReturn(fleet)))
+        world.return_home(fleet)
     }
 }
 
@@ -413,7 +414,7 @@ impl World {
 
     /// Step 1: every quantity on the planet to now, snapping those crossing now. A demolition
     /// whose end lies before now was missed (D-026).
-    fn bring_planet(&mut self, planet: PlanetId) -> Result<(), EngineError> {
+    pub(crate) fn bring_planet(&mut self, planet: PlanetId) -> Result<(), EngineError> {
         let now = self.time_ms;
         let p = &self.planets[&planet];
         let ore = bring(p.ore, now, Some(0), Some(p.ore_cap_g), planet, planet.0)?;

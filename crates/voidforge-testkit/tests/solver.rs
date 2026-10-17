@@ -9,8 +9,8 @@ use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::{GRAMS_PER_TON, Rules};
 use voidforge_core::solver::{FlowLabel, PlanetFlows, planet_flows};
 use voidforge_core::state::{
-    BuildingId, BuildingKind, BuildingState, EngineError, PlanetId, QueueKind, ShipBuildStatus,
-    ShipKind, World,
+    BuildingId, BuildingKind, BuildingState, EngineError, PlanetId, ShipBuildStatus, ShipKind,
+    World,
 };
 use voidforge_testkit::{WorldBuilder, v0_rules};
 
@@ -422,26 +422,8 @@ fn halt_chain_ingot_storage_fills_and_halts_the_refinery_then_ore_storage_fills_
     assert_eq!(w.planets[&p].ore.value_at(w.time_ms).unwrap(), 10_000 * T);
 }
 
-// Transitions themselves are P1.7's named tests, in `tests/transitions.rs`.
-
-#[test]
-fn fleet_entries_still_stop_the_engine_until_fleets_exist() {
-    use voidforge_core::state::{Cargo, Mission};
-    use voidforge_testkit::ALICE;
-    let rules = v0_rules();
-    let mut b = WorldBuilder::new();
-    let home = b.player(ALICE);
-    let ship = b.ship(ALICE, ShipKind::CargoVessel, home);
-    let fleet = b.fleet(&[ship], Cargo::default());
-    let other = b.planet(None);
-    b.send(fleet, other, Mission::Move, H);
-    let mut w = b.build();
-    w.planets.get_mut(&home).unwrap().ingot_cap_g = 100_000 * T; // nothing on home crosses first
-    assert_eq!(
-        w.advance_to(2 * H, &rules),
-        Err(EngineError::StepNotBuilt(QueueKind::FleetArrival(fleet)))
-    );
-}
+// Transitions themselves are P1.7's named tests, in `tests/transitions.rs`; fleets are P1.8's,
+// in `tests/fleets.rs`.
 
 // --- Error paths: typed errors, and nothing changed (review-r2) ---
 

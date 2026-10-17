@@ -28,7 +28,7 @@ cargo clippy -p voidforge-testkit --all-targets -- -D warnings
 cargo nextest run -p voidforge-testkit
 ```
 
-P1.3 covers every builder, rules defaults including the fast rules, fleet and recall bookkeeping, dense and overridable IDs, link failures, and the busy world's variant census, round trip and byte-for-byte determinism. P1.5 adds the determinism suite (`just determinism`) and P2.6 the golden logs.
+P1.3 covers every builder, rules defaults including the fast rules, fleet and recall bookkeeping, dense and overridable IDs, link failures, and the busy world's variant census, round trip and byte-for-byte determinism. P1.5 adds the determinism suite (`just determinism`) and P2.6 the golden logs. The named engine tests also live here, because only testkit reads Rules v0: `tests/solver.rs` (P1.6), `tests/transitions.rs` (P1.7) and `tests/fleets.rs` (P1.8: travel, send, every mission outcome, the tie, recall, the destination post-check and the unreachable-arrival guards).
 
 ## Extending the determinism suite
 
@@ -36,8 +36,8 @@ Every package from P1.6 on joins these harnesses, in `tests/determinism.rs` and 
 
 | A package that adds | Joins | How |
 | --- | --- | --- |
-| A real step (solver P1.6/P1.7, done; fleets P1.8) | Observation invariance, double run, `check_links` after every advance | Run its scenarios through production `advance_to` once it no longer returns `StepNotBuilt`, alongside the `Churn` runs. Keep `Churn` for the loop itself. Scenarios must produce events; the event-count assertions stay. P1.6 added `Economy` and the `solved_*` tests; P1.7 extends `Economy` with builds that complete and demolitions that end. |
-| A command (`apply`, P1.9/P1.10) | Double run; observation invariance | Generated command sequences run twice give equal bytes. Commands stamped between observation points must not depend on how the span was split. |
+| A real step (solver P1.6/P1.7 and fleets P1.8, all done) | Observation invariance, double run, `check_links` after every advance | Run its scenarios through production `advance_to`, alongside the `Churn` runs. Keep `Churn` for the loop itself. Scenarios must produce events; the event-count assertions stay. P1.6 added `Economy` and the `solved_*` tests; P1.7 extended `Economy` with builds that complete and demolitions that end; P1.8 added `Economy { fleets: true }` and the `fleets_*` tests. |
+| A command (`apply`, P1.9/P1.10) | Double run; observation invariance | Generated command sequences run twice give equal bytes. Commands stamped between observation points must not depend on how the span was split: make every command instant a stop of both runs, as `determinism::stops` does for P1.8's planned recalls. |
 | A view (P1.11) | Observation invariance ("Pure reads") | Call `view` at every observation point. The bytes must not change. |
 | A new entity, state or queue kind | `Scenario`, `Churn` and the property generators | Generate it, so the harnesses reach it. |
 | Phase 2 snapshots, logs and golden replays | This stage (CI/CD table) | Snapshot round trip and golden replays join `just determinism`. The log-based two-process replay replaces nothing here; it adds to it. |
@@ -46,7 +46,7 @@ Invariants that wait on the solver and later packages. Add them as properties wh
 
 - Done in P1.6 (`solved_*`, D-025): no negative or over-cap stock at every observation point, and the next event strictly after every solve. Mass is accounted for: an exact scaled ledger between solves, and each snap within one ms of flow plus one gram. These run through the production solver on `Economy` worlds under `slow_build_rules`. P1.7 did: `transitions_*` run `Economy` under Rules v0, so builds complete, ships roll off, queues advance and demolitions end; the audit checks each completing build leaves the ledger at exactly its cost (D-026).
 - Done in P1.7 (`assert_transition_invariants`): slots respected, each ship in exactly one place, and active builds per Shipyard within `parallel_builds`, at every observation and after every audited solve. P1.9's commands must keep them (building, queueing and demolishing are where slots and the queue are decided).
-- TODO(P1.8): ship conservation across fleet missions (a Colony Ship consumed by colonization leaves `ships`; every other ship stays in exactly one place); extend `Economy` with fleets.
+- Done in P1.8 (`fleets_*`, D-027): ships conserved, start plus `ShipCompleted` less `PlanetColonized`, with every consumed ship a Colony Ship that left (`assert_ships_conserved`); fleet cargo within 0 and capacity (`assert_fleet_invariants`); and mass accounted for with cargo aboard, where each audited arrival's target gains exactly what its fleet unloaded, as `CargoUnloaded` reports, and the cargo aboard closes exactly at the end. P1.10's assembly and unload commands must keep them.
 
 Mutations must keep failing the suite: queue insertion-order dependence, a read that writes, a non-carried remainder, a remainder dropped across a rate change (checked against an independent millisecond stepper, because both invariance paths would drop it alike), a stale entry processed, process-level nondeterminism (two-process run only), a deferred entry at `t`, and a late crossing. The P1.5 proof has the table.
 

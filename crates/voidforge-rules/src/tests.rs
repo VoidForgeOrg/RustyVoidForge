@@ -374,7 +374,13 @@ fn invariant_violations_name_the_field() {
             "cargo_capacity_g = 0 ",
             "cargo_capacity_g = -5 ",
             "ships.colony_ship.cargo_capacity_g",
-            "must not be negative",
+            "must be 0, got -5",
+        ),
+        (
+            "cargo_capacity_g = 0 ",
+            "cargo_capacity_g = 1 ",
+            "ships.colony_ship.cargo_capacity_g",
+            "must be 0, got 1",
         ),
         (
             "drill = 100\n",
@@ -415,7 +421,8 @@ fn a_build_rate_beyond_64_bits_is_rejected() {
 }
 
 #[test]
-fn a_colony_ship_may_carry_nothing() {
-    // Zero capacity is valid for ships that carry no cargo; v0's Colony Ship relies on it.
+fn a_colony_ship_carries_nothing() {
+    // The advisor's ruling (D-027): Colony Ship capacity is exactly 0, so fleet capacity is the
+    // plain sum over ships; v0 and v0-fast comply, and any other value is rejected above.
     assert_eq!(v0().ships.colony_ship.cargo_capacity_g, 0);
 }

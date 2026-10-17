@@ -10,7 +10,7 @@ use voidforge_core::state::{
     BuildingId, BuildingKind, BuildingState, DomainEvent, EngineError, PlanetId, ShipBuildId,
     ShipBuildStatus, ShipId, ShipKind, ShipLocation, World,
 };
-use voidforge_testkit::{ALICE, WorldBuilder, v0_rules};
+use voidforge_testkit::{ALICE, BOB, WorldBuilder, v0_rules};
 
 const T: i64 = GRAMS_PER_TON;
 const H: i64 = MS_PER_HOUR;
@@ -275,6 +275,29 @@ fn events_come_out_of_an_advance_in_the_order_they_happened() {
 #[test]
 fn transitions_a_ship_completing_on_an_unowned_planet_is_an_error_that_changes_nothing() {
     let mut b = WorldBuilder::new();
+    let p = b.planet(None);
+    let yard = b.building(p, BuildingKind::Shipyard, BuildingState::Operational);
+    let build = b.ship_build(yard, ShipKind::CargoVessel, ShipBuildStatus::Active);
+    let mut w = b.build();
+    delivered(&mut w, build, 300 * T);
+    let before = w.clone();
+    assert_eq!(
+        w.solve_planet(p, &v0_rules()),
+        Err(EngineError::UnownedShipyard {
+            planet: p,
+            shipyard: yard
+        })
+    );
+    assert_eq!(w, before);
+}
+
+/// The same with players in the world (P1.7 QA carry): an owner fallback such as
+/// `owner.or(first player)` would find one here and wrongly hand the ship to Alice.
+#[test]
+fn transitions_a_ship_completing_on_an_unowned_planet_with_players_present_is_still_an_error() {
+    let mut b = WorldBuilder::new();
+    b.player(ALICE);
+    b.player(BOB);
     let p = b.planet(None);
     let yard = b.building(p, BuildingKind::Shipyard, BuildingState::Operational);
     let build = b.ship_build(yard, ShipKind::CargoVessel, ShipBuildStatus::Active);

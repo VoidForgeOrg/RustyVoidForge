@@ -372,16 +372,20 @@ fn reschedule_fleet_expecting(w: &mut World, id: FleetId, at_ms: i64) {
 }
 
 #[test]
-fn production_steps_drop_stale_entries_and_refuse_fleet_entries() {
+fn production_steps_drop_stale_entries_and_run_fleet_entries() {
     let mut w = sample_world();
     w.schedule_planet(P1, None).unwrap(); // no live planet entry: this test is about the loop
     assert_eq!(w.advance_to(149, &test_rules()).unwrap(), []); // only stale entries were due
     assert_eq!(w.time_ms, 149);
     assert_eq!(
-        w.advance_to(150, &test_rules()),
-        Err(EngineError::StepNotBuilt(QueueKind::FleetReturn(F14)))
+        w.advance_to(150, &test_rules()).unwrap(),
+        [DomainEvent::FleetReturned {
+            fleet: F14,
+            planet: P1
+        }]
     );
-    assert!(w.is_poisoned());
+    assert_eq!(w.fleets[&F14].state, FleetState::Stationed { at: P1 });
+    w.check_links().unwrap();
 }
 
 #[test]
@@ -482,7 +486,7 @@ fn a_swallowed_fleet_guard_error_still_stops_and_poisons() {
             w.fleets.get_mut(&F14).unwrap().state = FleetState::InTransit {
                 origin: P1,
                 target: P3,
-                mission: crate::state::Mission::Move,
+                mission: Mission::Move,
                 departed_at_ms: w.time_ms,
                 arrives_at_ms: w.time_ms,
             };

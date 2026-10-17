@@ -305,10 +305,14 @@ impl Rules {
             colony.build,
         )?;
         positive("ships.colony_ship.speed_du_per_h", colony.speed_du_per_h)?;
-        not_negative(
-            "ships.colony_ship.cargo_capacity_g",
-            colony.cargo_capacity_g,
-        )?;
+        // A Colony Ship carries nothing: fleet capacity is the plain sum of every ship's
+        // capacity, so a nonzero value here would let colony fleets carry cargo (D-027).
+        if colony.cargo_capacity_g != 0 {
+            return Err(problem(
+                "ships.colony_ship.cargo_capacity_g",
+                format!("must be 0, got {}", colony.cargo_capacity_g),
+            ));
+        }
         let cargo = &self.ships.cargo_vessel;
         build_cost(
             "ships.cargo_vessel.cost_g",
