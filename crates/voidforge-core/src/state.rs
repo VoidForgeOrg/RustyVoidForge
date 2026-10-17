@@ -292,9 +292,10 @@ pub struct Fleet {
     pub state: FleetState,
 }
 
-/// What a queue entry wakes. The derived order is the architecture's kind rank: planet changes
-/// (rank 0) before fleet entries (rank 1) at the same time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// What a queue entry wakes. Ordered by the architecture's kind rank, then entity ID: planet
+/// changes (rank 0) before fleet entries (rank 1), and fleet arrivals and returns together by
+/// fleet ID. For one fleet, an arrival sorts before a return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QueueKind {
     /// A planet's earliest crossing or timer (rank 0).
     PlanetChange(PlanetId),
@@ -302,6 +303,44 @@ pub enum QueueKind {
     FleetArrival(FleetId),
     /// A recalled fleet arriving back (rank 1).
     FleetReturn(FleetId),
+}
+
+impl QueueKind {
+    /// The kind rank: 0 for planet changes, 1 for fleet entries.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::PlanetChange(_) => 0,
+            Self::FleetArrival(_) | Self::FleetReturn(_) => 1,
+        }
+    }
+
+    /// The ID of the entity it wakes.
+    pub fn entity(self) -> u64 {
+        match self {
+            Self::PlanetChange(id) => id.0,
+            Self::FleetArrival(id) | Self::FleetReturn(id) => id.0,
+        }
+    }
+
+    fn sort_key(self) -> (u8, u64, u8) {
+        let variant = match self {
+            Self::PlanetChange(_) | Self::FleetArrival(_) => 0,
+            Self::FleetReturn(_) => 1,
+        };
+        (self.rank(), self.entity(), variant)
+    }
+}
+
+impl Ord for QueueKind {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.sort_key().cmp(&other.sort_key())
+    }
+}
+
+impl PartialOrd for QueueKind {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// One scheduled entry. Ordering is time, then kind rank and entity ID, then version.
@@ -400,8 +439,9 @@ impl World {
         Ok(id)
     }
 
-    /// Checks that IDs are unique and below the counter, that map keys match the entities, and
-    /// that every reference resolves and is mirrored by the other side. Gameplay rules (slot
+    /// Checks that IDs are unique and below the counter, that map keys match the entities, that
+    /// every reference resolves and is mirrored by the other side, and that the queue agrees with
+    /// the planets and fleets it wakes. Gameplay rules (slot
     /// counts, Shipyard limits, cargo capacity) are not checked here.
     pub fn check_links(&self) -> Result<(), StateError> {
         let mut ids = BTreeSet::new();
@@ -638,6 +678,7 @@ impl World {
             }
         }
 
+        let mut live_fleet_entries = BTreeMap::new();
         for entry in &self.queue {
             match entry.kind {
                 QueueKind::PlanetChange(planet) => {
@@ -645,6 +686,12 @@ impl World {
                     // A live entry (at the planet's version) must be the planet's next event;
                     // entries at older versions are stale and are skipped when popped.
                     let next = planet.next_event.map(|n| (n.at_ms, n.version));
+                    if entry.version > planet.version {
+                        return Err(link(format!(
+                            "queue entry {entry:?} is newer than planet {}, at version {}",
+                            planet.id.0, planet.version
+                        )));
+                    }
                     if entry.version == planet.version && next != Some((entry.at_ms, entry.version))
                     {
                         return Err(link(format!(
@@ -653,14 +700,50 @@ impl World {
                         )));
                     }
                 }
-                QueueKind::FleetArrival(fleet) | QueueKind::FleetReturn(fleet) => {
-                    if !self.fleets.contains_key(&fleet) {
-                        return Err(link(format!(
+                QueueKind::FleetArrival(id) | QueueKind::FleetReturn(id) => {
+                    let fleet = self.fleets.get(&id).ok_or_else(|| {
+                        link(format!(
                             "queue entry {entry:?}: fleet {} does not exist",
-                            fleet.0
+                            id.0
+                        ))
+                    })?;
+                    if entry.version > fleet.version {
+                        return Err(link(format!(
+                            "queue entry {entry:?} is newer than fleet {}, at version {}",
+                            id.0, fleet.version
                         )));
                     }
+                    if entry.version == fleet.version
+                        && live_fleet_entries.insert(id, *entry).is_some()
+                    {
+                        return Err(link(format!("fleet {} has two live queue entries", id.0)));
+                    }
                 }
+            }
+        }
+
+        // Each moving fleet has exactly one live entry, of its kind and at its arrival time; a
+        // stationed fleet has none.
+        for fleet in self.fleets.values() {
+            let expected = match fleet.state {
+                FleetState::Stationed { .. } => None,
+                FleetState::InTransit { arrives_at_ms, .. } => Some(QueueEntry {
+                    at_ms: arrives_at_ms,
+                    kind: QueueKind::FleetArrival(fleet.id),
+                    version: fleet.version,
+                }),
+                FleetState::Returning { arrives_at_ms, .. } => Some(QueueEntry {
+                    at_ms: arrives_at_ms,
+                    kind: QueueKind::FleetReturn(fleet.id),
+                    version: fleet.version,
+                }),
+            };
+            let live = live_fleet_entries.get(&fleet.id).copied();
+            if live != expected {
+                return Err(link(format!(
+                    "fleet {} in state {:?} has live queue entry {live:?}, expected {expected:?}",
+                    fleet.id.0, fleet.state
+                )));
             }
         }
         Ok(())

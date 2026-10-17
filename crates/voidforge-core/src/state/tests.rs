@@ -316,6 +316,8 @@ fn the_queue_orders_by_time_then_kind_rank_then_entity() {
         at(4, QueueKind::FleetReturn(FleetId(2))),
         at(5, QueueKind::PlanetChange(PlanetId(3))),
         at(5, QueueKind::FleetReturn(FleetId(0))),
+        at(5, QueueKind::FleetArrival(FleetId(0))),
+        at(5, QueueKind::FleetReturn(FleetId(7))),
     ]
     .into();
     let order: Vec<QueueKind> = queue.iter().map(|e| e.kind).collect();
@@ -325,8 +327,11 @@ fn the_queue_orders_by_time_then_kind_rank_then_entity() {
             QueueKind::FleetReturn(FleetId(2)),
             QueueKind::PlanetChange(PlanetId(3)),
             QueueKind::PlanetChange(PlanetId(9)),
-            QueueKind::FleetArrival(FleetId(1)),
+            // Fleet arrivals and returns share rank 1 and go by fleet ID, whatever their kind.
+            QueueKind::FleetArrival(FleetId(0)),
             QueueKind::FleetReturn(FleetId(0)),
+            QueueKind::FleetArrival(FleetId(1)),
+            QueueKind::FleetReturn(FleetId(7)),
         ]
     );
 }
@@ -454,6 +459,78 @@ fn deserialization_rejects_broken_worlds() {
             });
         },
         "fleet 99 does not exist",
+    );
+    rejected(
+        |w| {
+            let _ = w.queue.remove(&QueueEntry {
+                at_ms: 200,
+                kind: QueueKind::FleetArrival(FleetId(13)),
+                version: 1,
+            });
+        },
+        "fleet 13 in state InTransit",
+    );
+    rejected(
+        |w| {
+            let fleet = w.fleets.get_mut(&FleetId(15)).unwrap();
+            fleet.state = FleetState::Stationed { at: PlanetId(2) };
+        },
+        "fleet 15 in state Stationed",
+    );
+    rejected(
+        |w| {
+            let _ = w.queue.remove(&QueueEntry {
+                at_ms: 150,
+                kind: QueueKind::FleetReturn(FleetId(14)),
+                version: 1,
+            });
+            let _ = w.queue.insert(QueueEntry {
+                at_ms: 150,
+                kind: QueueKind::FleetArrival(FleetId(14)),
+                version: 1,
+            });
+        },
+        "fleet 14 in state Returning",
+    );
+    rejected(
+        |w| {
+            if let FleetState::InTransit { arrives_at_ms, .. } =
+                &mut w.fleets.get_mut(&FleetId(13)).unwrap().state
+            {
+                *arrives_at_ms = 201;
+            }
+        },
+        "fleet 13 in state InTransit",
+    );
+    rejected(
+        |w| {
+            let _ = w.queue.insert(QueueEntry {
+                at_ms: 250,
+                kind: QueueKind::FleetArrival(FleetId(13)),
+                version: 1,
+            });
+        },
+        "fleet 13 has two live queue entries",
+    );
+    rejected(
+        |w| {
+            let _ = w.queue.insert(QueueEntry {
+                at_ms: 400,
+                kind: QueueKind::FleetArrival(FleetId(13)),
+                version: 2,
+            });
+        },
+        "is newer than fleet 13, at version 1",
+    );
+    rejected(
+        |w| {
+            let _ = w.queue.insert(QueueEntry {
+                at_ms: 400,
+                kind: QueueKind::PlanetChange(PlanetId(2)),
+                version: 5,
+            });
+        },
+        "is newer than planet 2, at version 0",
     );
 }
 
