@@ -35,7 +35,7 @@ cargo clippy -p voidforge-core --all-targets -- -D warnings
 cargo nextest run -p voidforge-core
 ```
 
-P1.1's quantity tests compare reads, checkpoints and crossings on generated cases against an independent millisecond-stepping reference, plus named boundary and error cases (`src/quantity/tests.rs`; proptest runs with a fixed seed). P1.4's loop tests (`src/state/engine/tests.rs`) drive `advance_with` with probe steps on the hand-built sample world. P1.5 to P1.11 add the solver, fleet, command and view tests, and P1.5 adds the determinism suite: property tests, observation invariance and an in-process double run. Every later package must keep that suite green ([Phase 1](../../docs/Voidforge%20Technical%20Plan.md#phase-1-core-engine), [Testing strategy](../../docs/Voidforge%20Architectural%20Design.md#testing-strategy)).
+P1.1's quantity tests compare reads, checkpoints and crossings on generated cases against an independent millisecond-stepping reference, plus named boundary and error cases (`src/quantity/tests.rs`; proptest runs with a fixed seed). P1.4's loop tests (`src/state/engine/tests.rs`) drive `advance_with` with probe steps on the hand-built sample world. P1.5's determinism suite lives in testkit (`just determinism`, [D-024](../../docs/decision-log.md#d-024-determinism-suite-canonical-bytes-and-the-two-process-run)); every core change must keep it green, and a new step, command or view joins it as the testkit guide says. P1.6 to P1.11 add the solver, fleet, command and view tests ([Phase 1](../../docs/Voidforge%20Technical%20Plan.md#phase-1-core-engine), [Testing strategy](../../docs/Voidforge%20Architectural%20Design.md#testing-strategy)).
 
 ## Specs
 

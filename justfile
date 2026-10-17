@@ -50,3 +50,7 @@ supply-chain:
 # The CI test job.
 test:
     cargo nextest run --workspace --locked
+
+# The CI determinism job: the suite, then the two-process double run (decision log D-024).
+determinism:
+    .github/scripts/determinism.sh

@@ -296,3 +296,20 @@ Each entry records its date, the package that made it, the decision, the reasons
     - A scheduling error outside an advance changes nothing and does not poison.
     - The flag is not serialized: a deserialized world is never poisoned. `allocate_id` is not guarded, because a poisoned world can neither advance nor be saved.
   - **Out of scope**: the solver and the "step 2 repeats" guard (P1.6/P1.7), fleet missions (P1.8), commands, which are step 3 at an instant (P1.9+), and views (P1.11).
+
+### D-024: Determinism suite, canonical bytes and the two-process run
+
+- Date and package: 2026-10-17, P1.5. The comparison form and dependencies were agreed with orch-advisor. The advisor amended the slice SPEC to add a light two-process run, and orch-lead confirmed it.
+- Decision:
+  - **Where it lives**: the suite is testkit's `determinism` test binary. What its harnesses share lives in `voidforge_testkit::determinism`: `canonical_bytes`, `Scenario` and the `Churn` test steps, the run helpers, and `settle_stock`. `just determinism` and the blocking CI job `determinism` both run `.github/scripts/determinism.sh`, so they cannot drift. `test` runs the same binary as part of the workspace, except the two-process test.
+  - **Harnesses and rules**:
+    - Observation invariance enforces "One rounding rule" and "Pure reads": 100 hours in one advance against 1,000 advances with reads, over the event loop and over stocks.
+    - Property tests check the invariants that apply before the solver: insertion-order-independent queue order, stale entries never run and live ones always run, new entries strictly after now, `check_links` after every advance, and quantities within their ranges.
+    - The double run enforces "Total order": in one process, and in two.
+  - **Engine steps**: production `advance_to` refuses live events until P1.6–P1.8, so the event-loop harnesses drive `advance_with` with `Churn`. `Churn` is deterministic test steps that reschedule planets and send, recall, station and return fleets, with every choice a function of seed, entity, version and instant. It invents no gameplay.
+  - **Canonical bytes, no hash**: runs are compared on postcard bytes of the World and the event sequence. There is no state hash or BLAKE3 yet. P2.2's state hash MUST be BLAKE3 over exactly these postcard World bytes, header excluded, and P2.2 adds a test asserting store's World bytes equal `canonical_bytes`. That gives one byte format end to end and no migration of golden values.
+  - **Two processes, lightly**: the script runs the ignored `two_process_double_run` twice as separate processes. The first writes the bytes of fixed scenarios under `target/determinism/`; the second recomputes them and requires identical bytes. A missing file, or a filter that matches no test, fails. The log-based two-process replay stays Phase 2's.
+  - **Reproducibility**: every property has a fixed case count and a fixed seed, and no failure files, so a failure reproduces by rerunning (the P1.1 choice). Scenario gaps are at least 10 minutes, so runtime stays small and bounded.
+  - **Dependencies**: postcard =1.1.3 (alloc, default features off) is a normal dependency of testkit, with cobs pulled in. Every consumer takes testkit as a dev-dependency only, so postcard is reachable only through dev-dependencies, and no non-test crate's `cargo tree -e normal` shows it. proptest stays a dev-dependency (core, and now testkit): as a normal testkit dependency it would put its rand 0.10 next to OpenTelemetry's rand 0.9 in cargo-deny's duplicate check. Both are allowlisted. insta is not added until its first use.
+  - **Extension**: P1.6+ add their cases to these harnesses rather than writing parallel ones (testkit guide, "Extending the determinism suite").
+

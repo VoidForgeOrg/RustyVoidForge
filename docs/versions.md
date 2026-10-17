@@ -71,7 +71,8 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | opentelemetry-otlp | =0.33.1 (http-proto, reqwest-blocking-client, trace) | telemetry | P0.6 | D-017 |
 | tracing-opentelemetry | =0.34.0 (no default features) | telemetry | P0.6 | D-017 |
 | thiserror | =2.0.21 | telemetry; core from P1.1; rules from P1.2 | P0.6 | D-017, D-018, D-020 |
-| proptest | =1.12.0 (std only, no fork or timeout) | core, dev-dependency only | P1.1 | D-019 |
+| proptest | =1.12.0 (std only, no fork or timeout) | core and testkit, dev-dependency only | P1.1 | D-019, D-024 |
+| postcard | =1.1.3 (alloc, default features off) | testkit (dev-only crate), for canonical bytes | P1.5 | D-024 |
 | serde | =1.0.229 (std, derive) | rules; core from P1.3 | P1.2 | D-020, D-022 |
 | serde_json | =1.0.154 (std) | core and testkit, dev-dependency only | P1.3 | D-022 |
 | toml | =1.1.8 (std, parse, serde) | rules | P1.2 | D-020 |
