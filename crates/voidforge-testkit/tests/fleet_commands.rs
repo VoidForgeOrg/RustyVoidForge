@@ -538,6 +538,50 @@ fn recall_rejects_unknown_foreign_stationed_arrived_and_already_recalled_fleets(
     );
 }
 
+/// review-r2's L1 on 86b0757: near the end of time, a recall whose return would come after it is
+/// refused as `unreachable_target`, changing nothing and never poisoning; a recall whose return
+/// still fits is accepted.
+#[test]
+fn recall_whose_return_is_past_the_end_of_time_is_unreachable_and_never_poisons() {
+    let start = i64::MAX - 300;
+    let world = || {
+        let mut b = WorldBuilder::new().at(start);
+        let home = b.player(ALICE);
+        let near = b.planet(None);
+        b.position(home, Position { x: 0, y: 0, z: 0 });
+        // One distance unit at a Cargo Vessel's 15,000 per hour: 240 ms, arriving at MAX − 60.
+        b.position(near, Position { x: 1, y: 0, z: 0 });
+        let ship = b.ship(ALICE, ShipKind::CargoVessel, home);
+        let fleet = b.fleet(&[ship], Cargo::default());
+        let mut w = b.build();
+        accept(&mut w, ALICE, &send(fleet, near, Mission::Move), start);
+        assert_eq!(arrival(&w, fleet), i64::MAX - 60);
+        (w, fleet, home)
+    };
+    // 239 ms in, the return would come at MAX + 178.
+    let (mut w, fleet, _) = world();
+    let late = i64::MAX - 61;
+    reject(
+        &mut w,
+        ALICE,
+        &Action::RecallFleet { fleet },
+        late,
+        Rejection::UnreachableTarget,
+    );
+    assert!(!w.is_poisoned());
+    // 100 ms in, it returns at MAX − 100.
+    let (mut w, fleet, home) = world();
+    accept(&mut w, ALICE, &Action::RecallFleet { fleet }, start + 100);
+    assert_eq!(
+        w.fleets[&fleet].state,
+        FleetState::Returning {
+            origin: home,
+            arrives_at_ms: start + 200
+        }
+    );
+    assert!(!w.is_poisoned());
+}
+
 // --- Disband fleet ---
 
 #[test]

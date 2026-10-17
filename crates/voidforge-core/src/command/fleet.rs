@@ -124,7 +124,15 @@ impl World {
                 Ok(())
             }
             Action::RecallFleet { fleet: id } => match fleet(*id)?.state {
-                FleetState::InTransit { .. } => Ok(()),
+                // The return, now plus the time traveled, must be a real instant: near the end
+                // of time it may not be, and a player's command must never poison (D-029).
+                FleetState::InTransit { departed_at_ms, .. } => {
+                    let now = self.time_ms;
+                    match (now - departed_at_ms).checked_add(now) {
+                        Some(_) => Ok(()),
+                        None => Err(Rejection::UnreachableTarget),
+                    }
+                }
                 FleetState::Returning { .. } => Err(Rejection::AlreadyRecalled),
                 FleetState::Stationed { .. } => Err(Rejection::FleetNotInTransit),
             },

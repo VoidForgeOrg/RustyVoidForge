@@ -190,7 +190,8 @@ pub enum Rejection {
     /// Transport needs a target the player owns.
     #[error("the target is not the player's")]
     TargetNotOwned,
-    /// The trip has no real duration: zero distance, or an arrival past the end of time.
+    /// The trip has no real duration: zero distance, or an arrival past the end of time (Send);
+    /// or a return past the end of time (Recall).
     #[error("the target cannot be reached")]
     UnreachableTarget,
     /// A fleet with cargo aboard cannot be disbanded.

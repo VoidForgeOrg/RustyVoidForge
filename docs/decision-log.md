@@ -442,8 +442,8 @@ Each entry records its date, the package that made it, the decision, the reasons
       - Transport: `no_cargo_vessel`, `target_not_owned`;
       - Move: nothing further.
 
-      Then `unreachable_target` (zero travel time, or an arrival outside 64 bits), so a player's command never poisons the world. Effect: D-027's `send_fleet`.
-    - **Recall fleet**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_in_transit` (stationed), `already_recalled` (returning). Effect: D-027's `recall_fleet`, including its departure-instant rule.
+      Then `unreachable_target` (zero travel time, or an arrival outside 64 bits), so a player's command never poisons the world. Of the five fleet commands, only Send and Recall compute a time from player input; Assemble and Trigger unload bound every amount by stock, capacity or free storage, and Disband moves only IDs (review-r2's audit, confirmed). Effect: D-027's `send_fleet`.
+    - **Recall fleet**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_in_transit` (stationed), `already_recalled` (returning), then `unreachable_target` (the return, now plus the time traveled, past the end of time; review-r2's repair, so a recall too can never poison). Effect: D-027's `recall_fleet`, including its departure-instant rule; its own checked error stays as the engine's defense.
       - The Commands table's recall row omits "the player's"; it is read as brevity, not permission, because fleets are visible only to their owner and every other fleet row says so.
       - A recall at the arrival instant is `fleet_not_in_transit`, because events at t run first.
     - **Disband fleet**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_stationed`, `cargo_aboard`. Effect: the ships join the station planet's roster and the fleet is removed (any stale entry stays stale, D-022). It works at any planet. The design's "Move to an owned planet and unload first" follows from `cargo_aboard` and Trigger unload's rule.
