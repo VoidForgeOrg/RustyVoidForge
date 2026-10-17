@@ -315,3 +315,36 @@ fn a_fleet_takes_ships_from_one_roster() {
     let c = b.ship(ALICE, ShipKind::CargoVessel, other);
     b.fleet(&[a, c], Cargo::default());
 }
+
+/// review-r1's repro: sent at 0 to arrive at 10 s, recalled at 1 s, back at 2 s, disbanded at
+/// 3 s. The stale 10 s arrival entry stays queued for a fleet that no longer exists.
+#[test]
+fn a_world_with_a_disbanded_fleets_stale_arrival_loads() {
+    let mut b = WorldBuilder::new();
+    let home = b.player(ALICE);
+    let target = b.planet(None);
+    let ship = b.ship(ALICE, ShipKind::CargoVessel, home);
+    let fleet = b.fleet(&[ship], Cargo::default());
+    b.send(fleet, target, Mission::Move, 10_000);
+    let mut b = b.at(1_000);
+    b.recall(fleet);
+    // Unchecked: until the return is popped, a live entry due before world time is invalid.
+    let mut w = b.at(3_000).world().clone();
+    // The return was popped at 2 s; Disband puts the ship back on the roster and removes the
+    // fleet. Neither searches the queue.
+    w.queue.retain(|e| e.kind != QueueKind::FleetReturn(fleet));
+    w.fleets.remove(&fleet);
+    w.ships.get_mut(&ship).unwrap().location = ShipLocation::Roster(home);
+    let _ = w.planets.get_mut(&home).unwrap().roster.insert(ship);
+
+    assert_eq!(
+        w.queue
+            .iter()
+            .map(|e| (e.at_ms, e.kind))
+            .collect::<Vec<_>>(),
+        [(10_000, QueueKind::FleetArrival(fleet))]
+    );
+    w.check_links().expect("the stale entry is allowed");
+    let text = serde_json::to_string(&w).unwrap();
+    assert_eq!(serde_json::from_str::<World>(&text).unwrap(), w);
+}

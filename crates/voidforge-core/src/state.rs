@@ -515,6 +515,12 @@ impl World {
                 }
             }
             if let Some(next) = planet.next_event {
+                if next.at_ms <= self.time_ms {
+                    return Err(link(format!(
+                        "planet {}: next event at {} ms is not after world time {}",
+                        planet.id.0, next.at_ms, self.time_ms
+                    )));
+                }
                 if next.version != planet.version {
                     return Err(link(format!(
                         "planet {}: next event has version {}, but the planet is at version {}",
@@ -701,12 +707,19 @@ impl World {
                     }
                 }
                 QueueKind::FleetArrival(id) | QueueKind::FleetReturn(id) => {
-                    let fleet = self.fleets.get(&id).ok_or_else(|| {
-                        link(format!(
-                            "queue entry {entry:?}: fleet {} does not exist",
-                            id.0
-                        ))
-                    })?;
+                    let Some(fleet) = self.fleets.get(&id) else {
+                        // A fleet removed while an entry for it was queued (disbanded after an
+                        // early recall, say) leaves that entry stale, and the queue is never
+                        // searched to purge it. IDs are never reused, so an allocated ID that no
+                        // entity holds can only be such a fleet.
+                        if id.0 >= self.next_id || ids.contains(&id.0) {
+                            return Err(link(format!(
+                                "queue entry {entry:?}: fleet {} does not exist",
+                                id.0
+                            )));
+                        }
+                        continue;
+                    };
                     if entry.version > fleet.version {
                         return Err(link(format!(
                             "queue entry {entry:?} is newer than fleet {}, at version {}",
@@ -739,6 +752,14 @@ impl World {
                 }),
             };
             let live = live_fleet_entries.get(&fleet.id).copied();
+            if let Some(entry) = expected
+                && entry.at_ms <= self.time_ms
+            {
+                return Err(link(format!(
+                    "fleet {}: arrival at {} ms is not after world time {}",
+                    fleet.id.0, entry.at_ms, self.time_ms
+                )));
+            }
             if live != expected {
                 return Err(link(format!(
                     "fleet {} in state {:?} has live queue entry {live:?}, expected {expected:?}",

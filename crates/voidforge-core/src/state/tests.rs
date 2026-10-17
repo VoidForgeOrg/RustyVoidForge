@@ -462,6 +462,32 @@ fn deserialization_rejects_broken_worlds() {
     );
     rejected(
         |w| {
+            let _ = w.queue.insert(QueueEntry {
+                at_ms: 9,
+                kind: QueueKind::FleetArrival(FleetId(4)), // building 4's ID
+                version: 0,
+            });
+        },
+        "fleet 4 does not exist",
+    );
+    rejected(
+        |w| w.time_ms = 100,
+        "planet 1: next event at 100 ms is not after world time 100",
+    );
+    rejected(
+        |w| {
+            w.planets.get_mut(&PlanetId(1)).unwrap().next_event = None;
+            let _ = w.queue.remove(&QueueEntry {
+                at_ms: 100,
+                kind: QueueKind::PlanetChange(PlanetId(1)),
+                version: 3,
+            });
+            w.time_ms = 150;
+        },
+        "fleet 14: arrival at 150 ms is not after world time 150",
+    );
+    rejected(
+        |w| {
             let _ = w.queue.remove(&QueueEntry {
                 at_ms: 200,
                 kind: QueueKind::FleetArrival(FleetId(13)),
@@ -532,6 +558,30 @@ fn deserialization_rejects_broken_worlds() {
         },
         "is newer than planet 2, at version 0",
     );
+}
+
+/// Recalled early, a fleet returns before its original arrival and can be disbanded while that
+/// arrival is still queued. The stale entry must not stop the world from loading.
+#[test]
+fn a_stale_entry_for_a_removed_fleet_loads() {
+    let mut w = sample_world();
+    let fleet = w.fleets.remove(&FleetId(14)).unwrap();
+    for ship in &fleet.ships {
+        w.ships.remove(ship);
+    }
+    let _ = w.queue.remove(&QueueEntry {
+        at_ms: 150,
+        kind: QueueKind::FleetReturn(FleetId(14)),
+        version: 1,
+    });
+    let _ = w.queue.insert(QueueEntry {
+        at_ms: 400,
+        kind: QueueKind::FleetArrival(FleetId(14)),
+        version: 0,
+    });
+    w.check_links()
+        .expect("a stale entry for a removed fleet is allowed");
+    assert_eq!(reload(&json(&w)).expect("it deserializes"), w);
 }
 
 #[test]

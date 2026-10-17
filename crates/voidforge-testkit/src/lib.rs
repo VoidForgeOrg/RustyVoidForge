@@ -423,12 +423,13 @@ pub const ALICE: PlayerId = PlayerId(0x0192_8c5e_7a3b_7c2d_9e4f_5a6b_7c8d_9e0f);
 /// The second test player.
 pub const BOB: PlayerId = PlayerId(0x0192_8c5e_7a3b_7c2d_9e4f_5a6b_7c8d_9e10);
 
-/// A world one hour in, with two players and every entity, state and queue kind: homeworlds,
+/// A world one hour in (built from half an hour in, so a fleet can be recalled mid-flight), with
+/// two players and every entity, state and queue kind: homeworlds,
 /// an unowned planet and a colony, buildings operational, under construction and being
 /// demolished, active and waiting ship builds, ships on rosters and in stationed, in-transit (every
 /// mission) and returning fleets, a planet event with a stale older entry, and homeworld candidates.
 pub fn busy_world() -> World {
-    let mut b = WorldBuilder::new().at(MS_PER_HOUR).seed(42);
+    let mut b = WorldBuilder::new().at(MS_PER_HOUR / 2).seed(42);
     let alice_home = b.player(ALICE);
     let bob_home = b.player(BOB);
     let free = b.planet(None);
@@ -476,7 +477,8 @@ pub fn busy_world() -> World {
         },
     );
     b.send(haulers, colony, Mission::Transport, 3 * MS_PER_HOUR);
-    b.recall(haulers);
+    let mut b = b.at(MS_PER_HOUR);
+    b.recall(haulers); // returns at 1.5 h; its arrival entry goes stale
     let supply = b.fleet(
         &[cargo_c],
         Cargo {
