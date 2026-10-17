@@ -4,9 +4,10 @@
 Architectural Design, Determinism rules: integers only; floats never appear in the core.
 Clippy's bans (crate clippy.toml, decision log D-010) catch named float types and float
 operators, but not a float that is never named, such as `1.25f64.sqrt().to_bits()`,
-`let x = 2.5; x as i64`, or `Duration::as_secs_f64()`. This check is type-aware: it
+`let x = 2.5; x as i64`, `Duration::as_secs_f64()`, or `Duration::from_secs_f64(0.5)`. This check is type-aware: it
 compiles each crate's library to MIR, where every local, constant and call carries its
-type, and rejects any f32 or f64 there. String literals and the allocation blocks that dump
+type, and rejects f32 or f64 there: as a type, a float literal (`0.5f64`) or a float API name
+(`from_secs_f64`). String literals and the allocation blocks that dump
 constant data as bytes are skipped, so the text "f64" in a message is not a float.
 
 Usage: check_no_floats.py [workspace-dir]
@@ -21,7 +22,10 @@ import sys
 import tempfile
 
 CRATES = ["voidforge-core", "voidforge-rules", "voidforge-worldgen"]
-FLOAT = re.compile(r"\bf(?:32|64)\b")
+# f32/f64 as a word (types, `core::f64::...` paths) or right after a digit or underscore: float
+# literals in MIR constants (`const 0.5f64`) and float APIs (`from_secs_f64`). A literal passed
+# straight into a call creates no float-typed local, so the type word alone missed it.
+FLOAT = re.compile(r"(?:\b|(?<=[0-9_]))f(?:32|64)\b")
 STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 ITEM_HEADER = re.compile(r"^(?:(fn) (\S+?)\(|(const|static|static mut) (\S+?): )")
 ALLOC_BLOCK = re.compile(r"^alloc\d+ \(")  # "allocN (size: …) {" … "}": bytes of string and other constant data
