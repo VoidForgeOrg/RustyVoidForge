@@ -10,6 +10,7 @@
 //! | Solved planets (P1.6) | One rounding rule; Total order; the solver invariants | `solved_*` |
 //! | Transitions (P1.7) | the same, with builds completing | `transitions_*` |
 //! | Fleets (P1.8) | the same, with fleets arriving, colonizing, unloading and recalled | `fleets_*` |
+//! | Commands (P1.9) | the same, with generated commands accepted and rejected at event instants | `commands_*` |
 //!
 //! Every property runs a fixed number of cases from a fixed seed with no failure files, so a
 //! failure reproduces by rerunning (decision log D-024). Later packages extend these harnesses:
@@ -19,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngSeed};
+use voidforge_core::command::{Action, Command, Rejection};
 use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::Rules;
 use voidforge_core::solver::{Solver, planet_flows};
@@ -27,7 +29,7 @@ use voidforge_core::state::{
     Cargo, EngineError, FleetId, FleetState, Mission, PlanetId, QueueKind, ShipKind, Steps, World,
 };
 use voidforge_testkit::determinism::{
-    Economy, Scenario, Stepped, assert_fleet_invariants, assert_ships_conserved,
+    Economy, EconomyRun, Scenario, Stepped, assert_fleet_invariants, assert_ships_conserved,
     assert_transition_invariants, canonical_bytes, even_stops, recall_due, run_bytes, run_economy,
     run_observed, run_straight, settle_stock, slow_build_rules, solves, stops,
 };
@@ -581,7 +583,38 @@ fn economy() -> impl Strategy<Value = Economy> {
         seed,
         planets,
         fleets: false,
+        commands: 0,
     })
+}
+
+/// Economies with 90 generated commands, with or without fleets.
+fn command_economy() -> impl Strategy<Value = Economy> {
+    (any::<u64>(), 2u64..=6, any::<bool>()).prop_map(|(seed, planets, fleets)| Economy {
+        seed,
+        planets,
+        fleets,
+        commands: 90,
+    })
+}
+
+/// How many commands of each action type were accepted and rejected, in `Action` order.
+fn tally(outcomes: &[(Command, Result<(), Rejection>)]) -> [(usize, usize); 6] {
+    let mut counts = [(0, 0); 6];
+    for (command, outcome) in outcomes {
+        let i = match command.action {
+            Action::JoinGame => 0,
+            Action::BuildBuilding { .. } => 1,
+            Action::CancelConstruction { .. } => 2,
+            Action::DemolishBuilding { .. } => 3,
+            Action::QueueShip { .. } => 4,
+            Action::CancelShipBuild { .. } => 5,
+        };
+        match outcome {
+            Ok(()) => counts[i].0 += 1,
+            Err(_) => counts[i].1 += 1,
+        }
+    }
+    counts
 }
 
 fn fleet_economy() -> impl Strategy<Value = Economy> {
@@ -589,6 +622,7 @@ fn fleet_economy() -> impl Strategy<Value = Economy> {
         seed,
         planets,
         fleets: true,
+        commands: 0,
     })
 }
 
@@ -621,10 +655,10 @@ fn stocks_within_caps(w: &World) {
 /// recall); at every observation the world is linked, stocks are within 0 and their caps,
 /// entries are in the future and the transition and fleet invariants hold; ships are conserved.
 /// Returns the solves and events of the straight run.
-fn solved_invariance(e: &Economy, rules: &Rules) -> (u64, Vec<DomainEvent>) {
+fn solved_invariance(e: &Economy, rules: &Rules) -> (u64, EconomyRun) {
     let start = e.world(rules);
-    let (straight, straight_events) = run_economy(e, rules, SPAN_MS, 1, |_| {}).unwrap();
-    let (observed, observed_events) = run_economy(e, rules, SPAN_MS, ADVANCES, |w| {
+    let straight = run_economy(e, rules, SPAN_MS, 1, |_| {}).unwrap();
+    let observed = run_economy(e, rules, SPAN_MS, ADVANCES, |w| {
         w.check_links().expect("linked at every observation");
         stocks_within_caps(w);
         assert!(w.queue().iter().all(|q| q.at_ms > w.time_ms));
@@ -632,10 +666,11 @@ fn solved_invariance(e: &Economy, rules: &Rules) -> (u64, Vec<DomainEvent>) {
         assert_fleet_invariants(w, rules);
     })
     .unwrap();
-    assert_eq!(observed_events, straight_events);
+    assert_eq!(observed.events, straight.events);
+    assert_eq!(observed.outcomes, straight.outcomes);
     assert_eq!(canonical_bytes(&observed), canonical_bytes(&straight));
-    assert_ships_conserved(&start, &straight, &straight_events);
-    (solves(&start, &straight), straight_events)
+    assert_ships_conserved(&start, &straight.world, &straight.events);
+    (solves(&start, &straight.world), straight)
 }
 
 fn solved_double_run(e: &Economy, rules: &Rules) {
@@ -647,11 +682,16 @@ fn solved_double_run(e: &Economy, rules: &Rules) {
 /// The audited run, stopping at any recall; returns the audit.
 fn solved_audit<'a>(e: &Economy, rules: &'a Rules) -> Audit<'a> {
     let (mut w, recalls) = e.start(rules);
+    let script = e.script();
     let mut audit = Audit::new(&w, rules);
     let mut events = Vec::new();
-    for t in stops(SPAN_MS, 1, &recalls) {
+    for t in stops(SPAN_MS, 1, &e.instants(&recalls)) {
         events.extend(w.advance_with(t, &mut audit).unwrap());
         recall_due(&mut w, &recalls).unwrap();
+        for &(_, k) in script.iter().filter(|(at, _)| *at == t) {
+            let command = e.command(k, &w);
+            audit.command(&mut w, &command);
+        }
     }
     audit.close(&w);
     stocks_within_caps(&w);
@@ -692,7 +732,7 @@ proptest! {
     /// and one advance still equals 1,000 with the same events, every invariant holding.
     #[test]
     fn transitions_observation_invariance(e in economy()) {
-        let (_, events) = solved_invariance(&e, &v0_rules());
+        let events = solved_invariance(&e, &v0_rules()).1.events;
         let ships = events.iter().filter(|e| matches!(e, DomainEvent::ShipCompleted { .. })).count();
         let buildings = events.iter().filter(|e| matches!(e, DomainEvent::BuildingCompleted { .. })).count();
         let demolitions = events.iter().filter(|e| matches!(e, DomainEvent::DemolitionCompleted { .. })).count();
@@ -722,7 +762,7 @@ proptest! {
     /// invariant holds at every observation.
     #[test]
     fn fleets_observation_invariance(e in fleet_economy()) {
-        let (_, events) = solved_invariance(&e, &v0_rules());
+        let events = solved_invariance(&e, &v0_rules()).1.events;
         let count = |f: fn(&DomainEvent) -> bool| events.iter().filter(|e| f(e)).count();
         let arrived = count(|e| matches!(e, DomainEvent::FleetArrived { .. }));
         let colonized = count(|e| matches!(e, DomainEvent::PlanetColonized { .. }));
@@ -818,6 +858,10 @@ struct Audit<'a> {
     events: usize,
     /// Builds that completed, leaving the ledger at their cost.
     completed: usize,
+    /// Commands audited, and those accepted that removed delivered ingots or set stocks.
+    commands: usize,
+    accepted: usize,
+    mass_moved: usize,
     /// Fleet arrivals and returns audited.
     arrivals: usize,
     returns: usize,
@@ -844,6 +888,9 @@ impl<'a> Audit<'a> {
             solves: 0,
             events: 0,
             completed: 0,
+            commands: 0,
+            accepted: 0,
+            mass_moved: 0,
             arrivals: 0,
             returns: 0,
             aboard: cargo_aboard(w, ratio),
@@ -871,6 +918,78 @@ impl<'a> Audit<'a> {
             self.aboard - self.unloaded,
             "cargo aboard at the end"
         );
+    }
+
+    /// A command at world time, audited: the planet it touches was on course before it, and
+    /// after it the ledger moved by exactly the command's mass: a cancelled construction or
+    /// ship build takes its delivered ingots out, Join game sets the starting stocks on an empty
+    /// candidate, and every other command moves nothing.
+    fn command(&mut self, w: &mut World, command: &Command) {
+        let now = w.time_ms;
+        let ratio = self.ratio;
+        let at = |q: Quantity| scaled(q, now);
+        let (planet, moved) = match command.action {
+            Action::JoinGame => {
+                let free = w
+                    .homeworld_candidates
+                    .iter()
+                    .copied()
+                    .find(|p| w.planets[p].owner.is_none());
+                let home = self.rules.homeworld;
+                let stocks = i128::from(ratio) * i128::from(home.ore_g) + i128::from(home.ingots_g);
+                (free, stocks * i128::from(MS_PER_HOUR))
+            }
+            Action::BuildBuilding { planet, .. } => (Some(planet), 0),
+            Action::CancelConstruction { building } => match w.buildings.get(&building) {
+                Some(b) => match b.state {
+                    voidforge_core::state::BuildingState::UnderConstruction {
+                        delivered, ..
+                    } => (Some(b.planet), -at(delivered)),
+                    _ => (Some(b.planet), 0),
+                },
+                None => (None, 0),
+            },
+            Action::DemolishBuilding { building }
+            | Action::QueueShip {
+                shipyard: building, ..
+            } => (w.buildings.get(&building).map(|b| b.planet), 0),
+            Action::CancelShipBuild { build } => match w.ship_builds.get(&build) {
+                Some(s) => (Some(w.buildings[&s.shipyard].planet), -at(s.delivered)),
+                None => (None, 0),
+            },
+        };
+        let before = planet
+            .filter(|p| w.planets.contains_key(p))
+            .map(|p| ledger(w, p, ratio, now).0);
+        let applied = w.apply(command, now, self.rules).unwrap();
+        assert!(applied.advanced.is_empty(), "the audit already advanced");
+        self.commands += 1;
+        if applied.outcome.is_err() {
+            return;
+        }
+        self.accepted += 1;
+        let p = planet.expect("an accepted command touched a planet");
+        let before = before.expect("an accepted command's planet exists");
+        assert_eq!(
+            before,
+            self.expected(p, now),
+            "planet {} drifted before {command:?} at {now}",
+            p.0
+        );
+        let after = ledger(w, p, ratio, now).0;
+        let expected = match command.action {
+            // Join game sets the stocks; the candidate held nothing before.
+            Action::JoinGame => {
+                assert_eq!(before, 0, "candidate {} was not empty", p.0);
+                moved
+            }
+            _ => before + moved,
+        };
+        assert_eq!(after, expected, "planet {} after {command:?} at {now}", p.0);
+        if moved != 0 {
+            self.mass_moved += 1;
+        }
+        self.settle(w, p);
     }
 
     /// Records a planet's ledger, the instant and its Drill actual after a change at now.
@@ -1037,6 +1156,40 @@ impl Steps for Audit<'_> {
     }
 }
 
+proptest! {
+    #![proptest_config(config(16, 0x0b5e_7a71_0000_0009))]
+
+    /// P1.9: a generated command script, accepted and rejected, applied at whole hours (often
+    /// the instant a build completes), stopped at by both runs: one advance still equals 1,000,
+    /// with the same events and outcomes. Every invariant holds after every command, and a
+    /// rejected command leaves the world's bytes as they were (checked inside the run). Every
+    /// action type is accepted and rejected at least once.
+    #[test]
+    fn commands_observation_invariance(e in command_economy()) {
+        let (_, run) = solved_invariance(&e, &v0_rules());
+        prop_assert_eq!(run.outcomes.len(), 90);
+        for (i, (accepted, rejected)) in tally(&run.outcomes).into_iter().enumerate() {
+            prop_assert!(accepted >= 1 && rejected >= 1, "action {}: {:?}", i, tally(&run.outcomes));
+        }
+    }
+
+    #[test]
+    fn commands_double_run_in_process(e in command_economy()) {
+        solved_double_run(&e, &v0_rules());
+    }
+
+    /// The mass audit through commands: a cancelled construction or ship build takes exactly its
+    /// delivered ingots out of the ledger, Join game sets exactly the starting stocks, and every
+    /// other command moves nothing.
+    #[test]
+    fn commands_mass_is_accounted_for_through_commands(e in command_economy()) {
+        let rules = v0_rules();
+        let audit = solved_audit(&e, &rules);
+        prop_assert_eq!(audit.commands, 90);
+        prop_assert!(audit.accepted >= 6 && audit.mass_moved >= 1, "{} accepted, {} moved mass", audit.accepted, audit.mass_moved);
+    }
+}
+
 // --- Double run (rule "Total order") ---
 
 proptest! {
@@ -1072,6 +1225,7 @@ fn recorded_runs() -> Vec<u8> {
                 seed: 0x3_0000 + i,
                 planets: 1 + i,
                 fleets: false,
+                commands: 0,
             };
             canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
         }))
@@ -1081,6 +1235,7 @@ fn recorded_runs() -> Vec<u8> {
                 seed: 0x4_0000 + i,
                 planets: 2 + i,
                 fleets: false,
+                commands: 0,
             };
             canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
         }))
@@ -1090,6 +1245,17 @@ fn recorded_runs() -> Vec<u8> {
                 seed: 0x5_0000 + i,
                 planets: 2 + i,
                 fleets: true,
+                commands: 0,
+            };
+            canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
+        }))
+        .chain((0..4u64).map(|i| {
+            let rules = v0_rules();
+            let e = Economy {
+                seed: 0x6_0000 + i,
+                planets: 2 + i,
+                fleets: i % 2 == 0,
+                commands: 90,
             };
             canonical_bytes(&run_economy(&e, &rules, SPAN_MS, 1, |_| {}).unwrap())
         }))
