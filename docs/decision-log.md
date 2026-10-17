@@ -286,9 +286,9 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `schedule_planet` sets or clears `next_event`.
     - `schedule_fleet` takes the kind and time from the fleet's state: in transit gives an arrival, returning gives a return. A stationed fleet is `FleetNotMoving`.
     - An `at` not strictly after world time is `NotAfterNow`. During an advance that is the architecture's loop guard ("a step never schedules work at its own instant").
-    - A scheduling error is raised before anything changes.
+    - A scheduling error is raised before anything changes. Inside an advance, the engine also latches the first one, and the loop stops with it after the step returns, even if the step ignored the error and returned success. The guard therefore does not depend on every step propagating it (review-r2 repair).
   - **Processing**: the loop pops entries in queue order up to `t`. A stale entry is dropped. A live entry before the reached instant is `LiveEntryBehind`. Before the planet step runs, a live planet entry clears the planet's `next_event`; the step reschedules if a next event exists.
-  - **Post-step check**: after each step, the loop checks the processed entity's schedule, always and not only in debug builds. A planet's `next_event` must be in the queue and after now. A moving fleet's expected entry must be in the queue and after now. A failure is the architecture's stop-on-bug.
+  - **Post-step check**: after each step, the loop checks the processed entity's schedule, always and not only in debug builds. A planet's `next_event` must be in the queue and after now. A moving fleet's expected entry must be in the queue and after now. A failure is the architecture's stop-on-bug. Only the processed entity is checked. A fleet arrival re-solves its destination planet (Fleets), so P1.8 must extend the check to that planet; until then, a broken cross-entity schedule would surface only when a snapshot is loaded.
   - **Errors and poison**:
     - `TimeBeforeNow` is checked first and leaves the world unchanged.
     - Any other error from an advance can leave the world mid-instant. It sets a poisoned flag, after which advancing, scheduling and serializing return `Poisoned`. The caller discards the world; the engine host restores from the last snapshot and log (Persistence).

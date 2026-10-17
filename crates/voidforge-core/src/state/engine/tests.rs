@@ -431,3 +431,114 @@ fn an_invalid_entry_stops_the_engine_rather_than_being_skipped() {
     assert!(error.to_string().contains("newer than planet 2"), "{error}");
     assert!(w.is_poisoned());
 }
+
+/// review-r2 and QA Q1: a step that ignores the guard's error must not turn the stop into a
+/// successful advance.
+#[test]
+fn a_swallowed_planet_guard_error_still_stops_and_poisons() {
+    for offset in [0, -1] {
+        let mut w = sample_world();
+        let mut swallow = Probe(|w: &mut World, kind| {
+            if kind == QueueKind::PlanetChange(P1) {
+                let _ = w.schedule_planet(P1, Some(w.time_ms + offset));
+            }
+            settle(w, kind)
+        });
+        assert_eq!(
+            w.advance_with(400, &mut swallow),
+            Err(EngineError::NotAfterNow {
+                at_ms: 100 + offset,
+                now: 100
+            })
+        );
+        assert_eq!(w.time_ms, 100);
+        assert!(w.is_poisoned());
+        assert!(serde_json::to_string(&w).is_err());
+    }
+}
+
+#[test]
+fn a_swallowed_fleet_guard_error_still_stops_and_poisons() {
+    let mut w = sample_world();
+    let mut swallow = Probe(|w: &mut World, kind| {
+        if kind == QueueKind::FleetReturn(F14) {
+            // Send it straight back out, arriving now: the guard refuses.
+            w.fleets.get_mut(&F14).unwrap().state = FleetState::InTransit {
+                origin: P1,
+                target: P3,
+                mission: crate::state::Mission::Move,
+                departed_at_ms: w.time_ms,
+                arrives_at_ms: w.time_ms,
+            };
+            let _ = w.schedule_fleet(F14);
+            w.fleets.get_mut(&F14).unwrap().state = FleetState::Stationed { at: P1 };
+            return Ok(());
+        }
+        settle(w, kind)
+    });
+    assert_eq!(
+        w.advance_with(400, &mut swallow),
+        Err(EngineError::NotAfterNow {
+            at_ms: 150,
+            now: 150
+        })
+    );
+    assert_eq!(w.time_ms, 150);
+    assert!(w.is_poisoned());
+}
+
+#[test]
+fn a_swallowed_error_outside_an_advance_does_not_stop_a_later_one() {
+    let mut w = sample_world();
+    let _ = w.schedule_planet(P2, Some(10));
+    let _ = w.schedule_fleet(FleetId(99));
+    assert!(!w.is_poisoned());
+    assert_eq!(w.advance_with(400, &mut settled()).unwrap().len(), 4);
+}
+
+#[test]
+fn a_planet_step_that_leaves_an_unqueued_next_event_stops_the_engine() {
+    let mut w = sample_world();
+    let mut forge = Probe(|w: &mut World, kind| {
+        if let QueueKind::PlanetChange(p) = kind {
+            let planet = w.planets.get_mut(&p).unwrap();
+            planet.next_event = Some(ScheduledEvent {
+                at_ms: 500,
+                version: planet.version,
+            });
+        }
+        settle(w, kind)
+    });
+    let error = w
+        .advance_with(400, &mut forge)
+        .expect_err("not in the queue");
+    assert!(
+        error
+            .to_string()
+            .contains("planet 1: next event at 500 ms is not in the queue"),
+        "{error}"
+    );
+    assert!(w.is_poisoned());
+}
+
+#[test]
+fn a_crowded_instant_inside_a_longer_advance_runs_in_order() {
+    let order = [
+        QueueKind::FleetArrival(F15),
+        QueueKind::PlanetChange(P2),
+        QueueKind::FleetReturn(F14),
+        QueueKind::PlanetChange(P1),
+    ];
+    let mut w = crowded(&order);
+    assert_eq!(
+        w.advance_with(700, &mut settled()).unwrap(),
+        [
+            (200, QueueKind::FleetArrival(F13)),
+            (500, QueueKind::PlanetChange(P1)),
+            (500, QueueKind::PlanetChange(P2)),
+            (500, QueueKind::FleetReturn(F14)),
+            (500, QueueKind::FleetArrival(F15)),
+        ]
+    );
+    assert_eq!(w.time_ms, 700);
+}

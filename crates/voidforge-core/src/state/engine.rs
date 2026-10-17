@@ -150,7 +150,10 @@ impl World {
                 now: self.time_ms,
             });
         }
+        self.advancing = true;
         let result = self.run(t, steps);
+        self.advancing = false;
+        self.fault = None;
         if result.is_err() {
             self.poisoned = true;
         }
@@ -181,20 +184,40 @@ impl World {
                         planet.next_event = None;
                     }
                     events.extend(steps.planet_change(self, id)?);
+                    self.stop_on_fault()?;
                     self.check_planet_schedule(self.planet(id, "processed entry")?)?;
                 }
                 QueueKind::FleetArrival(id) => {
                     events.extend(steps.fleet_arrival(self, id)?);
+                    self.stop_on_fault()?;
                     self.check_fleet_after_step(id)?;
                 }
                 QueueKind::FleetReturn(id) => {
                     events.extend(steps.fleet_return(self, id)?);
+                    self.stop_on_fault()?;
                     self.check_fleet_after_step(id)?;
                 }
             }
         }
         self.time_ms = t;
         Ok(events)
+    }
+
+    /// A scheduling error inside the step stops the advance, even if the step went on and
+    /// returned success.
+    fn stop_on_fault(&mut self) -> Result<(), EngineError> {
+        match self.fault.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Inside an advance, keeps the first scheduling error for [`World::stop_on_fault`].
+    fn latch(&mut self, error: EngineError) -> EngineError {
+        if self.advancing && self.fault.is_none() {
+            self.fault = Some(error.clone());
+        }
+        error
     }
 
     /// A fleet the step removed has nothing to check.
@@ -206,8 +229,18 @@ impl World {
     }
 
     /// Sets a planet's next event, or clears it with `None`. Bumps the planet's version first, so
-    /// any earlier entry goes stale. `at_ms` must be after now.
+    /// any earlier entry goes stale. `at_ms` must be after now. An error changes nothing; inside
+    /// an advance it also stops the advance, even if the step ignores it.
     pub fn schedule_planet(
+        &mut self,
+        planet: PlanetId,
+        at_ms: Option<i64>,
+    ) -> Result<(), EngineError> {
+        self.try_schedule_planet(planet, at_ms)
+            .map_err(|error| self.latch(error))
+    }
+
+    fn try_schedule_planet(
         &mut self,
         planet: PlanetId,
         at_ms: Option<i64>,
@@ -237,8 +270,14 @@ impl World {
 
     /// Queues a moving fleet's entry as its state says: an arrival in transit, a return when
     /// returning. Bumps the fleet's version first, so any earlier entry goes stale. The time must
-    /// be after now.
+    /// be after now. An error changes nothing; inside an advance it also stops the advance, even
+    /// if the step ignores it.
     pub fn schedule_fleet(&mut self, fleet: FleetId) -> Result<(), EngineError> {
+        self.try_schedule_fleet(fleet)
+            .map_err(|error| self.latch(error))
+    }
+
+    fn try_schedule_fleet(&mut self, fleet: FleetId) -> Result<(), EngineError> {
         self.usable()?;
         let Some(f) = self.fleets.get_mut(&fleet) else {
             return Err(link(format!("schedule: fleet {} does not exist", fleet.0)).into());

@@ -389,6 +389,11 @@ pub struct World {
     /// Set by a failed advance: the world may be mid-instant and must be discarded. Never
     /// serialized.
     poisoned: bool,
+    /// True while an advance runs, so a scheduling error inside a step is latched.
+    advancing: bool,
+    /// The first scheduling error inside the current advance; it stops the advance even if the
+    /// step that hit it carried on.
+    fault: Option<EngineError>,
 }
 
 /// Whether a queue entry still stands for its entity's current schedule.
@@ -442,6 +447,8 @@ impl World {
             homeworld_candidates: Vec::new(),
             queue: BTreeSet::new(),
             poisoned: false,
+            advancing: false,
+            fault: None,
         }
     }
 
@@ -900,6 +907,8 @@ impl TryFrom<WorldData> for World {
             homeworld_candidates: d.homeworld_candidates,
             queue: d.queue,
             poisoned: false,
+            advancing: false,
+            fault: None,
         };
         world.check_links()?;
         Ok(world)
