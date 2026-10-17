@@ -27,7 +27,7 @@ use voidforge_core::state::{
     Steps, World,
 };
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use voidforge_core::state::{BuildingKind, BuildingState, DomainEvent, ShipBuildStatus};
 
@@ -404,7 +404,9 @@ impl Economy {
                 b.planet(Some(ALICE))
             };
             let r = |k: u64| mix(self.seed ^ i.rotate_left(20) ^ k);
-            if self.fleets {
+            // Spread out with fleets or commands, so trips take hours (and commands at whole
+            // hours can catch a fleet in transit).
+            if self.fleets || self.commands > 0 {
                 b.position(p, self.spot(i, r(50)));
             }
             // At most 2 + 2 + 1 + 1 + 1 = 7 of the 8 slots.
@@ -496,6 +498,10 @@ impl Economy {
         };
         if self.commands > 0 {
             let candidates = [b.planet(None), b.planet(None)];
+            for (k, &p) in candidates.iter().enumerate() {
+                let i = count + 2 + k as u64;
+                b.position(p, self.spot(i, mix(self.seed ^ 0xca4d ^ i)));
+            }
             b.candidates(&candidates);
         }
         let mut w = b.build();
@@ -543,50 +549,62 @@ impl Economy {
     }
 
     /// Command `k` of the script, chosen against the world at its instant (equal in every run
-    /// of the economy). Types cycle in order. Half the time the target is one the command can act
-    /// on (any player's), issued, three times in four, by that target's owner; otherwise the
-    /// player is mostly Alice, sometimes Bob (joined only with fleets) or Carol (never joined at
-    /// the start), and the target is any of its kind or, one time in eight, an ID nothing holds.
-    /// Rejections follow from the mix.
+    /// of the economy). The eleven action types cycle in order. Half the time the target is one
+    /// the command can act on (any player's), issued, three times in four, by that target's
+    /// owner; otherwise the player is mostly Alice, sometimes Bob (joined only with fleets) or
+    /// Carol (never joined at the start), and the target is any of its kind or, one time in
+    /// eight, an ID nothing holds. Rejections follow from the mix.
     pub fn command(&self, k: u64, w: &World) -> Command {
-        use voidforge_core::state::{BuildingId, ShipBuildId};
+        use voidforge_core::state::{BuildingId, FleetId, PlayerId, ShipBuildId, ShipId};
         let r = |i: u64| mix(self.seed ^ 0xc0de_0001 ^ (k << 8) ^ i);
         let mut player = [ALICE, ALICE, ALICE, BOB, CAROL][(r(1) % 5) as usize];
-        // Picks (ID, planet) from `fitting` half the time, else from `any`, else an unheld ID.
-        let pick = |fitting: Vec<(u64, PlanetId)>, any: Vec<(u64, PlanetId)>, i: u64| {
+        // Picks (ID, owner) from `fitting` half the time, else from `any`, else an unheld ID.
+        type Pick = (u64, Option<PlayerId>);
+        let pick = |fitting: Vec<Pick>, any: Vec<Pick>, i: u64| -> (u64, Option<PlayerId>) {
             let fit = r(i) % 2 == 0 && !fitting.is_empty();
             let from = if fit { fitting } else { any };
             if from.is_empty() || (!fit && r(i + 1) % 8 == 0) {
                 (w.next_id + r(i + 2) % 3, None)
             } else {
-                let (id, planet) = from[(r(i + 3) % from.len() as u64) as usize];
-                (id, fit.then_some(planet))
+                let (id, owner) = from[(r(i + 3) % from.len() as u64) as usize];
+                (id, if fit { owner } else { None })
             }
         };
+        let owner_of = |planet: PlanetId| w.planets[&planet].owner;
         let buildings = |f: &dyn Fn(&voidforge_core::state::Building) -> bool| {
             w.buildings
                 .values()
                 .filter(|b| f(b))
-                .map(|b| (b.id.0, b.planet))
+                .map(|b| (b.id.0, owner_of(b.planet)))
                 .collect::<Vec<_>>()
         };
+        let fleets = |f: &dyn Fn(&voidforge_core::state::Fleet) -> bool| {
+            w.fleets
+                .values()
+                .filter(|x| f(x))
+                .map(|x| (x.id.0, Some(x.owner)))
+                .collect::<Vec<_>>()
+        };
+        let all_fleets = fleets(&|_| true);
         let building_kind = [
             BuildingKind::Drill,
             BuildingKind::Refinery,
             BuildingKind::Shipyard,
         ][(r(4) % 3) as usize];
         let ship_kind = [ShipKind::CargoVessel, ShipKind::ColonyShip][(r(5) % 2) as usize];
-        let (action, fitted) = match k % 6 {
+        let planets: Vec<PlanetId> = w.planets.keys().copied().collect();
+        let any_planet = |i: u64| planets[(r(i) % planets.len() as u64) as usize];
+        let (action, fitted) = match k % 11 {
             0 => (Action::JoinGame, None),
             1 => {
-                let planets = |owned: bool| {
+                let owned = |only: bool| {
                     w.planets
                         .values()
-                        .filter(|p| !owned || p.owner.is_some())
-                        .map(|p| (p.id.0, p.id))
+                        .filter(|p| !only || p.owner.is_some())
+                        .map(|p| (p.id.0, p.owner))
                         .collect::<Vec<_>>()
                 };
-                let (id, fit) = pick(planets(true), planets(false), 10);
+                let (id, fit) = pick(owned(true), owned(false), 10);
                 let action = Action::BuildBuilding {
                     planet: PlanetId(id),
                     kind: building_kind,
@@ -620,19 +638,156 @@ impl Economy {
                 };
                 (action, fit)
             }
-            _ => {
+            5 => {
                 let builds: Vec<_> = w
                     .ship_builds
                     .values()
-                    .map(|s| (s.id.0, w.buildings[&s.shipyard].planet))
+                    .map(|s| (s.id.0, owner_of(w.buildings[&s.shipyard].planet)))
                     .collect();
                 let (id, fit) = pick(builds.clone(), builds, 50);
                 let build = ShipBuildId(id);
                 (Action::CancelShipBuild { build }, fit)
             }
+            6 => {
+                // Fitting: up to three of one owner's ships on one roster, with cargo that fits
+                // the stock and the capacity when the planet is theirs. Otherwise any ships
+                // (perhaps in fleets or elsewhere) and any cargo, perhaps too much or negative.
+                let rosters: Vec<_> = w
+                    .planets
+                    .values()
+                    .filter_map(|p| {
+                        let first = w.ships.get(p.roster.iter().next()?)?;
+                        Some((p.id, first.owner))
+                    })
+                    .collect();
+                let fit = r(60) % 2 == 0 && !rosters.is_empty();
+                if fit {
+                    let (planet, owner) = rosters[(r(61) % rosters.len() as u64) as usize];
+                    let p = &w.planets[&planet];
+                    let ships: BTreeSet<ShipId> = p
+                        .roster
+                        .iter()
+                        .copied()
+                        .filter(|s| w.ships[s].owner == owner)
+                        .take(1 + (r(62) % 3) as usize)
+                        .collect();
+                    // Rules v0's capacities; under other rules a load may be rejected, which is fine.
+                    let capacity: i64 = ships
+                        .iter()
+                        .map(|s| match w.ships[s].kind {
+                            ShipKind::CargoVessel => 500 * GRAMS_PER_TON,
+                            ShipKind::ColonyShip => 0,
+                        })
+                        .sum();
+                    let now = w.time_ms;
+                    let cargo = if p.owner == Some(owner) && capacity > 0 && r(63) % 2 == 0 {
+                        let ore = p.ore.value_at(now).unwrap_or(0).min(capacity / 2);
+                        let ingots = p.ingots.value_at(now).unwrap_or(0).min(capacity - ore);
+                        Cargo {
+                            ore_g: ore * (1 + (r(64) % 4) as i64) / 4,
+                            ingots_g: ingots * (1 + (r(65) % 4) as i64) / 4,
+                        }
+                    } else {
+                        Cargo::default()
+                    };
+                    let action = Action::AssembleFleet {
+                        planet,
+                        ships,
+                        cargo,
+                    };
+                    (action, Some(owner))
+                } else {
+                    let ids: Vec<ShipId> = w.ships.keys().copied().collect();
+                    let ships = (0..(r(66) % 3))
+                        .map(|i| match ids.len() {
+                            0 => ShipId(w.next_id),
+                            n => ids[(r(67 + i) % n as u64) as usize],
+                        })
+                        .collect();
+                    let tons = (r(70) % 2_000) as i64 * GRAMS_PER_TON - 100 * GRAMS_PER_TON;
+                    let cargo = Cargo {
+                        ore_g: tons,
+                        ingots_g: (r(71) % 600) as i64 * GRAMS_PER_TON,
+                    };
+                    let action = Action::AssembleFleet {
+                        planet: any_planet(72),
+                        ships,
+                        cargo,
+                    };
+                    (action, None)
+                }
+            }
+            7 => {
+                // Fitting: a stationed fleet, on a mission its ships and the target allow.
+                let stationed = fleets(&|f| matches!(f.state, FleetState::Stationed { .. }));
+                let (id, fit) = pick(stationed, all_fleets.clone(), 80);
+                let fleet = FleetId(id);
+                let (target, mission) = match (fit, w.fleets.get(&fleet)) {
+                    (Some(owner), Some(f)) => {
+                        let FleetState::Stationed { at } = f.state else {
+                            unreachable!("picked stationed")
+                        };
+                        let has = |kind| f.ships.iter().any(|s| w.ships[s].kind == kind);
+                        let others = |want: &dyn Fn(Option<PlayerId>) -> bool| {
+                            planets
+                                .iter()
+                                .copied()
+                                .filter(|&p| p != at && want(owner_of(p)))
+                                .collect::<Vec<_>>()
+                        };
+                        let free = others(&|o| o.is_none());
+                        let own = others(&|o| o == Some(owner));
+                        let one = |v: &[PlanetId], i| v[(r(i) % v.len() as u64) as usize];
+                        if has(ShipKind::ColonyShip) && !free.is_empty() && r(81) % 2 == 0 {
+                            (one(&free, 82), Mission::Colonize)
+                        } else if has(ShipKind::CargoVessel) && !own.is_empty() && r(83) % 2 == 0 {
+                            (one(&own, 84), Mission::Transport)
+                        } else {
+                            let any = others(&|_| true);
+                            match any.is_empty() {
+                                true => (at, Mission::Move),
+                                false => (one(&any, 85), Mission::Move),
+                            }
+                        }
+                    }
+                    _ => {
+                        let mission = [Mission::Colonize, Mission::Transport, Mission::Move]
+                            [(r(86) % 3) as usize];
+                        (any_planet(87), mission)
+                    }
+                };
+                let action = Action::SendFleet {
+                    fleet,
+                    target,
+                    mission,
+                };
+                (action, fit)
+            }
+            8 => {
+                let moving = fleets(&|f| matches!(f.state, FleetState::InTransit { .. }));
+                let (id, fit) = pick(moving, all_fleets, 90);
+                let fleet = FleetId(id);
+                (Action::RecallFleet { fleet }, fit)
+            }
+            9 => {
+                let empty = fleets(&|f| {
+                    matches!(f.state, FleetState::Stationed { .. }) && f.cargo == Cargo::default()
+                });
+                let (id, fit) = pick(empty, all_fleets, 100);
+                let fleet = FleetId(id);
+                (Action::DisbandFleet { fleet }, fit)
+            }
+            _ => {
+                let at_home = fleets(&|f| match f.state {
+                    FleetState::Stationed { at } => owner_of(at) == Some(f.owner),
+                    _ => false,
+                });
+                let (id, fit) = pick(at_home, all_fleets, 110);
+                let fleet = FleetId(id);
+                (Action::TriggerUnload { fleet }, fit)
+            }
         };
-        if let Some(planet) = fitted
-            && let Some(owner) = w.planets[&planet].owner
+        if let Some(owner) = fitted
             && r(6) % 4 != 0
         {
             player = owner;
@@ -814,10 +969,18 @@ pub fn stops(to_ms: i64, advances: i64, instants: &[i64]) -> Vec<i64> {
 }
 
 /// Recalls the fleets planned for the current world time, as a command at that instant would.
+/// A fleet that generated commands (P1.10) have already recalled or otherwise taken out of
+/// transit is left alone, as the command would be rejected.
 pub fn recall_due(w: &mut World, recalls: &[Recall]) -> Result<(), EngineError> {
     let now = w.time_ms;
     for r in recalls.iter().filter(|r| r.at_ms == now) {
-        w.recall_fleet(r.fleet)?;
+        let moving = w
+            .fleets
+            .get(&r.fleet)
+            .is_some_and(|f| matches!(f.state, FleetState::InTransit { .. }));
+        if moving {
+            w.recall_fleet(r.fleet)?;
+        }
     }
     Ok(())
 }
@@ -889,7 +1052,8 @@ pub fn assert_fleet_invariants(w: &World, rules: &Rules) {
 }
 
 /// Ships are conserved: the ships at the end are those at the start, plus every ship completed,
-/// less every Colony Ship consumed by a colonization.
+/// less every Colony Ship consumed by a colonization. Commands move ships between rosters and
+/// fleets but never create or destroy one.
 pub fn assert_ships_conserved(start: &World, end: &World, events: &[DomainEvent]) {
     let completed = events
         .iter()
@@ -902,10 +1066,25 @@ pub fn assert_ships_conserved(start: &World, end: &World, events: &[DomainEvent]
             _ => None,
         })
         .collect();
+    // A consumed ship was a Colony Ship at the start or completed as one during the run (and
+    // then, with commands, assembled and sent), and it is gone at the end.
+    let colony_ships: BTreeSet<_> = start
+        .ships
+        .values()
+        .filter(|s| s.kind == ShipKind::ColonyShip)
+        .map(|s| s.id)
+        .chain(events.iter().filter_map(|e| match e {
+            DomainEvent::ShipCompleted {
+                ship,
+                kind: ShipKind::ColonyShip,
+                ..
+            } => Some(*ship),
+            _ => None,
+        }))
+        .collect();
     for ship in &consumed {
         assert!(
-            start.ships.get(ship).map(|s| s.kind) == Some(ShipKind::ColonyShip)
-                && !end.ships.contains_key(ship),
+            colony_ships.contains(ship) && !end.ships.contains_key(ship),
             "ship {} was consumed but is not a Colony Ship that left",
             ship.0
         );

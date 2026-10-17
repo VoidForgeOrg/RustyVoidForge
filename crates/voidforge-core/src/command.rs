@@ -8,18 +8,21 @@
 //! Checks run in one fixed order: who, what, whose, then state. The host owns idempotency keys
 //! and sequence numbers; the core never sees them.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::quantity::Quantity;
 use crate::rules::{BuildCost, Rules};
 use crate::state::{
-    Building, BuildingId, BuildingKind, BuildingState, DomainEvent, EngineError, Planet, PlanetId,
-    Player, PlayerId, ShipBuild, ShipBuildId, ShipBuildStatus, ShipKind, World,
+    Building, BuildingId, BuildingKind, BuildingState, Cargo, DomainEvent, EngineError, FleetId,
+    Mission, Planet, PlanetId, Player, PlayerId, ShipBuild, ShipBuildId, ShipBuildStatus, ShipId,
+    ShipKind, World,
 };
 
 /// A player's command, as the core takes it. The shell adds the time (`t`) and the order of
 /// calls (`seq`); the idempotency key stays with the host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Command {
     /// The issuing player, from the auth token.
@@ -29,7 +32,7 @@ pub struct Command {
 }
 
 /// What a command asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     /// Take the next free homeworld candidate (a system command, issued at sign-up).
@@ -62,6 +65,39 @@ pub enum Action {
     CancelShipBuild {
         /// The build.
         build: ShipBuildId,
+    },
+    /// Form a fleet from ships on one planet's roster, optionally loading cargo from its storage.
+    AssembleFleet {
+        /// The planet whose roster the ships are on.
+        planet: PlanetId,
+        /// The ships; never empty.
+        ships: BTreeSet<ShipId>,
+        /// Grams of each resource to load; zero for none.
+        cargo: Cargo,
+    },
+    /// Send a stationed fleet on a mission.
+    SendFleet {
+        /// The fleet.
+        fleet: FleetId,
+        /// Where to.
+        target: PlanetId,
+        /// What to do there.
+        mission: Mission,
+    },
+    /// Turn a fleet in transit around, once.
+    RecallFleet {
+        /// The fleet.
+        fleet: FleetId,
+    },
+    /// Return a stationed, empty fleet's ships to the planet's roster.
+    DisbandFleet {
+        /// The fleet.
+        fleet: FleetId,
+    },
+    /// Unload a stationed fleet's cargo into its planet's storage, up to free storage.
+    TriggerUnload {
+        /// The fleet.
+        fleet: FleetId,
     },
 }
 
@@ -109,6 +145,60 @@ pub enum Rejection {
     /// The Shipyard is under construction or being demolished.
     #[error("the Shipyard is not operational")]
     ShipyardNotOperational,
+    /// No such fleet, or no longer.
+    #[error("no such fleet")]
+    UnknownFleet,
+    /// No such ship, or no longer.
+    #[error("no such ship")]
+    UnknownShip,
+    /// A fleet needs at least one ship.
+    #[error("no ships were given")]
+    NoShips,
+    /// Cargo amounts are not negative.
+    #[error("a cargo amount is negative")]
+    InvalidCargo,
+    /// A ship is not on that planet's roster.
+    #[error("a ship is not on the planet's roster")]
+    ShipNotOnRoster,
+    /// Not enough of a resource in storage to load.
+    #[error("not enough in storage")]
+    InsufficientStock,
+    /// The cargo exceeds the fleet's capacity.
+    #[error("the cargo exceeds the fleet's capacity")]
+    InsufficientCapacity,
+    /// The fleet is not stationed.
+    #[error("the fleet is not stationed")]
+    FleetNotStationed,
+    /// The fleet is stationed, not in transit.
+    #[error("the fleet is not in transit")]
+    FleetNotInTransit,
+    /// The fleet was already recalled.
+    #[error("the fleet was already recalled")]
+    AlreadyRecalled,
+    /// The target is where the fleet is.
+    #[error("the fleet is already at the target")]
+    SamePlanet,
+    /// Colonize needs a Colony Ship.
+    #[error("the fleet has no Colony Ship")]
+    NoColonyShip,
+    /// Colonize needs an unowned target.
+    #[error("the target is owned")]
+    TargetOwned,
+    /// Transport needs a Cargo Vessel.
+    #[error("the fleet has no Cargo Vessel")]
+    NoCargoVessel,
+    /// Transport needs a target the player owns.
+    #[error("the target is not the player's")]
+    TargetNotOwned,
+    /// The trip has no real duration: zero distance, or an arrival past the end of time.
+    #[error("the target cannot be reached")]
+    UnreachableTarget,
+    /// A fleet with cargo aboard cannot be disbanded.
+    #[error("the fleet has cargo aboard")]
+    CargoAboard,
+    /// Unloading needs a planet the player owns.
+    #[error("the fleet's planet is not the player's")]
+    PlanetNotOwned,
 }
 
 impl Rejection {
@@ -128,6 +218,24 @@ impl Rejection {
             Self::ShipyardHasBuilds => "shipyard_has_builds",
             Self::NotAShipyard => "not_a_shipyard",
             Self::ShipyardNotOperational => "shipyard_not_operational",
+            Self::UnknownFleet => "unknown_fleet",
+            Self::UnknownShip => "unknown_ship",
+            Self::NoShips => "no_ships",
+            Self::InvalidCargo => "invalid_cargo",
+            Self::ShipNotOnRoster => "ship_not_on_roster",
+            Self::InsufficientStock => "insufficient_stock",
+            Self::InsufficientCapacity => "insufficient_capacity",
+            Self::FleetNotStationed => "fleet_not_stationed",
+            Self::FleetNotInTransit => "fleet_not_in_transit",
+            Self::AlreadyRecalled => "already_recalled",
+            Self::SamePlanet => "same_planet",
+            Self::NoColonyShip => "no_colony_ship",
+            Self::TargetOwned => "target_owned",
+            Self::NoCargoVessel => "no_cargo_vessel",
+            Self::TargetNotOwned => "target_not_owned",
+            Self::UnreachableTarget => "unreachable_target",
+            Self::CargoAboard => "cargo_aboard",
+            Self::PlanetNotOwned => "planet_not_owned",
         }
     }
 }
@@ -155,7 +263,7 @@ impl World {
         rules: &Rules,
     ) -> Result<Applied, EngineError> {
         let advanced = self.advance_to(t, rules)?;
-        if let Err(rejection) = self.check(command) {
+        if let Err(rejection) = self.check(command, rules) {
             return Ok(Applied {
                 advanced,
                 outcome: Err(rejection),
@@ -163,7 +271,10 @@ impl World {
         }
         let result = self
             .execute(command, rules)
-            .and_then(|planet| self.solve_planet(planet, rules));
+            .and_then(|planet| match planet {
+                Some(planet) => self.solve_planet(planet, rules),
+                None => Ok(Vec::new()),
+            });
         match result {
             Ok(events) => Ok(Applied {
                 advanced,
@@ -177,7 +288,7 @@ impl World {
     }
 
     /// The first rule `command` breaks at world time: who, what, whose, then state.
-    fn check(&self, command: &Command) -> Result<(), Rejection> {
+    fn check(&self, command: &Command, rules: &Rules) -> Result<(), Rejection> {
         let joined = self.players.contains_key(&command.player);
         let owned = |planet: PlanetId| {
             if self.planets[&planet].owner == Some(command.player) {
@@ -198,6 +309,11 @@ impl World {
                 .map(|_| ())
                 .ok_or(Rejection::NoFreeHomeworld),
             _ if !joined => Err(Rejection::NotJoined),
+            Action::AssembleFleet { .. }
+            | Action::SendFleet { .. }
+            | Action::RecallFleet { .. }
+            | Action::DisbandFleet { .. }
+            | Action::TriggerUnload { .. } => self.check_fleet(command, rules),
             Action::BuildBuilding { planet, .. } => {
                 let p = self.planets.get(&planet).ok_or(Rejection::UnknownPlanet)?;
                 owned(planet)?;
@@ -250,10 +366,19 @@ impl World {
             .find(|p| self.planets.get(p).is_some_and(|p| p.owner.is_none()))
     }
 
-    /// Applies a validated command at world time; returns the planet to re-solve.
-    fn execute(&mut self, command: &Command, rules: &Rules) -> Result<PlanetId, EngineError> {
+    /// Applies a validated command at world time; returns the planet to re-solve, if any.
+    fn execute(
+        &mut self,
+        command: &Command,
+        rules: &Rules,
+    ) -> Result<Option<PlanetId>, EngineError> {
         let now = self.time_ms;
         match command.action {
+            Action::AssembleFleet { .. }
+            | Action::SendFleet { .. }
+            | Action::RecallFleet { .. }
+            | Action::DisbandFleet { .. }
+            | Action::TriggerUnload { .. } => self.execute_fleet(command, rules),
             Action::JoinGame => {
                 let home = self.free_homeworld().expect("checked");
                 let spec = rules.homeworld;
@@ -274,7 +399,7 @@ impl World {
                         homeworld: home,
                     },
                 );
-                Ok(home)
+                Ok(Some(home))
             }
             Action::BuildBuilding { planet, kind } => {
                 let build = building_cost(rules, kind);
@@ -284,7 +409,7 @@ impl World {
                     rated_g_per_h: rate(build, "building's build rate")?,
                 };
                 self.add_building(planet, kind, state)?;
-                Ok(planet)
+                Ok(Some(planet))
             }
             Action::CancelConstruction { building } => {
                 let b = self.buildings.remove(&building).expect("checked");
@@ -293,7 +418,7 @@ impl World {
                     .expect("checked")
                     .buildings
                     .remove(&building);
-                Ok(b.planet)
+                Ok(Some(b.planet))
             }
             Action::DemolishBuilding { building } => {
                 let b = self.buildings.get_mut(&building).expect("checked");
@@ -309,7 +434,7 @@ impl World {
                             what: "demolition end",
                         })?;
                 b.state = BuildingState::Demolishing { ends_at_ms };
-                Ok(b.planet)
+                Ok(Some(b.planet))
             }
             Action::QueueShip { shipyard, kind } => {
                 let build = match kind {
@@ -340,7 +465,7 @@ impl World {
                         status,
                     },
                 );
-                Ok(self.buildings[&shipyard].planet)
+                Ok(Some(self.buildings[&shipyard].planet))
             }
             Action::CancelShipBuild { build } => {
                 let s = self.ship_builds.remove(&build).expect("checked");
@@ -348,7 +473,7 @@ impl World {
                     let limit = rules.buildings.shipyard.parallel_builds;
                     self.start_waiting_builds(s.shipyard, limit, now)?;
                 }
-                Ok(self.buildings[&s.shipyard].planet)
+                Ok(Some(self.buildings[&s.shipyard].planet))
             }
         }
     }
@@ -390,3 +515,5 @@ fn rate(build: BuildCost, what: &'static str) -> Result<i64, EngineError> {
         .rate_g_per_h()
         .ok_or(EngineError::CommandOutOfRange { what })
 }
+
+mod fleet;

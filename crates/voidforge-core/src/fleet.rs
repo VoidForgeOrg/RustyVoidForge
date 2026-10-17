@@ -260,7 +260,11 @@ impl World {
     /// Unloads each resource up to the planet's free storage, now. The planet has been brought
     /// to now, so its stocks are checkpointed here; a stock that gains mass keeps its carried
     /// remainder and is left at rate 0 for the re-solve to set (D-027). Returns what unloaded.
-    fn unload(&mut self, fleet: FleetId, planet: PlanetId) -> Result<Cargo, EngineError> {
+    pub(crate) fn unload(
+        &mut self,
+        fleet: FleetId,
+        planet: PlanetId,
+    ) -> Result<Cargo, EngineError> {
         let aboard = self.fleets[&fleet].cargo;
         let p = &self.planets[&planet];
         let (ore, ore_g) = filled(p.ore, p.ore_cap_g, aboard.ore_g, planet)?;
@@ -273,6 +277,35 @@ impl World {
         f.cargo.ore_g -= ore_g;
         f.cargo.ingots_g -= ingots_g;
         Ok(Cargo { ore_g, ingots_g })
+    }
+
+    /// Loads `cargo` out of a planet's storage, now (Assemble fleet, D-029). The planet has been
+    /// brought to now and holds at least `cargo`; each stock that loses mass keeps its carried
+    /// remainder and is left at rate 0 for the re-solve to set, as an unload does.
+    pub(crate) fn load(&mut self, planet: PlanetId, cargo: Cargo) -> Result<(), EngineError> {
+        let p = self
+            .planets
+            .get_mut(&planet)
+            .ok_or_else(|| StateError::Link(format!("load: planet {} does not exist", planet.0)))?;
+        let take = |stock: Quantity, grams: i64| {
+            if grams == 0 {
+                return Ok(stock);
+            }
+            Quantity::from_parts(
+                stock.value_g() - grams,
+                0,
+                stock.remainder(),
+                stock.checkpoint_ms(),
+            )
+            .map_err(|error| EngineError::Quantity {
+                planet,
+                entity: planet.0,
+                error,
+            })
+        };
+        p.ore = take(p.ore, cargo.ore_g)?;
+        p.ingots = take(p.ingots, cargo.ingots_g)?;
+        Ok(())
     }
 
     fn fleet(&self, fleet: FleetId) -> Result<&crate::state::Fleet, StateError> {
