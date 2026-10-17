@@ -12,6 +12,8 @@ What is pinned, what is only installed, and what has not been introduced yet. Th
 | Cargo resolver | 3 | `Cargo.toml` `[workspace]` | [D-001](decision-log.md#d-001-rust-toolchain-1991-edition-2024) |
 | Workspace crates | 0.1.0, unpublished | `Cargo.toml` `[workspace.package]` | [D-003](decision-log.md#d-003-crate-shapes-and-workspace-registration) |
 
+Upgrading the toolchain also means re-running `python3 tests/guardrails/run_fixtures.py`. The float check reads rustc's MIR text, which is not a stable interface, and the clippy bans depend on clippy's lint names ([D-013](decision-log.md#d-013-type-aware-float-check)).
+
 ## CI: runner, actions and tools
 
 Pinned in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) ([D-007](decision-log.md#d-007-ci-baseline-and-required-checks)). Actions are pinned to the commit of their release tag. Local runs should use the same tool versions.
@@ -58,7 +60,7 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 
 ## Crate dependencies
 
-The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (serde, serde_json, thiserror, anyhow, tokio, axum, tower-http, reqwest, sqlx, postcard, blake3, toml, rand_chacha, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, tracing, opentelemetry, opentelemetry-otlp, tracing-opentelemetry, proptest, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
+The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (serde, serde_json, anyhow, tokio, axum, tower-http, reqwest, sqlx, postcard, blake3, toml, rand_chacha, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, proptest, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |

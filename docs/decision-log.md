@@ -70,7 +70,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-008: cargo-deny policy and dependency allowlist
 
-- Date and package: 2026-10-16, P0.3.
+- Date and package: 2026-10-16, P0.3. Licenses, targets, the allowlist and the duplicate skip were extended by [D-017](#d-017-telemetry-dependencies-licenses-and-duplicates) in P0.6; the policy and the procedure for adding a dependency below still hold. The licenses and allowlist described here are the state at P0.3.
 - Decision: `deny.toml` contains:
   - Advisories: deny vulnerabilities and yanked crates.
   - Licenses: none allowed yet, because no external crate exists. Unpublished workspace crates are ignored.
@@ -131,10 +131,15 @@ Each entry records its date, the package that made it, the decision, the reasons
 ### D-013: Type-aware float check
 
 - Date and package: 2026-10-16, P0.4, from QA's review of the first candidate.
-- Decision: `tests/guardrails/check_no_floats.py` runs in the `lint` job. It compiles the libraries of `voidforge-core`, `voidforge-rules` and `voidforge-worldgen` to MIR with stable `rustc --emit=mir`. It fails on any `f32` or `f64` there, naming the function, closure, const or static. String literals and the MIR allocation blocks that dump constant data as bytes are skipped. A float constant still shows up through its typed item or local. Exit codes: 0 none, 1 floats found, 2 could not check (build failure or no MIR).
+- Decision: `tests/guardrails/check_no_floats.py` runs in the `lint` job. It compiles the libraries of `voidforge-core`, `voidforge-rules` and `voidforge-worldgen` to MIR with stable `rustc --emit=mir`. It fails on `f32` or `f64` there, naming the function, closure, const or static: as a type or path word (`f64`, `core::f64::...`), right after a digit (a float literal such as `const 0.5f64`) or right after an underscore (a float API such as `from_secs_f64`). String literals and the MIR allocation blocks that dump constant data as bytes are skipped. A float constant still shows up through its typed item or local. Exit codes: 0 none, 1 floats found, 2 could not check (build failure or no MIR).
 - Why: QA showed `1.25f64.sqrt().to_bits()` passes clippy in all three crates. It names no float type and uses no float operator, so neither `disallowed_types` nor `float_arithmetic` sees it, and clippy has no type-aware float lint. MIR records the type of every local, constant and call, so a float computed by a method, a cast literal, a trait call, a closure, a const or a value returned by std or a dependency all show up. The clippy bans stay, because they point at the source line.
 - Scope: library code of the three crates. Their test code is covered by the clippy bans, which run with `--all-targets`, but not by this check.
 - Proof: the `float_values/` fixtures in D-012 must be rejected in all three crates, naming exactly the expected items; that includes a promoted constant array, whose bytes sit in a skipped allocation. Integer code and "f64" in long, short and byte-string constants must pass, and a crate that does not compile must make the check exit 2.
+- Fixed after the Phase 0 gate review: review-r1 found that `Duration::from_secs_f64(0.5)` passed both float guards. A literal passed straight into a call creates no float-typed local, and the pattern needed a word boundary before `f64`, which `0.5f64` and `from_secs_f64` lack. The pattern now also matches after a digit or underscore. Regression fixtures:
+  - float literal arguments, and other literal spellings;
+  - a constant passed by name, caught only through the underscore case;
+  - a literal given to `toml::Value::Float`, caught only through the digit case. Controls: integer suffixes, hex digits spelling `f64`, and identifiers with `f64` inside. They fail on the old pattern and pass on the new one.
+- Remaining limit: the check reads MIR text, so a float that appears nowhere in a function's MIR goes unseen. An example is an external crate's float constant passed straight to that crate's function, if the function name doesn't end in `_f32` or `_f64`. No dependency these crates may use today has such an API. Reviewers of the first dependency added to them should check it. The MIR text format is not a stable interface, so a toolchain upgrade must re-run these fixtures ([version table](versions.md#pinned-in-the-repository)).
 - Fixed in P0.4 review: QA found that a short string such as "f32 f64" was rejected, because MIR dumps it on one line without an address. Whole allocation blocks are now skipped, and skipping also stops at the next item header, so an unexpected format can never hide later code.
 
 ### D-014: Local stack
