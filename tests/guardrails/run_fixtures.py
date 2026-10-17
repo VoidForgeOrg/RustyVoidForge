@@ -124,6 +124,12 @@ class Workspace:
         with open(self.path(rel)) as f:
             manifest = f.read()
         header = "[" + section + "]\n"
+        # A crate that already declares a dependency (for example voidforge-rules and toml) has
+        # what the fixture needs; adding it again would be a duplicate key, not a test.
+        declared = set(re.findall(r"(?m)^([A-Za-z0-9_-]+)(?:\.workspace)?\s*=", manifest))
+        lines = [l for l in lines if re.match(r"\s*([A-Za-z0-9_-]+)", l).group(1) not in declared]
+        if not lines:
+            return
         if manifest.startswith(header) or ("\n" + header) in manifest:
             at = manifest.index(header) + len(header)
             manifest = manifest[:at] + "\n".join(lines) + "\n" + manifest[at:]
@@ -375,8 +381,11 @@ WEB_CASES = [
      [("voidforge-server", "dependencies", "voidforge-core = { workspace = true }")], 0, []),
     ("web on another workspace crate (rules)",
      [("voidforge-web", "dependencies", "voidforge-rules = { workspace = true }")], 1,
+     # Since P1.2 rules depends on core, so web reaches core through it as well.
      ["violation: declared normal dependency: voidforge-web -> voidforge-rules",
-      "violation: resolved normal path: voidforge-web -> voidforge-rules"]),
+      "violation: declared normal dependency: voidforge-web -> voidforge-rules -> voidforge-core",
+      "violation: resolved normal path: voidforge-web -> voidforge-rules",
+      "violation: resolved normal path: voidforge-web -> voidforge-rules -> voidforge-core"]),
     ("cargo itself rejects web on server through [workspace.dependencies]",
      [("voidforge-web", "dependencies", "voidforge-server = { workspace = true }")], 2,
      ["stderr:voidforge-server", "stderr:workspace.dependencies"]),

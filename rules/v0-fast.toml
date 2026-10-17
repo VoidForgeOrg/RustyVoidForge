@@ -1,0 +1,71 @@
+# Voidforge Rules v0-fast: Rules v0 where an hour of play takes a second, for end-to-end tests,
+# smoke tests and hand-played gates (Technical Plan, Local development; decision log D-020).
+#
+# Rates and speeds are v0 x 3,600 and durations are v0 / 3,600. Masses, capacities, slots,
+# starting stocks, scoring and distances are unchanged, and so is the clock: 1 h is still
+# 3,600,000 ms. Units as in v0.toml. voidforge-rules tests prove this file is exactly that
+# transformation of v0.toml.
+
+version = 1
+name = "v0-fast"
+
+[planet]
+slots = 8
+ore_cap_g = 10_000_000_000
+ingot_cap_g = 5_000_000_000
+
+[homeworld]
+drills = 1
+refineries = 1
+ore_g = 2_000_000_000
+ingots_g = 1_500_000_000
+
+[buildings.drill]
+cost_g = 150_000_000
+build_time_ms = 3_000                 # v0 3 h / 3,600 = 3 s
+demolition_time_ms = 1_000            # 1 s
+output_g_per_h = 36_000_000_000       # v0 10 t/h x 3,600
+
+[buildings.refinery]
+cost_g = 250_000_000
+build_time_ms = 4_000
+demolition_time_ms = 1_000
+intake_g_per_h = 28_800_000_000
+ingots_per_ore = 2
+output_g_per_h = 57_600_000_000
+
+[buildings.shipyard]
+cost_g = 1_200_000_000
+build_time_ms = 12_000
+demolition_time_ms = 2_000
+parallel_builds = 3
+
+[ships.colony_ship]
+cost_g = 800_000_000
+build_time_ms = 10_000
+speed_du_per_h = 36_000_000           # v0 10 units/h x 3,600
+cargo_capacity_g = 0
+
+[ships.cargo_vessel]
+cost_g = 300_000_000
+build_time_ms = 4_000
+speed_du_per_h = 54_000_000
+cargo_capacity_g = 500_000_000
+
+[scoring]
+planet = 1_000
+drill = 100
+refinery = 150
+shipyard = 500
+colony_ship = 400
+cargo_vessel = 150
+ore = { points = 1, per_g = 10_000_000 }
+ingots = { points = 2, per_g = 10_000_000 }
+
+[worldgen]
+planets_per_expected_player = 20
+cube_size_du = 1_000_000
+min_planet_spacing_du = 10_000
+homeworld_min_spacing_du = 150_000
+homeworld_neighbor_radius_du = 100_000
+homeworld_min_neighbors = 5

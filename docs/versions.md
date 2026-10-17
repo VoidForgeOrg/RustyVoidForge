@@ -60,7 +60,7 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 
 ## Crate dependencies
 
-The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (serde, serde_json, anyhow, tokio, axum, tower-http, reqwest, sqlx, postcard, blake3, toml, rand_chacha, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
+The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (serde_json, anyhow, tokio, axum, tower-http, reqwest, sqlx, postcard, blake3, rand_chacha, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
@@ -70,5 +70,7 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | opentelemetry_sdk | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
 | opentelemetry-otlp | =0.33.1 (http-proto, reqwest-blocking-client, trace) | telemetry | P0.6 | D-017 |
 | tracing-opentelemetry | =0.34.0 (no default features) | telemetry | P0.6 | D-017 |
-| thiserror | =2.0.21 | telemetry; core from P1.1 | P0.6 | D-017, D-018 |
+| thiserror | =2.0.21 | telemetry; core from P1.1; rules from P1.2 | P0.6 | D-017, D-018, D-020 |
 | proptest | =1.12.0 (std only, no fork or timeout) | core, dev-dependency only | P1.1 | D-019 |
+| serde | =1.0.229 (std, derive) | rules | P1.2 | D-020 |
+| toml | =1.1.8 (std, parse, serde) | rules | P1.2 | D-020 |

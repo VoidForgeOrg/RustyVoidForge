@@ -99,7 +99,7 @@ All numbers are integers; floats never appear in the core.
 | Game time | millisecond | 64-bit signed |
 | Mass: stocks, cargo, delivered ingots | gram (1 t = 1,000,000 g) | 64-bit signed |
 | Mass rate | gram per hour | 64-bit signed |
-| Coordinates and speed | fixed-point distance units | 64-bit signed |
+| Coordinates and speed | fixed-point distance units: 1 world unit = 1,000 distance units (speed in distance units per hour) | 64-bit signed |
 | Products inside formulas | same as operands | 128-bit signed |
 
 A continuous quantity stores its value, rate, rounding remainder and checkpoint time. The remainder makes one long interval and many short ones give the same result (see Determinism rules).
