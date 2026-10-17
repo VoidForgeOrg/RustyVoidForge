@@ -2,13 +2,13 @@
 
 The engine: world state, the per-planet solver, commands, domain events and views. It is a pure, single-threaded state machine with three entry points, `advance_to(t)`, `apply(command, t)` and `view(query, t)`, and each call returns the domain events it produced.
 
-Library. P1.1 delivered `quantity` ([D-018](../../docs/decision-log.md#d-018-quantities-and-crossing-times)). P1.2 delivered `rules`: the typed specs and `Rules::validate`, which holds the rules invariants every caller relies on ([D-020](../../docs/decision-log.md#d-020-rules-data-files-and-ids)). The rest arrives with P1.3 to P1.11. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+Library. P1.1 delivered `quantity` ([D-018](../../docs/decision-log.md#d-018-quantities-and-crossing-times)). P1.2 delivered `rules`: the typed specs and `Rules::validate`, which holds the rules invariants every caller relies on ([D-020](../../docs/decision-log.md#d-020-rules-data-files-and-ids)). P1.3 delivered `state`: `World` and every entity in ID-ordered maps, the checked ID counter, the event queue's data shape, serde, and `World::check_links`, which runs whenever a world is deserialized ([D-022](../../docs/decision-log.md#d-022-state-model-ids-and-test-builders)). The rest arrives with P1.4 to P1.11. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 
 - Workspace: None. No workspace crate may be a dependency of the core.
-- External at runtime, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): serde and thiserror only (thiserror today; serde arrives with P1.3).
-- Dev-dependencies, for tests only and never linked into the library: proptest ([D-019](../../docs/decision-log.md#d-019-test-only-dev-dependencies-in-the-core)).
+- External at runtime, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): serde and thiserror only.
+- Dev-dependencies, for tests only and never linked into the library: proptest and serde_json ([D-019](../../docs/decision-log.md#d-019-test-only-dev-dependencies-in-the-core)). Not testkit: core tests build their worlds by hand, so the core keeps no workspace dependency.
 - Never: Anything else, including tokio, tracing and uuid. The core must not depend on the shell.
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
