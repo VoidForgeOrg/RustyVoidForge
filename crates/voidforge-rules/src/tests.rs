@@ -401,6 +401,19 @@ fn invariant_violations_name_the_field() {
             "must be less than cube_size_du",
         ),
         // Feasibility (P1.2 QA LOW carried to P1.12, D-031).
+        // review-r2's M1: values whose feasibility products would overflow are out of range.
+        (
+            "cube_size_du = 1_000_000 ",
+            "cube_size_du = 1_000_000_000_000_000_000 ",
+            "worldgen.cube_size_du",
+            "the supported range",
+        ),
+        (
+            "homeworld_neighbor_radius_du = 100_000 ",
+            "homeworld_neighbor_radius_du = 1_000_000_000_000_000 ",
+            "worldgen.homeworld_neighbor_radius_du",
+            "the supported range",
+        ),
         (
             "cube_size_du = 1_000_000 ",
             "cube_size_du = 1_000_500 ",

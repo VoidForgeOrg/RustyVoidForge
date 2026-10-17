@@ -274,3 +274,60 @@ fn a_fixed_seed_gives_the_recorded_world() {
 
 const GOLDEN_FIRST: [(i64, i64, i64); 3] = [(55, 33, 219), (398, 59, 28), (176, 392, 178)];
 const GOLDEN_CANDIDATES: [u64; 7] = [133, 52, 23, 102, 22, 126, 40];
+
+/// review-r2's M2 witness: a cube of 160 units, spacing 11, and 4,000 planets for one player.
+/// The lattice (8x, 8y, 8z), x, y, z in 0..20 with x + y + z even, holds 4,000 points pairwise
+/// at least √128 > 11 apart, with 12 neighbors within 12 units of (80, 80, 80). So these rules
+/// are feasible, and generation must not call them impossible. Random placement may honestly
+/// run out of attempts at this density (`Exhausted`).
+#[test]
+fn feasibility_a_dense_but_possible_packing_is_not_called_impossible() {
+    let lattice: Vec<[i64; 3]> = (0..20)
+        .flat_map(|x| (0..20).flat_map(move |y| (0..20).map(move |z| [x, y, z])))
+        .filter(|[x, y, z]| (x + y + z) % 2 == 0)
+        .map(|[x, y, z]| [8 * x, 8 * y, 8 * z])
+        .collect();
+    assert_eq!(lattice.len(), 4_000);
+    for (i, a) in lattice.iter().enumerate() {
+        for b in &lattice[i + 1..] {
+            let d2: i64 = (0..3).map(|k| (a[k] - b[k]).pow(2)).sum();
+            assert!(d2 >= 121, "{a:?} {b:?}");
+        }
+    }
+    let mut rules = v0_rules();
+    let g = &mut rules.worldgen;
+    g.cube_size_du = 160 * U;
+    g.min_planet_spacing_du = 11 * U;
+    g.homeworld_min_spacing_du = 11 * U;
+    g.homeworld_neighbor_radius_du = 12 * U;
+    g.homeworld_min_neighbors = 5;
+    g.planets_per_expected_player = 4_000;
+    rules.validate().unwrap();
+    match generate(1, 1, &rules) {
+        Ok(_) | Err(WorldgenError::Exhausted { .. }) => {}
+        other => panic!("a feasible packing was rejected: {other:?}"),
+    }
+}
+
+/// review-r2's M1 on the generation side: products of extreme but valid values are decided,
+/// not overflowed. u32::MAX players of u32::MAX planets at a half-cube spacing cannot fit, and
+/// the answer is the typed `Infeasible` in every build profile, never a panic or a wrapped
+/// decision.
+#[test]
+fn feasibility_extreme_counts_and_distances_are_decided_without_overflow() {
+    let mut rules = v0_rules();
+    let g = &mut rules.worldgen;
+    g.cube_size_du = 1_000_000_000_000;
+    g.min_planet_spacing_du = 500_000_000_000;
+    g.homeworld_min_spacing_du = 500_000_000_000;
+    g.homeworld_neighbor_radius_du = 500_000_000_000;
+    g.homeworld_min_neighbors = 0;
+    g.planets_per_expected_player = u32::MAX;
+    rules.validate().unwrap();
+    assert_eq!(
+        generate(0, u32::MAX, &rules),
+        Err(WorldgenError::Infeasible(
+            "the planets cannot keep their spacing in the cube"
+        ))
+    );
+}

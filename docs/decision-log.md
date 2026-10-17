@@ -520,14 +520,20 @@ Each entry records its date, the package that made it, the decision, the reasons
     - Neighbor counts use a grid with cell = radius.
     - The shuffle is Fisher–Yates with `below`.
     - Termination: each planet tries at most `MAX_ATTEMPTS` (10,000) draws, then `Exhausted { placed }`, never a loop.
-  - **Feasibility** (the P1.2 QA LOW carry):
+  - **Feasibility** (the P1.2 QA LOW carry; repaired after review-r2's M1 and M2 on 1325f22):
     - **`Rules::validate`** (independent of player count):
+      - every worldgen distance is at most `MAX_WORLDGEN_DU` (10^12 distance units, a billion world units), the supported range that keeps every feasibility product exact in i128;
       - cube and spacings are whole world units;
       - homeworld spacing ≥ planet spacing, and ≤ the cube's diagonal;
       - with neighbors required, the neighbor radius ≥ planet spacing;
-      - the packing bound `(n + 1) × s³ ≤ (2r + s)³` for one neighborhood;
+      - the neighborhood bound `(n + 1) × s³ ≤ (2r + s)³`: balls of radius s/2 around the candidate and its neighbors are disjoint inside the ball of radius r + s/2;
       - `planets_per_expected_player ≥ 1 + homeworld_min_neighbors`.
-    - **`generate`** (count-dependent): `NoPlayers`; the packing bounds `N × s³ ≤ (L + s)³` for the planets and for the candidates (`Infeasible`); too few qualifying candidates (`Infeasible`); anything subtler is caught by `Exhausted`.
+    - **`generate`** (count-dependent):
+      - `NoPlayers`;
+      - the packing bounds `n × s³ ≤ 2 × (L + s)³` for the planets and for the candidates (`Infeasible`). Balls of radius s/2 around points pairwise s apart are disjoint inside the cube widened by s/2, so n × (π/6) × s³ ≤ (L + s)³, and with π > 3 the stated bound is still necessary and integer-only. The first version used `n × s³ ≤ (L + s)³`, which is not necessary: separation does not imply disjoint s-cubes. review-r2's lattice of 4,000 points in a 160-unit cube at spacing 11 refutes it;
+      - too few qualifying candidates (`Infeasible`);
+      - anything subtler is caught by `Exhausted`, an honest result even for feasible but dense parameters.
+    - Every left-hand product is checked, and an overflow counts as larger than the exact right side, so decisions are the same in debug and release.
   - **Determinism**:
     - The same seed gives identical canonical postcard bytes, the bytes P2.2's state hash covers (D-024).
     - worldgen's own `tests/determinism.rs` joins `just determinism`: an in-process double run over generation, a generated world with three players joined and played for 100 hours, and a two-process run (`double-run-worldgen.bin`).

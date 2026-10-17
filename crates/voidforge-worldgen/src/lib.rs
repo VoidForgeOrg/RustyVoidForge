@@ -82,9 +82,17 @@ pub fn generate(seed: u64, players: u32, rules: &Rules) -> Result<World, Worldge
     let radius = g.homeworld_neighbor_radius_du / unit;
     let total = u64::from(players) * u64::from(g.planets_per_expected_player);
 
-    // Necessary packing bounds (exact, in i128): n points pairwise s apart fit in a cube of side
-    // L only if n × s³ ≤ (L + s)³.
-    let packs = |n: u64, s: i64| i128::from(n) * cube(s) <= cube(side + s);
+    // Necessary packing bounds. Balls of radius s/2 around n points pairwise s apart are
+    // disjoint and lie in the cube widened by s/2 on each side, so n × (π/6) × s³ ≤ (L + s)³.
+    // With π > 3 that gives the weaker but still necessary, integer-exact n × s³ ≤ 2 × (L + s)³
+    // (review-r2's M2: separation does not imply disjoint s-cubes, so the cube bound
+    // n × s³ ≤ (L + s)³ was not necessary). Rules validation caps the distances (D-031), so the
+    // right side is exact; a left side beyond i128 is larger still.
+    let packs = |n: u64, s: i64| {
+        i128::from(n)
+            .checked_mul(cube(s))
+            .is_some_and(|need| need <= 2 * cube(side + s))
+    };
     if !packs(total, spacing) {
         return Err(WorldgenError::Infeasible(
             "the planets cannot keep their spacing in the cube",

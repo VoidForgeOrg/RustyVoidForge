@@ -203,6 +203,10 @@ pub struct WorldgenSpec {
     pub homeworld_min_neighbors: u32,
 }
 
+/// The largest worldgen distance supported, in distance units: 10^12, a billion world units. It
+/// keeps every feasibility product exact in i128 (D-031); the defaults are a million times smaller.
+pub const MAX_WORLDGEN_DU: i64 = 1_000_000_000_000;
+
 /// A rules value that breaks an invariant, naming the field.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("rules field `{field}`: {problem}")]
@@ -399,6 +403,13 @@ impl Rules {
                 world.homeworld_neighbor_radius_du,
             ),
         ] {
+            // The supported range keeps every feasibility product exact in i128 (D-031).
+            if value > MAX_WORLDGEN_DU {
+                return Err(problem(
+                    field,
+                    format!("must be at most {MAX_WORLDGEN_DU} (the supported range), got {value}"),
+                ));
+            }
             if value % DISTANCE_UNITS_PER_WORLD_UNIT != 0 {
                 return Err(problem(
                     field,
@@ -422,6 +433,7 @@ impl Rules {
                 format!("must be at least min_planet_spacing_du ({spacing})"),
             ));
         }
+        // Every value is at most MAX_WORLDGEN_DU, so these products are exact.
         if home * home > 3 * side * side {
             return Err(problem(
                 "worldgen.homeworld_min_spacing_du",
@@ -438,10 +450,15 @@ impl Rules {
                     ),
                 ));
             }
-            // Necessary packing bound: the candidate and its neighbors, pairwise `spacing` apart,
-            // fit in a ball of `radius` only if (n + 1) × s³ ≤ (2r + s)³.
+            // Necessary packing bound: balls of radius s/2 around the candidate and its
+            // neighbors are disjoint and lie in the ball of radius r + s/2, so
+            // (n + 1) × s³ ≤ (2r + s)³. The right side is exact (r, s ≤ MAX_WORLDGEN_DU); a
+            // left side beyond i128 is larger still.
             let reach = 2 * radius + spacing;
-            if (neighbors + 1) * spacing * spacing * spacing > reach * reach * reach {
+            let fits = (neighbors + 1)
+                .checked_mul(spacing * spacing * spacing)
+                .is_some_and(|need| need <= reach * reach * reach);
+            if !fits {
                 return Err(problem(
                     "worldgen.homeworld_min_neighbors",
                     format!(
