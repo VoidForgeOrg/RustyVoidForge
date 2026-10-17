@@ -646,28 +646,52 @@ proptest! {
 }
 
 /// A planet's mass ledger in scaled units (grams × H plus remainder): ratio × ore + ingots +
-/// every build's delivered ingots.
-fn ledger(w: &World, p: PlanetId, ratio: i64, at: i64) -> (i128, Vec<(Quantity, i128)>) {
+/// every build's delivered ingots. Each part comes with its weight and its boundaries (0 and
+/// a cap for a stock, the cost for a build), so a snap can be told from any other change.
+type Part = (Quantity, i128, Option<i64>, i64);
+
+fn ledger(w: &World, p: PlanetId, ratio: i64, at: i64) -> (i128, Vec<Part>) {
     let planet = &w.planets[&p];
-    let mut parts = vec![(planet.ore, i128::from(ratio)), (planet.ingots, 1)];
+    let mut parts: Vec<Part> = vec![
+        (planet.ore, i128::from(ratio), Some(0), planet.ore_cap_g),
+        (planet.ingots, 1, Some(0), planet.ingot_cap_g),
+    ];
     for id in &planet.buildings {
-        if let voidforge_core::state::BuildingState::UnderConstruction { delivered, .. } =
-            w.buildings[id].state
+        if let voidforge_core::state::BuildingState::UnderConstruction {
+            delivered, cost_g, ..
+        } = w.buildings[id].state
         {
-            parts.push((delivered, 1));
+            parts.push((delivered, 1, None, cost_g));
         }
     }
     for b in w.ship_builds.values() {
         if planet.buildings.contains(&b.shipyard) {
-            parts.push((b.delivered, 1));
+            parts.push((b.delivered, 1, None, b.cost_g));
         }
     }
-    let scaled = |q: Quantity| {
-        let q = q.advanced_to(at).unwrap();
-        i128::from(q.value_g()) * i128::from(MS_PER_HOUR) + i128::from(q.remainder())
-    };
-    let total = parts.iter().map(|&(q, k)| k * scaled(q)).sum();
+    let total = parts.iter().map(|&(q, k, _, _)| k * scaled(q, at)).sum();
     (total, parts)
+}
+
+fn scaled(q: Quantity, at: i64) -> i128 {
+    let q = q.advanced_to(at).unwrap();
+    i128::from(q.value_g()) * i128::from(MS_PER_HOUR) + i128::from(q.remainder())
+}
+
+/// Where a quantity crosses `now`, if it does: the boundary it reaches.
+fn crossing_now(q: Quantity, floor: Option<i64>, top: i64, now: i64) -> Option<i64> {
+    let rate = q.rate_g_per_h();
+    let (at, boundary) = if rate > 0 {
+        (q.rising_crossing(top).unwrap(), top)
+    } else if rate < 0 {
+        (
+            floor.and_then(|f| q.falling_crossing(f).unwrap()),
+            floor.unwrap_or(0),
+        )
+    } else {
+        (None, 0)
+    };
+    (at == Some(now)).then_some(boundary)
 }
 
 /// The production solve, audited: each planet's ledger is integrated from its Drill actual
@@ -731,19 +755,37 @@ impl Steps for Audit<'_> {
             now
         );
         w.solve_planet(p, self.rules)?;
-        let (after, _) = ledger(w, p, self.ratio, now);
-        // Snaps are the only change at a solve, each within one ms of its flow plus one gram.
-        let allowance: i128 = parts
-            .iter()
-            .map(|(q, k)| k * (i128::from(q.rate_g_per_h().abs()) + i128::from(MS_PER_HOUR)))
-            .sum();
-        assert!(
-            (after - before).abs() < allowance.max(1),
-            "planet {} snapped by {} at {}",
-            p.0,
-            after - before,
-            now
-        );
+        let (after, after_parts) = ledger(w, p, self.ratio, now);
+        // Snaps are the only change at a solve. A quantity crossing now lands on its boundary
+        // with remainder 0, moved by less than one ms of its flow plus one gram; every other
+        // quantity is unchanged to the scaled unit, remainder included.
+        for (&(old, _, floor, top), &(new, _, _, _)) in parts.iter().zip(&after_parts) {
+            let delta = scaled(new, now) - scaled(old, now);
+            match crossing_now(old, floor, top, now) {
+                Some(boundary) => {
+                    assert_eq!(
+                        (new.value_g(), new.remainder()),
+                        (boundary, 0),
+                        "planet {} snap at {}",
+                        p.0,
+                        now
+                    );
+                    let allowance = i128::from(old.rate_g_per_h().abs()) + i128::from(MS_PER_HOUR);
+                    assert!(
+                        delta.abs() < allowance,
+                        "planet {} snapped by {} at {}",
+                        p.0,
+                        delta,
+                        now
+                    );
+                }
+                None => assert_eq!(
+                    delta, 0,
+                    "planet {}: a quantity not crossing moved at {}",
+                    p.0, now
+                ),
+            }
+        }
         if let Some(next) = w.planets[&p].next_event {
             assert!(
                 next.at_ms > now,

@@ -353,6 +353,39 @@ fn crossing_lands_exactly_on_the_boundary_with_its_remainder_reset() {
     w.check_links().unwrap();
 }
 
+#[test]
+fn crossing_a_re_solve_off_a_crossing_carries_every_remainder() {
+    let rules = v0_rules();
+    // Ore +2 t/h and ingots +16 t/h, both with remainders and far from their boundaries; a
+    // re-solve at an odd instant must leave every value and remainder exactly where reading
+    // forward puts them.
+    let (mut b, p) = planet(1, 1, 0, 0);
+    b.stocks(
+        p,
+        Quantity::from_parts(5_000 * T, 0, 1_234_567, 0).unwrap(),
+        Quantity::from_parts(1_000 * T, 0, 2_345_678, 0).unwrap(),
+    );
+    let mut w = b.build();
+    w.solve_planet(p, &rules).unwrap();
+    let at = 3 * H + 17;
+    w.advance_to(at, &rules).unwrap();
+    let expected = (
+        w.planets[&p].ore.advanced_to(at).unwrap(),
+        w.planets[&p].ingots.advanced_to(at).unwrap(),
+    );
+    assert!(expected.0.remainder() != 0 && expected.1.remainder() != 0);
+    w.solve_planet(p, &rules).unwrap();
+    let (ore, ingots) = (w.planets[&p].ore, w.planets[&p].ingots);
+    assert_eq!(
+        (ore.value_g(), ore.remainder()),
+        (expected.0.value_g(), expected.0.remainder())
+    );
+    assert_eq!(
+        (ingots.value_g(), ingots.remainder()),
+        (expected.1.value_g(), expected.1.remainder())
+    );
+}
+
 // --- The halt chain (later crossings on one planet) ---
 
 #[test]
