@@ -347,6 +347,12 @@ fn invariant_violations_name_the_field() {
             "8000000 x 2 = 16000000",
         ),
         (
+            "cost_g = 300_000_000 ",
+            "cost_g = 300_000_004 ",
+            "ships.cargo_vessel.cost_g",
+            "rate of 75000001 g/h is not a multiple of ingots_per_ore (2)",
+        ),
+        (
             "parallel_builds = 3 ",
             "parallel_builds = 0 ",
             "buildings.shipyard.parallel_builds",

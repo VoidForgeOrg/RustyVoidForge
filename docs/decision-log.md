@@ -313,3 +313,32 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Dependencies**: postcard =1.1.3 (alloc, default features off) is a normal dependency of testkit, with cobs pulled in. Every consumer takes testkit as a dev-dependency only, so postcard is reachable only through dev-dependencies, and no non-test crate's `cargo tree -e normal` shows it. proptest stays a dev-dependency (core, and now testkit): as a normal testkit dependency it would put its rand 0.10 next to OpenTelemetry's rand 0.9 in cargo-deny's duplicate check. Both are allowlisted. insta is not added until its first use.
   - **Extension**: P1.6+ add their cases to these harnesses rather than writing parallel ones (testkit guide, "Extending the determinism suite").
 
+
+### D-025: Per-planet solver part 1, its seam and the rules it reads
+
+- Date and package: 2026-10-17, P1.6. Proposed by dev-build and agreed with orch-advisor, with one amendment: make the odd ingot demand unreachable.
+- Decision:
+  - **Rules at the call**: `World::advance_to(t, &Rules)`. A rules version other than `World.rules_version` is `RulesMismatch`, checked before anything changes and without poisoning ("Pinned rules and build").
+  - **Production steps**: `advance_to` runs `advance_with` with `Solver`. `Solver::planet_change` re-solves the planet. Fleet arrivals and returns stay `StepNotBuilt` until P1.8. `Pending` is removed; tests have their own steps.
+  - **Re-solving outside the loop**: `World::solve_planet(planet, &Rules)` re-solves at world time. It is the same function the step calls, and later Join game and planet commands use it. Building a world does not solve it. A deserialized world is taken as already solved, since rates and the next event are stored (D-022).
+  - **The solve**, architecture steps 1 to 5:
+    1. Bring every quantity to t: the stocks, and the delivered ingots of constructions and active ship builds. A quantity whose crossing is exactly t snaps to its boundary with remainder 0. A crossing before t is a missed event, a bug, and an error.
+    2. Transitions are P1.7's. A build at its cost, or a demolition at or past its end, is `TransitionNotBuilt`, which stops and poisons the advance. Nothing is skipped or faked.
+    3. Solve the flows (`solver::planet_flows`).
+    4. Set the net rates with `with_rate` at t, carrying remainders.
+    5. Schedule the earliest crossing or timer through `schedule_planet`, or clear it.
+  - **Empty and full**: a stock is empty when `value_g <= 0` and full when `value_g >= cap`, whatever its remainder. Counting a stock at value 0 with a positive remainder as "not empty" would give it a negative net rate at value 0. Its falling crossing would then be now, which trips the "not strictly after t" guard.
+  - **Ratios from the rules**: O = `ingots_per_ore` × A, and the ingot limit is floor(ingot demand / `ingots_per_ore`). The architecture's "2" and "half" are Rules v0's value.
+    - With an ingot demand that is not a multiple of the ratio, a full ingot stock would get net 2·floor(D/2) − D = −1 g/h and drain away from its cap. Using ceiling division would overfill instead.
+    - The floor stays, and `Rules::validate` now requires every build's rated ingot rate to be a multiple of `ingots_per_ore`, so every demand divides exactly. Rules v0 and v0-fast already satisfy this (Drill 50e6, Refinery 62.5e6, Shipyard 100e6, Colony Ship 80e6, Cargo Vessel 75e6 g/h, and ×3600 for fast).
+  - **Even split**: water-filling. Each round gives an equal share, floor(S/n), to every remaining consumer; consumers at or below the share take their demand and leave. Once all remaining consumers want more than the share, the leftover S mod n goes 1 g/h at a time to the lowest IDs. Constructions and ship builds share one ID order (D-022). A is split across operational Refineries, and Drill actual across operational Drills, for the labels; the stocks use the totals.
+  - **Labels** (`PlanetFlows`, derived, never stored): Running, Throttled or Halted for:
+    - each operational Drill and Refinery (its share against its rated rate);
+    - each construction and active ship build (its delivery against its rated rate);
+    - each operational Shipyard (its active builds' deliveries against their rated sum; Halted with no active builds or no delivery).
+
+    Demolishing buildings and waiting builds do no work and get no label.
+  - **Next event**: the earliest of every stock with a nonzero rate reaching 0 or its cap, every build with a positive delivery rate reaching its cost, and every demolition end. Nothing is scheduled when nothing moves. A candidate not strictly after t is `NotAfterNow`.
+  - **Determinism**:
+    - Solved-planet scenarios join the D-024 harnesses through production `advance_to`, with real stock crossings, and with build costs out of reach so no transition fires.
+    - New properties: no negative or over-cap stock; the next event strictly after t; mass accounted for within the allowance P1.1 already states (D-018), with no new tolerance. Each quantity is exact up to its carried remainder and read flooring. Each crossing snap moves it by less than one millisecond of flow plus one gram.

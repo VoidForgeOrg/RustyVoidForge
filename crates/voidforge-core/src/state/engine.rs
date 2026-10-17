@@ -2,8 +2,13 @@
 //! (Architectural Design, Time model, Engine core and Next event; decision log D-023).
 //!
 //! The loop owns order, staleness, time and the guards. What happens at a planet change or a
-//! fleet arrival belongs to [`Steps`]; until the solver (P1.6/P1.7) and fleets (P1.8) supply
-//! real steps, [`World::advance_to`] runs [`Pending`], which stops on any live entry.
+//! fleet arrival belongs to [`Steps`]. [`World::advance_to`] runs the production steps,
+//! [`crate::solver::Solver`] (D-025): planet changes re-solve the planet, and fleet entries stop
+//! the engine until fleets land (P1.8).
+
+use crate::quantity::QuantityError;
+use crate::rules::Rules;
+use crate::solver::Solver;
 
 use super::{
     EntryStatus, FleetId, PlanetId, QueueEntry, QueueKind, ScheduledEvent, StateError, World,
@@ -44,39 +49,6 @@ pub trait Steps {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DomainEvent {}
 
-/// The production steps until their packages land: every live entry is [`EngineError::StepNotBuilt`],
-/// never a silent skip.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Pending;
-
-impl Steps for Pending {
-    type Event = DomainEvent;
-
-    fn planet_change(
-        &mut self,
-        _world: &mut World,
-        planet: PlanetId,
-    ) -> Result<Vec<DomainEvent>, EngineError> {
-        Err(EngineError::StepNotBuilt(QueueKind::PlanetChange(planet)))
-    }
-
-    fn fleet_arrival(
-        &mut self,
-        _world: &mut World,
-        fleet: FleetId,
-    ) -> Result<Vec<DomainEvent>, EngineError> {
-        Err(EngineError::StepNotBuilt(QueueKind::FleetArrival(fleet)))
-    }
-
-    fn fleet_return(
-        &mut self,
-        _world: &mut World,
-        fleet: FleetId,
-    ) -> Result<Vec<DomainEvent>, EngineError> {
-        Err(EngineError::StepNotBuilt(QueueKind::FleetReturn(fleet)))
-    }
-}
-
 /// Why the engine stopped. Except for [`EngineError::TimeBeforeNow`], an error from an advance
 /// poisons the world (D-023).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -111,6 +83,45 @@ pub enum EngineError {
     /// A live entry whose step has not been built yet.
     #[error("no step is built yet for {0:?}")]
     StepNotBuilt(QueueKind),
+    /// `advance_to` was given rules other than the world's version. Checked first; the world is
+    /// unchanged and not poisoned.
+    #[error("the world runs rules version {world}, but rules version {given} were given")]
+    RulesMismatch {
+        /// The world's rules version.
+        world: u32,
+        /// The given rules' version.
+        given: u32,
+    },
+    /// A build reached its cost, or a demolition its end: a transition, which P1.7 builds.
+    #[error("planet {}: entity {entity} has a transition due, and transitions are not built yet", planet.0)]
+    TransitionNotBuilt {
+        /// The planet being solved.
+        planet: PlanetId,
+        /// The construction, ship build or demolishing building.
+        entity: u64,
+    },
+    /// A quantity's crossing lies before now: its event was missed.
+    #[error("planet {}: entity {entity} crossed its boundary at {at_ms} ms, before now ({now} ms)", planet.0)]
+    MissedCrossing {
+        /// The planet being solved.
+        planet: PlanetId,
+        /// The planet itself for a stock, or the build.
+        entity: u64,
+        /// The missed crossing.
+        at_ms: i64,
+        /// Now.
+        now: i64,
+    },
+    /// A quantity could not be computed within 64 bits.
+    #[error("planet {}: entity {entity}: {error}", planet.0)]
+    Quantity {
+        /// The planet being solved.
+        planet: PlanetId,
+        /// The planet itself for a stock, or the build.
+        entity: u64,
+        /// What went wrong.
+        error: QuantityError,
+    },
     /// An entity's version counter is exhausted.
     #[error("entity {0} has no versions left")]
     VersionExhausted(u64),
@@ -130,9 +141,16 @@ pub enum EngineError {
 impl World {
     /// Processes every queued entry with time ≤ `t` in queue order, then sets world time to `t`,
     /// returning the domain events produced. Runs [`World::advance_with`] with the production
-    /// steps.
-    pub fn advance_to(&mut self, t: i64) -> Result<Vec<DomainEvent>, EngineError> {
-        self.advance_with(t, &mut Pending)
+    /// steps under `rules`, whose version must be the world's: otherwise
+    /// [`EngineError::RulesMismatch`], with nothing changed.
+    pub fn advance_to(&mut self, t: i64, rules: &Rules) -> Result<Vec<DomainEvent>, EngineError> {
+        if rules.version != self.rules_version {
+            return Err(EngineError::RulesMismatch {
+                world: self.rules_version,
+                given: rules.version,
+            });
+        }
+        self.advance_with(t, &mut Solver { rules })
     }
 
     /// The event loop. Pops entries in queue order up to `t`: stale ones are dropped, live ones

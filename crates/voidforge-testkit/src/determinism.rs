@@ -13,14 +13,19 @@
 //!   `advance_to` refuses live events, so the harnesses drive `advance_with` with these steps.
 //! - [`settle_stock`]: a stock settled event by event (crossing, snap, stop), for observation
 //!   invariance over quantities.
+//! - [`Economy`] and [`slow_build_rules`]: solved planets (P1.6) whose stocks cross 0 and their
+//!   caps through the production solver, with builds slowed so no transition (P1.7) comes due.
 
 use serde::Serialize;
 use voidforge_core::quantity::{Quantity, QuantityError};
+use voidforge_core::rules::{GRAMS_PER_TON, Rules};
 use voidforge_core::state::{
     Cargo, EngineError, FleetId, FleetState, Mission, PlanetId, QueueKind, ShipKind, Steps, World,
 };
 
-use crate::{ALICE, WorldBuilder};
+use voidforge_core::state::{BuildingKind, BuildingState, ShipBuildStatus};
+
+use crate::{ALICE, WorldBuilder, v0_rules};
 
 /// The canonical bytes of a value: its postcard encoding. Two runs are the same run when these
 /// are equal.
@@ -296,4 +301,156 @@ fn settle_crossing(q: Quantity, cap_g: i64, until: i64) -> Result<Quantity, Quan
 /// `n` stops evenly spread over `(from, to]`, ending exactly at `to`.
 pub fn even_stops(from: i64, to: i64, n: i64) -> Vec<i64> {
     (1..=n).map(|k| from + (to - from) * k / n).collect()
+}
+
+/// Rules v0 with every build's cost and build time multiplied by 1,000: the same rated rates,
+/// so flows and splits are Rules v0's, but no build completes within the suite's 100 hours.
+/// Solved scenarios never reach a transition, which P1.7 builds (D-025).
+pub fn slow_build_rules() -> Rules {
+    let mut rules = v0_rules();
+    let b = &mut rules.buildings;
+    let s = &mut rules.ships;
+    for build in [
+        &mut b.drill.build,
+        &mut b.refinery.build,
+        &mut b.shipyard.build,
+        &mut s.colony_ship.build,
+        &mut s.cargo_vessel.build,
+    ] {
+        build.cost_g *= 1_000;
+        build.build_time_ms *= 1_000;
+    }
+    rules
+        .validate()
+        .expect("slowing builds keeps the rules valid");
+    rules
+}
+
+/// A generated economy: planets with operational Drills and Refineries, constructions and a
+/// Shipyard with ship builds (never more buildings than Rules v0's 8 slots), and stocks anywhere from 0 to their caps (often exactly at one),
+/// every planet solved at time 0 under [`slow_build_rules`]. Planet 1 is always busy: a Drill
+/// and a Refinery with both stores nearly full, so every run crosses boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Economy {
+    /// Drives every choice.
+    pub seed: u64,
+    /// Planets, at least 1.
+    pub planets: u64,
+}
+
+impl Economy {
+    /// The starting world, solved. Equal economies give equal worlds.
+    pub fn world(&self, rules: &Rules) -> World {
+        let mut b = WorldBuilder::with_rules(rules.clone()).seed(self.seed);
+        let mut planets = Vec::new();
+        for i in 0..self.planets.max(1) {
+            let p = b.planet(None);
+            let r = |k: u64| mix(self.seed ^ i.rotate_left(20) ^ k);
+            let (drills, refineries) = if i == 0 { (1, 1) } else { (r(1) % 4, r(2) % 4) };
+            let constructions = r(3) % 2; // at most 3 + 3 + 1 + 1 = 8 slots
+            let shipyard = r(4) % 3 == 0;
+            for _ in 0..drills {
+                b.building(p, BuildingKind::Drill, BuildingState::Operational);
+            }
+            for _ in 0..refineries {
+                b.building(p, BuildingKind::Refinery, BuildingState::Operational);
+            }
+            let kinds = [
+                BuildingKind::Drill,
+                BuildingKind::Refinery,
+                BuildingKind::Shipyard,
+            ];
+            for k in 0..constructions {
+                b.construction(p, kinds[(r(5 + k) % 3) as usize], 0);
+            }
+            if shipyard {
+                let yard = b.building(p, BuildingKind::Shipyard, BuildingState::Operational);
+                for k in 0..r(8) % 5 {
+                    let kind = if r(9 + k) % 2 == 0 {
+                        ShipKind::CargoVessel
+                    } else {
+                        ShipKind::ColonyShip
+                    };
+                    let status = if k < 3 {
+                        ShipBuildStatus::Active
+                    } else {
+                        ShipBuildStatus::Waiting
+                    };
+                    b.ship_build(yard, kind, status);
+                }
+            }
+            let (ore_cap, ingot_cap) = (rules.planet.ore_cap_g, rules.planet.ingot_cap_g);
+            let level = |k: u64, cap: i64| match r(k) % 4 {
+                0 => 0,
+                1 => cap,
+                _ => (r(k + 1) % (cap as u64 / GRAMS_PER_TON as u64)) as i64 * GRAMS_PER_TON,
+            };
+            let (ore, ingots) = if i == 0 {
+                (ore_cap - 10 * GRAMS_PER_TON, ingot_cap - 20 * GRAMS_PER_TON)
+            } else {
+                (level(20, ore_cap), level(30, ingot_cap))
+            };
+            let remainder = |k: u64| (r(k) % 3_600_000) as i64;
+            b.stocks(
+                p,
+                Quantity::from_parts(
+                    ore,
+                    0,
+                    if ore == 0 || ore == ore_cap {
+                        0
+                    } else {
+                        remainder(40)
+                    },
+                    0,
+                )
+                .expect("remainder in range"),
+                Quantity::from_parts(
+                    ingots,
+                    0,
+                    if ingots == 0 || ingots == ingot_cap {
+                        0
+                    } else {
+                        remainder(41)
+                    },
+                    0,
+                )
+                .expect("remainder in range"),
+            );
+            planets.push(p);
+        }
+        let mut w = b.build();
+        for p in planets {
+            w.solve_planet(p, rules).expect("a generated planet solves");
+        }
+        w
+    }
+}
+
+/// An economy run to `to_ms` through production `advance_to`, in `advances` equal advances (the
+/// last takes the rest), with `observe` reading the world after each one.
+pub fn run_economy(
+    e: &Economy,
+    rules: &Rules,
+    to_ms: i64,
+    advances: i64,
+    mut observe: impl FnMut(&World),
+) -> Result<World, EngineError> {
+    let mut w = e.world(rules);
+    for k in 1..=advances {
+        let events = w.advance_to(to_ms * k / advances, rules)?;
+        assert!(
+            events.is_empty(),
+            "the solver produces no domain events yet"
+        );
+        observe(&w);
+    }
+    Ok(w)
+}
+
+/// How many times the economy's planets were solved past the first solve: one version per solve.
+pub fn solves(start: &World, end: &World) -> u64 {
+    end.planets
+        .values()
+        .map(|p| p.version - start.planets[&p.id].version)
+        .sum()
 }
