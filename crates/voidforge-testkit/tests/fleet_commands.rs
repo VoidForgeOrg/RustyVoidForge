@@ -245,6 +245,43 @@ fn assemble_refuses_cargo_beyond_either_stock() {
     accept(&mut s.w, ALICE, &at_home, H);
 }
 
+/// QA's carry from P1.10: loading exactly the whole stock of both resources is accepted (it
+/// kills a `have > want` comparison), and one gram more of either is refused.
+#[test]
+fn assemble_loads_exactly_the_whole_stock_but_not_a_gram_more() {
+    let mut b = WorldBuilder::new();
+    let home = b.player(ALICE);
+    let ships = [
+        b.ship(ALICE, ShipKind::CargoVessel, home),
+        b.ship(ALICE, ShipKind::CargoVessel, home),
+        b.ship(ALICE, ShipKind::CargoVessel, home),
+        b.ship(ALICE, ShipKind::CargoVessel, home),
+    ];
+    // 2,000 t capacity; stocks of 700 t ore and 900 t ingots, at rate 0 (unsolved).
+    b.stocks(
+        home,
+        Quantity::new(700 * T, 0, 0),
+        Quantity::new(900 * T, 0, 0),
+    );
+    let mut w = b.build();
+    let over_ore = Cargo {
+        ore_g: 700 * T + 1,
+        ingots_g: 900 * T,
+    };
+    let over_ingots = Cargo {
+        ore_g: 700 * T,
+        ingots_g: 900 * T + 1,
+    };
+    for cargo in [over_ore, over_ingots] {
+        let action = assemble(home, &ships, cargo);
+        reject(&mut w, ALICE, &action, 0, Rejection::InsufficientStock);
+    }
+    let fleet = fleet_of(&mut w, home, &ships, tons(700, 900));
+    assert_eq!(w.fleets[&fleet].cargo, tons(700, 900));
+    let p = &w.planets[&home];
+    assert_eq!((p.ore.value_g(), p.ingots.value_g()), (0, 0));
+}
+
 #[test]
 fn assemble_on_an_unowned_planet_needs_no_ownership_without_cargo() {
     let mut b = WorldBuilder::new();

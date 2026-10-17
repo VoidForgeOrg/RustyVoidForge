@@ -457,3 +457,39 @@ Each entry records its date, the package that made it, the decision, the reasons
     - Coverage (each action type accepted and rejected) is asserted over eight fixed economies rather than per generated case.
     - Ship conservation now allows a consumed Colony Ship that was completed during the run.
     - A planned recall leaves alone a fleet that a generated command already moved out of transit.
+
+### D-030: Views and score
+
+- Date and package: 2026-10-18, P1.11. Proposed by dev-build. **Lead ruling, overnight; advisor review pending** (slice 17, `ruling-lead-overnight.md`). **Q4 is PROVISIONAL, parked for Tom as game intent.**
+- Decision:
+  - **Entry point**: `World::view(&self, &Query, t, &Rules) -> Result<View, ViewError>`.
+    - It takes `&World`, so "Pure reads" holds by type, and the determinism suite also checks the bytes are unchanged.
+    - It needs the rules for D-025's labels and for `ScoringSpecs`, so it checks the version (`RulesMismatch`).
+    - Errors: `BeforeNow`; `Stale { valid_until }` (the caller must advance; a view never projects across an event); `Unknown`; `ScoreOutOfRange`; `Engine`.
+  - **Queries and typed results** (JSON and ISO formatting are Phase 3's):
+    - `Planet` → stocks (`amount_g`, `rate_g_per_h`, `cap_g`), buildings (status, label, construction progress), ship builds (status, label, progress) and roster;
+    - `PlanetsNear { center, radius }` → summaries (id, position, owner, distance ≤ radius, inclusive);
+    - `Player` → homeworld, owned planets, score;
+    - `Fleets { viewer }` → the viewer's own fleets (ships, cargo, capacity, speed, state).
+
+    Every view carries `as_of` and `valid_until`. Progress carries `delivered_g`, `cost_g`, `rate_g_per_h` and `eta_ms`: the exact rising crossing under current rates (D-018), or `None` while nothing flows.
+  - **Validity** (`valid_until`; `None` when nothing is scheduled). A view is defined for t with world time ≤ t < `valid_until`.
+    - A planet: the minimum of its `next_event` and the earliest arrival of a fleet in transit to it, since an arrival re-solves its target (D-027). This takes a scan of the fleets, O(fleets), because D-022's stored `next_event` alone would make the done-when false. A per-planet index of incoming fleets is a Phase 2 option if profiling asks for it.
+    - Multi-entity queries take the minimum:
+      - a player: their planets, as above, and their moving fleets;
+      - `PlanetsNear`: the earliest Colonize arrival at a listed planet, the only event that changes a summary;
+      - `Fleets`: the first arrival or return among them.
+    - Commands are inputs, not events; the host republishes after each one.
+  - **Score** (never stored; computed from the projection at t, in checked i128):
+    - planets owned × `planet`;
+    - operational buildings by kind;
+    - buildings under construction and ship builds (active or waiting) at points × delivered ÷ cost, rounded down per build;
+    - each ship the player owns counted once, by ID, wherever it is;
+    - ore and ingots in the player's storage and aboard their fleets (stationed or moving): grams summed per resource, then `floor(total × points ÷ per_g)` once. That keeps score unchanged when cargo moves between storage and fleets.
+  - **PROVISIONAL (Q4, parked for Tom):** a building being demolished counts in full until its demolition ends.
+    - The source: "cancelled or demolished buildings do not count" (Game Design, Scoring).
+    - Reading A, implemented: "demolished" means done, so it counts while it still exists and holds its slot.
+    - Reading B: it stops counting when demolition begins, as it stops working.
+    - The switch is one match arm in `World::score`. The test name contains "provisional".
+  - **Visibility**: planets, `PlanetsNear` and players are public. Fleets are visible only to their owner: the query names the viewer, and no query returns another player's fleets. **Phase 3 obligation**: the host takes the viewer from the auth token, never from the request body.
+  - **Determinism**: every observation in the invariance runs takes every view and checks the bytes are unchanged. The done-when (a view at any t before `valid_until` equals the same view after `advance_to(t)`, field for field, and is `Stale` at `valid_until`) is a named test and a property over `Economy` worlds with fleets and commands.

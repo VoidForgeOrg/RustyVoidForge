@@ -658,6 +658,37 @@ fn stocks_within_caps(w: &World) {
     }
 }
 
+/// "Pure reads" (P1.11, D-030): every view at world time succeeds (or names an unknown player)
+/// and leaves the world's bytes exactly as they were.
+fn views_are_pure(w: &World, rules: &Rules) {
+    use voidforge_core::view::{Query, ViewError};
+    let before = canonical_bytes(w);
+    let mut queries: Vec<Query> = w
+        .planets
+        .values()
+        .flat_map(|p| {
+            [
+                Query::Planet { planet: p.id },
+                Query::PlanetsNear {
+                    center: p.position,
+                    radius: 50_000,
+                },
+            ]
+        })
+        .collect();
+    for &player in w.players.keys() {
+        queries.push(Query::Player { player });
+        queries.push(Query::Fleets { viewer: player });
+    }
+    for q in &queries {
+        match w.view(q, w.time_ms, rules) {
+            Ok(_) | Err(ViewError::Unknown) => {}
+            Err(e) => panic!("{q:?} at {}: {e}", w.time_ms),
+        }
+    }
+    assert!(canonical_bytes(w) == before, "a view changed the world");
+}
+
 /// 100 hours in one production advance equals 1,000, through real crossings (and, under Rules
 /// v0, real completions; with fleets, real arrivals and a recall, both runs stopping at the
 /// recall); at every observation the world is linked, stocks are within 0 and their caps,
@@ -672,6 +703,7 @@ fn solved_invariance(e: &Economy, rules: &Rules) -> (u64, EconomyRun) {
         assert!(w.queue().iter().all(|q| q.at_ms > w.time_ms));
         assert_transition_invariants(w, rules);
         assert_fleet_invariants(w, rules);
+        views_are_pure(w, rules);
     })
     .unwrap();
     assert_eq!(observed.events, straight.events);
