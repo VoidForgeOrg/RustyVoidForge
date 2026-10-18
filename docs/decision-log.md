@@ -567,3 +567,58 @@ Each entry records its date, the package that made it, the decision, the reasons
     - It caps the total world size an operator can ask for (players × planets per player; P1.12 QA LOW).
     - Under D-031 option B (provisional), the default rules refuse worlds below roughly 31 to 40 expected players, because too few planets qualify as homeworld candidates. The bootstrap, and P3.6's end-to-end setup, must use at least about 40 players or denser rules, until Tom rules on D-031.
   - **P3.6** (the end-to-end scenario): dex configuration parity between local and CI becomes a mechanical check (a Phase 0 carry).
+
+### D-034: Schema and migrations, sqlx, and the Database tests stage
+
+- Date and package: 2026-10-18, P2.1. Proposed by dev-design, acting as builder (`slices/19-p2-1-schema/proposal-schema.md`). **Lead ruling, overnight; advisor review pending.** None of it is game intent.
+- Decision:
+  - **Tables**: `log_records` and `snapshots` match the [Persistence](Voidforge%20Architectural%20Design.md#persistence) tables column for column. `accounts` follows [Decision 9](Voidforge%20Technical%20Plan.md#decisions). They're created by three up-only sqlx migrations in `crates/voidforge-store/migrations/` (`0001_log_records`, `0002_snapshots`, `0003_accounts`), and `voidforge_store::migrate` applies them from Rust.
+  - **Nullability is read literally**: only `log_records.player_id` and `log_records.idempotency_key` are nullable. An `advance` record writes JSON values in `payload` and `outcome` (for example JSON `null`), never SQL NULL. `wall_time` and both `created_at` columns default to `now()`.
+  - **Constraints** (each one encodes a documented invariant):
+    - `log_records`:
+      - `kind` is one of `command`, `advance`, `rules_change` and `system`;
+      - `UNIQUE (player_id, idempotency_key)` ("unique per player"; NULLs stay distinct, so keyless records never collide);
+      - a key needs a player;
+      - `seq >= 1`;
+      - `rules_version >= 0`, since core's version is `u32` and P2.3 converts with `try_from`;
+      - `events` is a JSON array.
+    - `snapshots`:
+      - `seq >= 0`, where 0 is a snapshot before any record (the P2.9 bootstrap);
+      - `rules_version >= 0`;
+      - `state_hash` is exactly 32 bytes (BLAKE3-256, D-024).
+    - `accounts`:
+      - `player_id` is the primary key and must be UUID version 7. The check is `coalesce(uuid_extract_version(player_id), 0) = 7`: the function returns NULL outside the RFC 9562 variant, and a NULL check would pass. A test found this.
+      - issuer and subject are non-empty, and `UNIQUE (issuer, subject)`.
+    - `game_time` is unconstrained, because core's `i64` time refuses no sign, and the table is never stricter than the engine.
+    - Gap-free `seq` is the single writer's job (P2.3); there's no trigger.
+  - **No foreign keys.** The log must replay into a database without accounts (P2.6 golden logs, P2.7 replay). A bootstrap snapshot has no record, and old records may be pruned.
+  - **Migrations only add**:
+    - in CI, `.github/scripts/check-migrations-only-add.sh` fails if a migration on the base revision is modified, renamed or deleted, or if a new one doesn't sort after the base's highest version. It has 15 regression cases, five of which also check the reason it gives;
+    - at run time, sqlx refuses an applied migration whose checksum changed (a named test).
+    - A destructive statement in a new migration is a review matter: no regex can judge SQL soundly.
+  - **sqlx `=0.9.0`**, with no default features plus `postgres`, `runtime-tokio`, `macros` and `migrate`. It's a normal dependency of voidforge-store only.
+    - No TLS, because Postgres is on localhost and a CI service. No `json` or `uuid`, which P2.3 and P3.3 add with their own entries.
+    - `cargo tree -e normal,build` shows every new crate reachable from voidforge-store and nothing else. Core's, rules' and worldgen's trees are byte-identical to main's (`proof/dependency-reach.txt`).
+    - New license: Zlib (foldhash).
+    - The duplicates, each a `deny.toml` skip with its reason:
+      - sqlx-core is still on the RustCrypto 0.10 generation, while sqlx-postgres moved to 0.11: sha2, digest, block-buffer, crypto-common and cpufeatures;
+      - base64 0.22 (the telemetry stack uses 0.23);
+      - hashbrown 0.16 (indexmap uses 0.17);
+      - rand, rand_core and getrandom 0.10/0.4, used by sqlx-postgres for SCRAM nonces. Until now these were in the tree only through proptest as a dev-dependency (D-024), and cargo-deny leaves dev-only duplicates out by default. Now they're normal dependencies, reached only from voidforge-store.
+    - 0.8.6 was compared: it brings 6 duplicates (including rand_chacha 0.3 beside worldgen's pinned 0.9) and two unlisted licenses, so 0.9.0 is kept.
+  - **Offline query metadata**: `.sqlx/` at the workspace root, written by `cargo sqlx prepare --workspace -- --all-targets` against a migrated database. With `DATABASE_URL` unset, the macros read it, so `lint` and `test` build without Postgres.
+  - **sqlx-cli `=0.9.0`**, a tool, built with `cargo install sqlx-cli@0.9.0 --locked --no-default-features --features postgres`. taiki-e/install-action has no manifest for it; rust-cache keeps `~/.cargo/bin`.
+  - **Where the Postgres tests run**:
+    - The store's tests are `#[sqlx::test]` with `#[ignore = "needs Postgres: just db-test"]`, so `lint` and `test` compile and lint them but don't run them.
+    - `.github/scripts/database.sh` runs them with `--run-ignored only`, after applying the migrations to an empty database twice (the second run must apply nothing) and running `cargo sqlx prepare --check`.
+    - A cargo feature would have hidden the tests from clippy. Skipping when `DATABASE_URL` is unset would have been a silent pass.
+  - **The `database` CI job** uses a Postgres service with the compose file's image digest and database `voidforge_test`. It runs the guardrail, its cases and `database.sh` on every pull request and on main. **Making it a required check needs a ruleset change that agents can't make.** The prepared body is in the P2.1 proof, parked for the owner, as in P1.5.
+  - **Local runs and the owner's data**: `just db-test` runs the same commands against the `just up` stack.
+    - `database.sh` refuses any `DATABASE_URL` whose database isn't `voidforge_test`.
+    - It only ever creates `voidforge_test`, and only ever drops databases named `_sqlx_test_*` (before and after each run, so nothing accumulates).
+    - It never connects to `voidforge`.
+    - `just migrate` has no default target: it requires an explicit `DATABASE_URL`. Applying the schema to the owner's `voidforge` database stays with the owner.
+- Carried obligations:
+  - **P2.4: a key is unique per player forever, but the host remembers keys only for a window.** A key reused after the window would look new to the host, then fail the append on the unique constraint, and a failed append is fatal. So one client could stop the host. P2.4 must refuse an expired key before the append, or keep the window covering the whole log.
+  - **P2.3**: write `rules_version` with `i32::try_from`, and write JSON values (not SQL NULL) in an advance record's `payload` and `outcome`.
+- Where it's enforced: the migrations; `crates/voidforge-store/tests/database.rs` (19 Postgres tests); `.github/scripts/{check-migrations-only-add.sh, test-check-migrations-only-add.sh, database.sh}`; the CI job `database`; `deny.toml`; and the [version table](versions.md).

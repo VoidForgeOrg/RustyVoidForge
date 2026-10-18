@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"n!\" FROM pg_constraint c\n           JOIN pg_namespace n ON n.oid = c.connamespace\n           WHERE c.contype = 'f' AND n.nspname = 'public'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1dc08e7aa34d945e51d1ea7f20260e657a347e697417a4d62b4208a5bc8c8937"
+}

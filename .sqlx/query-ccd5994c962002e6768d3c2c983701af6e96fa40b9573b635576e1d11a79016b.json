@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT conname::text AS \"name!\", pg_get_constraintdef(oid) AS \"def!\"\n           FROM pg_constraint\n           WHERE conrelid = $1::text::regclass AND contype <> 'n'\n           ORDER BY conname",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "def!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "ccd5994c962002e6768d3c2c983701af6e96fa40b9573b635576e1d11a79016b"
+}

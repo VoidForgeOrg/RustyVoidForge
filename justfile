@@ -1,11 +1,12 @@
 # Voidforge task runner (Technical Plan, Tech stack and CI/CD). The lint, supply-chain and test
 # recipes run the same commands as the CI jobs of the same name, so a red check reproduces here.
-# Recipes appear with the packages that implement them: e2e (P3.6), replay (P2.7), seed (P2.9)
+# db-test and migrate arrived with P2.1 (D-034). Recipes appear with the packages that implement them: e2e (P3.6), replay (P2.7), seed (P2.9)
 # and bless (P2.6) do not exist yet (decision log D-014).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 compose := "docker compose -f deploy/compose.yaml"
+test_db_url := "postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge_test"
 
 # List the recipes.
 default:
@@ -50,6 +51,21 @@ supply-chain:
 # The CI test job.
 test:
     cargo nextest run --workspace --locked
+
+# It uses only the dedicated voidforge_test database and the _sqlx_test_* databases it creates
+# and drops, never voidforge (decision log D-034).
+# The CI database job, against the local stack.
+db-test:
+    .github/scripts/check-migrations-only-add.sh origin/main
+    .github/scripts/test-check-migrations-only-add.sh
+    DATABASE_URL={{test_db_url}} PSQL="{{compose}} exec -T postgres psql -U voidforge" \
+        .github/scripts/database.sh
+
+# There is no default database: the target is always explicit (decision log D-034).
+# Apply the migrations with sqlx-cli to the database DATABASE_URL names.
+migrate:
+    @test -n "${DATABASE_URL:-}" || { echo "error: set DATABASE_URL to the database to migrate" >&2; exit 2; }
+    sqlx migrate run --source crates/voidforge-store/migrations
 
 # The CI determinism job: the suite, then the two-process double run (decision log D-024).
 determinism:
