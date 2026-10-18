@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Regression cases for database-lock.sh (decision log D-044), against a real Postgres server:
-# the same functions database.sh uses, on a scratch lock named voidforge_test_lock_selftest.
+# the same functions database.sh uses, on a scratch lock of this run's own,
+# voidforge_test_lock_selftest_<pid>, dropped on exit.
 #   1. a free lock is taken and released;
 #   2. a live holder makes a run wait, then fail with the clearing command; the lock is kept;
 #   3. review-r2's M1, made deterministic: two runs both see a holder that is no longer running.
 #      Both must refuse (none enters), and the stale lock must still be there, untouched;
-#   4. a release leaves alone a lock whose comment names another holder.
+#   4. a release leaves alone a lock whose comment names another holder;
+#   5. two runs of this script at once both pass: each has its own scratch lock, so concurrent
+#      `just db-test` runs reach the real lock instead of breaking each other's self-test (phase 2
+#      gate round 3). A nested run (LOCK_TEST_NESTED set) skips this case.
 # Every worker runs under a hard timeout (LOCK_TEST_TIMEOUT seconds, default 60), so a lock that
 # deadlocks or never returns fails its case by timeout, never hangs the run (a mutant that let a
 # second worker in once deadlocked an earlier version of this test).
 # Environment: PSQL, a psql command for the server (as for database.sh). The CI database job and
-# just db-test run this before database.sh. It touches only voidforge_test_lock_selftest.
+# just db-test run this before database.sh. It touches only its own voidforge_test_lock_selftest_*.
 set -euo pipefail
 limit=${LOCK_TEST_TIMEOUT:-60}
 # A live holder must never be waited for here: case 2 checks the wait's end with no wait at all.
@@ -29,7 +33,13 @@ await() {
 
 : "${PSQL:?set PSQL to a psql command for the server}"
 read -r -a psql <<< "$PSQL"
-lock_db=voidforge_test_lock_selftest
+# Workers share their parent's scratch lock; every top-level run gets its own.
+if [ "${1:-}" = --worker ]; then
+    lock_db=$LOCK_TEST_DB
+else
+    lock_db=voidforge_test_lock_selftest_$$
+    export LOCK_TEST_DB=$lock_db
+fi
 fail() { echo "error: $*" >&2; exit 2; }
 real_sql() { "${psql[@]}" -X -q -v ON_ERROR_STOP=1 -At -d postgres -c "$1" < /dev/null; }
 
@@ -124,6 +134,16 @@ lock_acquire
 real_sql "COMMENT ON DATABASE $lock_db IS 'elsewhere 1'"
 lock_release 2> "$scratch/release.log"
 check "the lock is kept, with a warning" "$(exists) $(grep -c 'left alone' "$scratch/release.log")" "1 1"
+
+if [ -z "${LOCK_TEST_NESTED:-}" ]; then
+    echo "--- 5. two runs of this script at once both pass (phase 2 gate round 3)"
+    LOCK_TEST_NESTED=1 with_timeout "$0" > "$scratch/n1.log" 2>&1 & n1=$!
+    LOCK_TEST_NESTED=1 with_timeout "$0" > "$scratch/n2.log" 2>&1 & n2=$!
+    wait "$n1" && c1=0 || c1=$?
+    wait "$n2" && c2=0 || c2=$?
+    check "both exit 0" "$c1 $c2" "0 0"
+    [ "$c1 $c2" = "0 0" ] || grep -h FAIL "$scratch/n1.log" "$scratch/n2.log" || true
+fi
 
 [ "$bad" -eq 0 ] && echo "ok: every database-lock case passed"
 exit "$bad"
