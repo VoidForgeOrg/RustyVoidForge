@@ -16,9 +16,10 @@
 #
 # A shared local server (phase 2 gate, QA O1): several agents may run this at once on one `just up`
 # stack, where force-dropping every _sqlx_test_* database killed another seat's live run. So:
-# - one run at a time per server: a run holds voidforge_test_lock (CREATE DATABASE is atomic) and
-#   waits up to VOIDFORGE_DB_LOCK_WAIT seconds (default 1800) for another run's; a lock whose
-#   holder (host and pid in its comment) is a dead process on this host is taken over;
+# - one run at a time per server: a run holds voidforge_test_lock (database-lock.sh) and waits up
+#   to VOIDFORGE_DB_LOCK_WAIT seconds (default 1800) for another run's. A lock whose holder (host
+#   and pid in its comment) is no longer running is refused with the command that clears it,
+#   never taken over (test-database-lock.sh is the regression);
 # - cleanup never terminates a session: it drops idle _sqlx_test_* databases before and after the
 #   run, refuses to start while one is in use (a test run outside this script, such as a direct
 #   cargo nextest against voidforge_test), and after the run leaves one in use with a warning.
@@ -48,38 +49,8 @@ sql() { "${psql[@]}" -X -q -v ON_ERROR_STOP=1 -At -d postgres -c "$1" < /dev/nul
 
 # --- One run at a time per server
 lock_db=voidforge_test_lock
-holder="$(hostname) $$"
-held=
-acquire() {
-    local wait=${VOIDFORGE_DB_LOCK_WAIT:-1800} waited=0 owner said=
-    until sql "CREATE DATABASE $lock_db" 2> /dev/null; do
-        owner=$(sql "SELECT coalesce(shobj_description(oid, 'pg_database'), '')
-                     FROM pg_database WHERE datname = '$lock_db'")
-        if [ -z "$(sql "SELECT 1 FROM pg_database WHERE datname = '$lock_db'")" ]; then
-            # Not there, yet not created: a real error, or the holder released it just now.
-            sql "CREATE DATABASE $lock_db" && break
-            fail "cannot create the lock database $lock_db"
-        fi
-        # The holder is a dead process on this host: it never released the lock.
-        if [ "${owner% *}" = "$(hostname)" ] && ! ps -p "${owner##* }" > /dev/null 2>&1; then
-            echo "taking over $lock_db from a dead run ($owner)"
-            sql "DROP DATABASE IF EXISTS $lock_db"
-            continue
-        fi
-        [ -n "$said" ] || { echo "waiting for another database-stage run ($owner) to finish"; said=1; }
-        [ "$waited" -lt "$wait" ] || fail "another run ($owner) still holds $lock_db after ${wait}s; \
-if no run is active, drop it: DROP DATABASE $lock_db"
-        sleep 5
-        waited=$((waited + 5))
-    done
-    held=1
-    sql "COMMENT ON DATABASE $lock_db IS '$holder'"
-}
-
-release() {
-    [ -n "$held" ] || return 0
-    sql "DROP DATABASE IF EXISTS $lock_db"
-}
+# shellcheck source=database-lock.sh
+. "$(dirname "$0")/database-lock.sh"
 
 # Drops idle _sqlx_test_* databases (and only those), never terminating a session, then clears
 # sqlx's bookkeeping rows for databases that are gone. With `before`, a database in use is an
@@ -110,11 +81,11 @@ if [ -z "$(sql "SELECT 1 FROM pg_database WHERE datname = 'voidforge_test'")" ];
         || fail "cannot create voidforge_test"
     echo "created voidforge_test"
 fi
-trap 'status=$?; release || { echo "error: releasing $lock_db failed" >&2; status=2; }; exit $status' EXIT
-acquire
+trap 'status=$?; lock_release || { echo "error: releasing $lock_db failed" >&2; status=2; }; exit $status' EXIT
+lock_acquire
 cleanup before
 trap 'status=$?; cleanup after || { echo "error: cleanup failed" >&2; status=2; }
-      release || { echo "error: releasing $lock_db failed" >&2; status=2; }; exit $status' EXIT
+      lock_release || { echo "error: releasing $lock_db failed" >&2; status=2; }; exit $status' EXIT
 
 echo "--- migrations on an empty database, then a second run"
 sql "CREATE DATABASE \"$cli_db\""

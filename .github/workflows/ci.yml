@@ -121,6 +121,10 @@ jobs:
         run: .github/scripts/check-migrations-only-add.sh "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}"
       - name: Migrations guardrail regression cases
         run: .github/scripts/test-check-migrations-only-add.sh
+      - name: Database-stage lock regression cases
+        run: .github/scripts/test-database-lock.sh
+        env:
+          PSQL: docker exec -i ${{ job.services.postgres.id }} psql -U voidforge
       - name: Migrations on an empty database twice, the sqlx metadata check, store tests
         run: .github/scripts/database.sh
         env:

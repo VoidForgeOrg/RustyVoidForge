@@ -470,6 +470,55 @@ fn an_unreadable_golden_is_an_input_error_not_skipped() {
     assert_eq!((code, v["result"].as_str()), (4, Some("error")), "{v}");
 }
 
+/// A golden directory without its manifest is an input error naming it, never left out of a sweep
+/// (phase 2 gate round 2: dev-qa's L1, confirmed by review-r2). The complete golden beside it is
+/// still verified and reported, and a directory of unrelated files is still passed over.
+#[test]
+fn a_golden_missing_its_manifest_is_an_input_error_not_skipped() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("replay-cli/missing-manifest");
+    let _ = std::fs::remove_dir_all(&root);
+    for name in ["a", "b"] {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in ["start.vfsnap", "records.jsonl", "manifest.json"] {
+            std::fs::copy(goldens().join("whole-loop").join(f), dir.join(f)).unwrap();
+        }
+    }
+    std::fs::create_dir_all(root.join("notes")).unwrap();
+    std::fs::write(root.join("notes/README.md"), "not a golden").unwrap();
+    std::fs::remove_file(root.join("b/manifest.json")).unwrap();
+    let (code, v) = json(&["golden", root.to_str().unwrap(), "--rules", &v0()]);
+    assert_eq!((code, v["result"].as_str()), (4, Some("error")), "{v}");
+    let sources = v["sources"].as_array().unwrap();
+    let found: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|s| (s["source"].as_str().unwrap(), s["result"].as_str().unwrap()))
+        .collect();
+    let (a, b) = (root.join("a"), root.join("b"));
+    assert_eq!(
+        found,
+        [
+            (a.to_str().unwrap(), "verified"),
+            (b.to_str().unwrap(), "error")
+        ],
+        "{v}"
+    );
+    assert!(
+        sources[1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("no manifest.json"),
+        "{v}"
+    );
+    // Named directly, too.
+    let (code, v) = json(&["golden", b.to_str().unwrap(), "--rules", &v0()]);
+    assert_eq!(
+        (code, v["sources"][0]["source"].as_str()),
+        (4, b.to_str()),
+        "{v}"
+    );
+}
+
 /// The lead's Q3 requirement: --help says what a pass under --build means.
 #[test]
 fn help_says_what_a_pass_under_build_means() {

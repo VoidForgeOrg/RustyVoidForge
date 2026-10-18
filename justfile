@@ -58,6 +58,7 @@ test:
 db-test:
     .github/scripts/check-migrations-only-add.sh origin/main
     .github/scripts/test-check-migrations-only-add.sh
+    PSQL="{{compose}} exec -T postgres psql -U voidforge" .github/scripts/test-database-lock.sh
     DATABASE_URL={{test_db_url}} PSQL="{{compose}} exec -T postgres psql -U voidforge" \
         .github/scripts/database.sh
 

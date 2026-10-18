@@ -371,56 +371,91 @@ type Found = Result<PathBuf, (String, VerifyError)>;
 
 /// The golden directories under `paths`: a path with a manifest is one golden; otherwise its
 /// subdirectories with manifests, sorted. A path with none is an input error, and so is anything
-/// that can't be read on the way: an unreadable entry is never skipped (phase 2 gate sweep).
+/// that can't be read on the way: an unreadable entry is never skipped (phase 2 gate sweep). A
+/// directory with a golden's other files but no manifest is an incomplete golden, an input error
+/// naming it, never left out of a sweep (phase 2 gate, round 2).
 fn goldens(paths: &[PathBuf]) -> Vec<Found> {
     let mut out = Vec::new();
     for path in paths {
-        let failed = |e: String| Err((path.display().to_string(), VerifyError::Input(e)));
-        match has_manifest(path) {
-            Ok(true) => {
+        let failed = |at: &Path, e: String| Err((at.display().to_string(), VerifyError::Input(e)));
+        match kind(path) {
+            Ok(Kind::Golden) => {
                 out.push(Ok(path.clone()));
                 continue;
             }
-            Ok(false) => {}
+            Ok(Kind::Incomplete) => {
+                out.push(failed(path, INCOMPLETE.to_owned()));
+                continue;
+            }
+            Ok(Kind::Other) => {}
             Err(e) => {
-                out.push(failed(e));
+                out.push(failed(path, e));
                 continue;
             }
         }
-        let dirs = std::fs::read_dir(path)
+        let children = std::fs::read_dir(path)
             .map_err(|e| e.to_string())
             .and_then(|entries| {
-                let mut dirs = Vec::new();
+                let mut children = Vec::new();
                 for entry in entries {
                     let dir = entry.map_err(|e| e.to_string())?.path();
-                    if has_manifest(&dir)? {
-                        dirs.push(dir);
+                    match kind(&dir) {
+                        Ok(Kind::Other) => {}
+                        Ok(k) => children.push((dir, Ok(k))),
+                        Err(e) => children.push((dir, Err(e))),
                     }
                 }
-                Ok(dirs)
+                Ok(children)
             });
-        match dirs {
-            Err(e) => out.push(failed(e)),
-            Ok(dirs) if dirs.is_empty() => {
-                out.push(failed("no golden here (no manifest.json)".to_owned()));
+        match children {
+            Err(e) => out.push(failed(path, e)),
+            Ok(children) if children.is_empty() => {
+                out.push(failed(path, "no golden here (no manifest.json)".to_owned()));
             }
-            Ok(mut dirs) => {
-                dirs.sort();
-                out.extend(dirs.into_iter().map(Ok));
+            Ok(mut children) => {
+                children.sort_by(|a, b| a.0.cmp(&b.0));
+                out.extend(children.into_iter().map(|(dir, k)| match k {
+                    Ok(Kind::Golden) => Ok(dir),
+                    Ok(_) => failed(&dir, INCOMPLETE.to_owned()),
+                    Err(e) => failed(&dir, e),
+                }));
             }
         }
     }
     out
 }
 
-/// Whether `dir` holds a manifest: absent is `false`; any other failure to look is an error.
-fn has_manifest(dir: &Path) -> Result<bool, String> {
-    let manifest = dir.join("manifest.json");
-    match std::fs::metadata(&manifest) {
+const INCOMPLETE: &str = "an incomplete golden: it has golden files but no manifest.json";
+
+/// What a directory is to the golden search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// It holds a manifest.
+    Golden,
+    /// It holds a golden's snapshot or records, but no manifest.
+    Incomplete,
+    /// Anything else, which a search passes over (a README, an unrelated directory).
+    Other,
+}
+
+/// What `dir` is: a missing file is absent; any other failure to look is an error.
+fn kind(dir: &Path) -> Result<Kind, String> {
+    if has_file(dir, FILES[2])? {
+        Ok(Kind::Golden)
+    } else if has_file(dir, FILES[0])? || has_file(dir, FILES[1])? {
+        Ok(Kind::Incomplete)
+    } else {
+        Ok(Kind::Other)
+    }
+}
+
+fn has_file(dir: &Path, name: &str) -> Result<bool, String> {
+    let file = dir.join(name);
+    match std::fs::metadata(&file) {
         Ok(m) => Ok(m.is_file()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => Ok(false),
-        Err(e) => Err(format!("{}: {e}", manifest.display())),
+        Err(e) => Err(format!("{}: {e}", file.display())),
     }
 }
 

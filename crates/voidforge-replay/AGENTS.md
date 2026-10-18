@@ -50,7 +50,7 @@ voidforge-replay inspect postgres [--database-url <URL>] [--json]
 - Telemetry: `main` calls `voidforge_telemetry::init` once, first, and `Telemetry::shutdown` before exit, reporting a failed shutdown with a non-zero exit ([D-016](../../docs/decision-log.md#d-016-telemetry-bootstrap)). It never configures its own exporter or subscriber.
 - Replay is an offline caller of the core: it rebuilds a world from a snapshot and the log and never touches live state. Every record goes through `voidforge_store::replay::replay_record`, the same function host recovery uses. There's no second path.
 - Replays are pinned to a build and a rules version, and a mismatch is refused (exit 3). The build pin applies to records; snapshot rows decode under their own build.
-- A failure is never turned into a value: a core error (a score out of range, say) is a divergence, and an unreadable golden is an input error, never skipped.
+- A failure is never turned into a value: a core error (a score out of range, say) is a divergence, and an unreadable golden, or one with its snapshot or records but no manifest, is an input error naming it, never skipped.
 - `advance` records are recomputed and checked against their recorded events, never applied.
 - Replaying the same log gives byte-identical state, the same domain events and the same output every time.
 
@@ -66,7 +66,7 @@ cargo nextest run -p voidforge-replay
   - every golden verifies;
   - the tamper matrix (an event swapped or edited, an outcome flipped, a hash, a record removed or the last one dropped, two records swapped, the end hash, a score) is pinpointed to its seq with exit 1;
   - a scoring error in the core diverges with exit 1, even when the manifest names `i64::MIN`;
-  - an unreadable golden in a directory of goldens is an input error (exit 4);
+  - an unreadable golden, or one missing its manifest, in a directory of goldens is an input error (exit 4) beside the verified rest;
   - a build or rules mismatch is refused with exit 3;
   - inspection is labeled unverified;
   - the output is byte-identical;
