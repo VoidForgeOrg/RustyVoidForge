@@ -427,7 +427,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-029: Commands, part 2: the five fleet commands and their reason codes
 
-- Date and package: 2026-10-17, P1.10. Proposed by dev-build. **Lead ruling, overnight; advisor review pending**: orch-advisor was held at a hook prompt, and orch-lead ruled on the six API-shape questions as proposed (slice 16, `ruling-lead-overnight.md`). Any amendment from the advisor's review lands as a follow-up before Phase 3.
+- Date and package: 2026-10-17, P1.10. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. orch-advisor was held at a hook prompt, and orch-lead ruled on the six API-shape questions as proposed (slice 16, `ruling-lead-overnight.md`). Any amendment from the advisor's review lands as a follow-up before Phase 3.
 - Decision:
   - **Payloads** (new `Action` variants): `AssembleFleet { planet, ships: BTreeSet<ShipId>, cargo: Cargo }`, `SendFleet { fleet, target, mission }`, `RecallFleet { fleet }`, `DisbandFleet { fleet }`, `TriggerUnload { fleet }`.
     - Cargo is grams per resource; zero is "no cargo". The design's "spread across Cargo Vessels by tonnage" needs nothing more, since cargo is a fleet total (D-022).
@@ -460,7 +460,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-030: Views and score
 
-- Date and package: 2026-10-18, P1.11. Proposed by dev-build. **Lead ruling, overnight; advisor review pending** (slice 17, `ruling-lead-overnight.md`). **Q4 is PROVISIONAL, parked for Tom as game intent.**
+- Date and package: 2026-10-18, P1.11. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 17, `ruling-lead-overnight.md`.) **Q4 is PROVISIONAL, parked for Tom as game intent.**
 - Decision:
   - **Entry point**: `World::view(&self, &Query, t, &Rules) -> Result<View, ViewError>`.
     - It takes `&World`, so "Pure reads" holds by type, and the determinism suite also checks the bytes are unchanged.
@@ -496,7 +496,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-031: World generation
 
-- Date and package: 2026-10-18, P1.12. Proposed by dev-build. **Lead ruling, overnight; advisor review pending** (slice 18, `ruling-lead-overnight.md`). **The placement option is PROVISIONAL, pending Tom (game intent).**
+- Date and package: 2026-10-18, P1.12. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 18, `ruling-lead-overnight.md`.) **The placement option is PROVISIONAL, pending Tom (game intent).**
 - Decision:
   - **Entry point**: `voidforge_worldgen::generate(seed, players, &Rules) -> Result<World, WorldgenError>`.
     - It produces the universe's first `World`: at time 0 (the host sets the epoch in P2.9), under the rules' version, with the seed recorded.
@@ -570,7 +570,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-034: Schema and migrations, sqlx, and the Database tests stage
 
-- Date and package: 2026-10-18, P2.1. Proposed by dev-design, acting as builder (`slices/19-p2-1-schema/proposal-schema.md`). **Lead ruling, overnight; advisor review pending.** None of it is game intent.
+- Date and package: 2026-10-18, P2.1. Proposed by dev-design, acting as builder (`slices/19-p2-1-schema/proposal-schema.md`). Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. None of it is game intent.
 - Decision:
   - **Tables**: `log_records` and `snapshots` match the [Persistence](Voidforge%20Architectural%20Design.md#persistence) tables column for column. `accounts` follows [Decision 9](Voidforge%20Technical%20Plan.md#decisions). They're created by three up-only sqlx migrations in `crates/voidforge-store/migrations/` (`0001_log_records`, `0002_snapshots`, `0003_accounts`), and `voidforge_store::migrate` applies them from Rust.
   - **Nullability is read literally**: only `log_records.player_id` and `log_records.idempotency_key` are nullable. An `advance` record writes JSON values in `payload` and `outcome` (for example JSON `null`), never SQL NULL. `wall_time` and both `created_at` columns default to `now()`.
@@ -625,7 +625,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-035: Snapshot codec, header, hash and engine build
 
-- Date and package: 2026-10-18, P2.2. Proposed by dev-design, acting as builder (`slices/20-p2-2-snapshot-codec/proposal-codec.md`). **Lead ruling, overnight; advisor review pending.** None of it is game intent.
+- Date and package: 2026-10-18, P2.2. Proposed by dev-design, acting as builder (`slices/20-p2-2-snapshot-codec/proposal-codec.md`). Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. None of it is game intent.
 - Decision:
   - **One encoding, two calls, one guard.** The canonical encoding is postcard with its default configuration (D-024).
     - `voidforge_store::canonical::to_bytes` and testkit's `determinism::canonical_bytes` both call `postcard::to_allocvec`.
@@ -668,7 +668,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-036: The engine host loop, its log store and the record format
 
-- Date and package: 2026-10-18, P2.3. Proposed by dev-design, acting as builder (`slices/21-p2-3-host-loop/proposal-host.md`). **Lead ruling, overnight; advisor review pending.** None of it is game intent.
+- Date and package: 2026-10-18, P2.3. Proposed by dev-design, acting as builder (`slices/21-p2-3-host-loop/proposal-host.md`). Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. None of it is game intent.
 - Decision:
   - **One thread owns the World.** `voidforge_host::spawn` starts a dedicated OS thread running a current-thread tokio runtime with every driver enabled, and the host loop is its only task.
     - Callers hold a `HostHandle`: `submit` through a bounded inbox, gets a `Receipt` (seq, t, outcome), `Busy` when the inbox is full (the API's 503), or `Stopped`. They also read the `ReadModel` and the counters.

@@ -276,7 +276,7 @@ The engine host is the only writer for its universe: one thread owns the `World`
 2. For a command, look up its idempotency key. A known key returns the logged outcome without applying anything.
 3. Stamp t = max(wall clock, last t) and take the next sequence number.
 4. Run `apply(command, t)`, or `advance_to(t)` when only time has passed.
-5. Append one log record with the command, t, the outcome and the domain events. Under load, several records share one durable write (group commit).
+5. Append one log record with the command, t, the outcome and the domain events. A step that only advances time and fires no domain events appends nothing: replay reproduces it through observation invariance, because the next logged step advances through the same instant to the same state (D-024, D-036). Under load, several records share one durable write (group commit).
 6. Reply and publish the new read model.
 
 | Crash point | After restart | The client sees |
@@ -319,7 +319,7 @@ Table `snapshots`:
 | `payload` | bytea | Serialized `World`, including the queue and derived fields |
 | `created_at` | timestamptz | When it was taken |
 
-- An `advance` record stores events that fired with no command, so the log is a complete history. Replay recomputes them and checks they match; it never applies them.
+- An `advance` record stores events that fired with no command, so the log is a complete history of events and commands. Replay recomputes them and checks they match; it never applies them. An advance that fires no events isn't recorded; replay reproduces it, because the next logged step reaches the same state (D-036).
 - Snapshots are taken between steps on a schedule and at shutdown. A restore uses the snapshot as is, so a restored engine is byte-identical to one that never stopped.
 - Recovery loads the newest snapshot with a matching build, replays later records, checks their recorded events, then advances to now.
 - A standby replica tails the log, applies the same records and can take over after replaying to the head.
