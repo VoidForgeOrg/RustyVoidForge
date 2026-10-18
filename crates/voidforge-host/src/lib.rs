@@ -495,6 +495,13 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                 return Ok(());
             }
         }
+        // The read model names the log head from the start, so a host spawned on a non-empty
+        // log (recovery always is) does not report seq 0 until its next append (carry e).
+        self.publish.send_replace(Arc::new(ReadModel {
+            seq: self.next_seq - 1,
+            world: Arc::new(self.world.clone()),
+            rules: self.rules.clone(),
+        }));
         let _ = started.send(Ok(()));
         let result = self.serve().await;
         // Stopping: refuse what is still queued, so no caller waits forever.

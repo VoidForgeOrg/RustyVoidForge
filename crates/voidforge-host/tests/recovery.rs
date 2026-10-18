@@ -741,3 +741,53 @@ async fn a_tail_record_with_other_events_is_a_divergence() {
         }))
     ));
 }
+
+#[tokio::test]
+async fn a_host_spawned_on_a_non_empty_log_reads_the_log_head() {
+    // Carry (e): the read model's seq is "the last durable record", from the first moment,
+    // including after an eventless turn and before any new record.
+    let rules = slow_build_rules();
+    let e = Economy {
+        seed: 7,
+        planets: 3,
+        fleets: false,
+        commands: 0,
+    };
+    let log = MemoryLog::new();
+    let start = e.world(&rules);
+    log.clone()
+        .write_snapshot(&SnapshotRow::new(
+            0,
+            &snapshot::encode(&start, &build()).unwrap(),
+        ))
+        .await
+        .unwrap();
+    let first = start.queue().first().unwrap().at_ms;
+    let clock = clock_at(0);
+    let (mut handle, task) = spawn_on(start, &rules, &log, &clock, config());
+    clock.set(EPOCH + first);
+    common::settle(&mut handle, &clock).await;
+    drop(handle);
+    task.join().unwrap();
+    let head = log.snapshot().last().unwrap().seq;
+    assert_eq!(head, 1);
+    let back = recover(&log, &rules).await.unwrap();
+    let mut probe = back.world.clone();
+    let crossing = probe.queue().first().unwrap().at_ms;
+    assert!(
+        probe.advance_to(crossing, &rules).unwrap().is_empty(),
+        "the next entry is eventless"
+    );
+    let (mut handle, task) = spawn_on(back.world, &rules, &log, &clock, config());
+    assert_eq!(handle.read().seq, head, "at start");
+    clock.set(EPOCH + crossing);
+    common::settle(&mut handle, &clock).await;
+    assert_eq!(
+        handle.read().world.time_ms,
+        crossing,
+        "an eventless turn was published"
+    );
+    assert_eq!(handle.read().seq, head, "after an eventless turn");
+    drop(handle);
+    task.join().unwrap();
+}
