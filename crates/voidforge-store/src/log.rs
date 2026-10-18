@@ -155,6 +155,39 @@ pub struct LogRecord {
     pub engine_build: EngineBuild,
 }
 
+/// One `snapshots` row (D-035's column mapping): `payload` is the whole snapshot envelope, and
+/// the other columns repeat its header, which recovery cross-checks (D-038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotRow {
+    /// The last log record included; 0 before any.
+    pub seq: i64,
+    /// The header's game time.
+    pub game_time: i64,
+    /// The header's rules version.
+    pub rules_version: u32,
+    /// The header's engine build.
+    pub engine_build: String,
+    /// The header's state hash.
+    pub state_hash: Vec<u8>,
+    /// The whole snapshot: magic, header and World.
+    pub payload: Vec<u8>,
+}
+
+impl SnapshotRow {
+    /// The row for `snapshot`, taken after record `seq`.
+    #[must_use]
+    pub fn new(seq: i64, snapshot: &crate::snapshot::Snapshot) -> Self {
+        Self {
+            seq,
+            game_time: snapshot.header.game_time_ms,
+            rules_version: snapshot.header.rules_version,
+            engine_build: snapshot.header.engine_build.clone(),
+            state_hash: snapshot.header.state_hash.to_vec(),
+            payload: snapshot.bytes.clone(),
+        }
+    }
+}
+
 /// Why the log could not be read or written.
 #[derive(Debug, thiserror::Error)]
 pub enum LogError {
@@ -205,6 +238,21 @@ pub trait LogStore: Send + 'static {
         &mut self,
         since: i64,
     ) -> impl Future<Output = Result<Vec<LogRecord>, LogError>> + Send;
+    /// The records after `seq`, in seq order.
+    fn records_after(
+        &mut self,
+        seq: i64,
+    ) -> impl Future<Output = Result<Vec<LogRecord>, LogError>> + Send;
+    /// Writes a snapshot row durably.
+    fn write_snapshot(
+        &mut self,
+        row: &SnapshotRow,
+    ) -> impl Future<Output = Result<(), LogError>> + Send;
+    /// The newest snapshot (highest seq), of `build` if given, of any build otherwise.
+    fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> impl Future<Output = Result<Option<SnapshotRow>, LogError>> + Send;
 }
 
 // --- JSON and UUID forms ---
@@ -300,6 +348,8 @@ struct MemoryInner {
     fail_appends: bool,
     appends: u64,
     lookups: u64,
+    snapshots: Vec<SnapshotRow>,
+    fail_snapshots: bool,
 }
 
 /// An in-memory log for tests. Clones share one log, so a test keeps a clone to read records and
@@ -312,6 +362,25 @@ impl MemoryLog {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Makes every later snapshot write fail (true) or succeed again (false).
+    pub fn fail_snapshots(&self, fail: bool) {
+        self.lock().fail_snapshots = fail;
+    }
+
+    /// The snapshot rows written so far, in write order.
+    #[must_use]
+    pub fn snapshot_rows(&self) -> Vec<SnapshotRow> {
+        self.lock().snapshots.clone()
+    }
+
+    /// Replaces a stored record (tests: a tampered log).
+    pub fn tamper(&self, record: LogRecord) {
+        let mut inner = self.lock();
+        if let Some(r) = inner.records.iter_mut().find(|r| r.seq == record.seq) {
+            *r = record;
+        }
     }
 
     /// Makes every later append fail (true) or succeed again (false).
@@ -420,6 +489,48 @@ impl LogStore for MemoryLog {
             .filter(|r| r.idempotency_key.is_some() && r.game_time >= since)
             .cloned()
             .collect())
+    }
+
+    async fn records_after(&mut self, seq: i64) -> Result<Vec<LogRecord>, LogError> {
+        Ok(self
+            .lock()
+            .records
+            .iter()
+            .filter(|r| r.seq > seq)
+            .cloned()
+            .collect())
+    }
+
+    async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        let mut inner = self.lock();
+        if inner.fail_snapshots {
+            return Err(LogError::Memory("injected snapshot failure".to_owned()));
+        }
+        // The table's constraints: seq is the key and not negative; a 32-byte hash.
+        if row.seq < 0
+            || row.state_hash.len() != 32
+            || inner.snapshots.iter().any(|s| s.seq == row.seq)
+        {
+            return Err(LogError::Memory(format!(
+                "snapshot at seq {} refused",
+                row.seq
+            )));
+        }
+        inner.snapshots.push(row.clone());
+        Ok(())
+    }
+
+    async fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> Result<Option<SnapshotRow>, LogError> {
+        Ok(self
+            .lock()
+            .snapshots
+            .iter()
+            .filter(|s| build.is_none_or(|b| s.engine_build == b))
+            .max_by_key(|s| s.seq)
+            .cloned())
     }
 }
 
@@ -611,5 +722,72 @@ impl LogStore for PgLog {
         .into_iter()
         .map(Row::into_record)
         .collect()
+    }
+
+    async fn records_after(&mut self, seq: i64) -> Result<Vec<LogRecord>, LogError> {
+        sqlx::query_as!(
+            Row,
+            r#"SELECT seq, kind, game_time,
+                      (extract(epoch FROM wall_time) * 1000)::bigint AS "wall_time_ms!",
+                      player_id::text AS player_id, idempotency_key,
+                      payload::text AS "payload!", outcome::text AS "outcome!",
+                      events::text AS "events!", rules_version, engine_build
+               FROM log_records WHERE seq > $1 ORDER BY seq"#,
+            seq,
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(Row::into_record)
+        .collect()
+    }
+
+    async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        let rules_version =
+            i32::try_from(row.rules_version).map_err(|_| LogError::Unrepresentable {
+                seq: row.seq,
+                what: format!("rules version {} exceeds i32", row.rules_version),
+            })?;
+        sqlx::query!(
+            r#"INSERT INTO snapshots (seq, game_time, rules_version, engine_build, state_hash, payload)
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
+            row.seq,
+            row.game_time,
+            rules_version,
+            row.engine_build,
+            row.state_hash,
+            row.payload,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> Result<Option<SnapshotRow>, LogError> {
+        let row = sqlx::query!(
+            r#"SELECT seq, game_time, rules_version, engine_build, state_hash, payload
+               FROM snapshots WHERE ($1::text IS NULL OR engine_build = $1)
+               ORDER BY seq DESC LIMIT 1"#,
+            build,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| {
+            Ok(SnapshotRow {
+                seq: r.seq,
+                game_time: r.game_time,
+                rules_version: u32::try_from(r.rules_version).map_err(|_| LogError::Corrupt {
+                    seq: r.seq,
+                    what: format!("snapshot rules version {}", r.rules_version),
+                })?,
+                engine_build: r.engine_build,
+                state_hash: r.state_hash,
+                payload: r.payload,
+            })
+        })
+        .transpose()
     }
 }

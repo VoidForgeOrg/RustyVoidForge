@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT seq, game_time, rules_version, engine_build, state_hash, payload\n               FROM snapshots WHERE ($1::text IS NULL OR engine_build = $1)\n               ORDER BY seq DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seq",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "game_time",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "game_time"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "rules_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "rules_version"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "engine_build",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "engine_build"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "state_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "state_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "payload",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "payload"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3d0b40df38e5a3b66391ef503a0c15592d87c15479a82550f6d5d242140de5d5"
+}

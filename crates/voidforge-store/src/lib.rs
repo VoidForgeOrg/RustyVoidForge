@@ -4,10 +4,12 @@
 //! in `migrations/` (decision log D-034). Migrations only ever add. P2.2 adds the snapshot codec
 //! ([`snapshot`]) and the canonical encoding it hashes ([`canonical`]; D-024, D-035).
 //! P2.3 adds the log ([`log`]): typed records, the `LogStore` interface, an in-memory store and the
-//! Postgres store (D-036).
+//! Postgres store (D-036). P2.5 adds snapshot storage and [`replay`], the one record→core function
+//! the host and the replay tool share (D-038).
 
 pub mod canonical;
 pub mod log;
+pub mod replay;
 pub mod snapshot;
 
 use sqlx::PgPool;

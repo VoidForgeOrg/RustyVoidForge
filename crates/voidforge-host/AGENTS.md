@@ -2,7 +2,7 @@
 
 The engine host, the single writer for a universe. It runs the bounded inbox, stamping and sequence numbers, the durable log append, idempotency, snapshots and recovery, and publishes the read model.
 
-Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `HostConfig` and the injected `Clock` (`SystemClock`, `ManualClock`) ([D-036](../../docs/decision-log.md#d-036-the-engine-host-loop-its-log-store-and-the-record-format)). P2.4 added idempotency: `submit_with_key`, the key cache and the log lookup, and `HostError::KeyConflict` ([D-037](../../docs/decision-log.md#d-037-idempotency-keys-at-any-age-the-cache-window-and-key-conflicts)). P2.5 adds snapshots and recovery. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `HostConfig` and the injected `Clock` (`SystemClock`, `ManualClock`) ([D-036](../../docs/decision-log.md#d-036-the-engine-host-loop-its-log-store-and-the-record-format)). P2.4 added idempotency: `submit_with_key`, the key cache and the log lookup, and `HostError::KeyConflict` ([D-037](../../docs/decision-log.md#d-037-idempotency-keys-at-any-age-the-cache-window-and-key-conflicts)). P2.5 added snapshots (a record-count schedule and clean shutdown) and `recover` ([D-038](../../docs/decision-log.md#d-038-snapshots-recovery-and-the-shared-recordcore-function)). The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 
@@ -14,7 +14,8 @@ Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `H
 ## Invariants
 
 - Only the host changes the live `World` ([Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering)). One thread owns it, and everything else reaches it through the bounded inbox ([Engine host and write path](../../docs/Voidforge%20Architectural%20Design.md#engine-host-and-write-path)).
-- Host recovery and replay map a log record to `advance_to` or `apply` through one shared function, so they cannot drift apart. P2.5 adds it to a crate both may depend on, and P2.7 reuses it.
+- Host recovery and replay map a log record to `advance_to` or `apply` through one shared function, `voidforge_store::replay::step`, so they cannot drift apart. The live path builds every record from it and never calls `apply` or `advance_to` itself (a test enforces this). P2.7 reuses it.
+- Recovery verifies by event replay and the state hash. `check_links` is structural only and does not validate gameplay fields (D-033, D-038). Replay refuses another build's record, and an upgrade starts only from a snapshot at the log head.
 - Stamp t = max(wall clock − epoch, last t), so stamps never go backwards. The clock is injected (`Clock`), so tests drive it.
 - One log record per step. A command record's events are the apply's advance followed by the command's own events; an advance that fires no events is not logged, but the read model is published after it (D-036).
 - Sequence numbers are gap-free from 1 and continue after existing records. A turn's records share one durable append (group commit), and nothing is replied or published before it is durable.
@@ -38,6 +39,7 @@ just determinism                         # includes the host's two-process doubl
 
 - `tests/host.rs` has one test per write-path step and crash-table row, on `MemoryLog` with a `ManualClock`. `tests/common` holds `GatedLog` (it holds the host inside an append), `settle` and the scripted economy `drive`.
 - `tests/idempotency.rs` covers keys: repeats, conflicts, per-player keys, the same turn, a restart, the window edges, the expired-key attack, and a failed lookup.
+- `tests/recovery.rs` covers snapshots and recovery: the crash table with restarts and retries, byte identity (a named test and a property test), and the snapshot choice and checks.
 - `tests/postgres.rs` holds the done-when: the same script through `MemoryLog` and `PgLog` gives identical records, receipts and World. It's `#[ignore]`d outside the database stage.
 
 P2.3 to P2.5: commands round-trip through an in-memory store and Postgres, idempotency survives restart, and snapshot round trip and recovery pass. P2.8: crash-and-retry.

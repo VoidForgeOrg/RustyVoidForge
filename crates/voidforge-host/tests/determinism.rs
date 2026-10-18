@@ -58,8 +58,72 @@ fn line(r: &LogRecord) -> String {
     )
 }
 
+/// The same kind of run through a snapshot, a restore and a continue (CI's "snapshot round trip";
+/// D-038): the first half, a clean stop, `recover`, the second half. Its text includes the
+/// recovered World's state hash.
+fn recovered_run(seed: u64) -> String {
+    use voidforge_store::log::{LogStore, SnapshotRow};
+    use voidforge_store::snapshot;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let e = economy(seed);
+        let rules = v0_rules();
+        let log = MemoryLog::new();
+        let clock = clock_at(0);
+        let start_world = start(&e, &rules);
+        let row = SnapshotRow::new(
+            0,
+            &snapshot::encode(&start_world, &common::build()).unwrap(),
+        );
+        log.clone().write_snapshot(&row).await.unwrap();
+        let script = e.script();
+        let half = script.len() / 2;
+        let mut receipts = Vec::new();
+        for range in [0..half, half..script.len()] {
+            let back = voidforge_host::recover(&mut log.clone(), &rules, &common::build())
+                .await
+                .unwrap();
+            let (mut handle, task) = voidforge_host::spawn(
+                back.world,
+                rules.clone(),
+                {
+                    let log = log.clone();
+                    move || log
+                },
+                clock.clone(),
+                config(),
+            )
+            .unwrap();
+            for &(at, k) in &script[range] {
+                clock.set(common::EPOCH + at);
+                common::settle(&mut handle, &clock).await;
+                let command = e.command(k, &handle.read().world);
+                receipts.push(
+                    handle
+                        .submit_with_key(command, common::key_for(k))
+                        .await
+                        .unwrap(),
+                );
+            }
+            drop(handle);
+            task.join().unwrap();
+        }
+        let back = voidforge_host::recover(&mut log.clone(), &rules, &common::build())
+            .await
+            .unwrap();
+        let hash = snapshot::state_hash(&back.world).unwrap();
+        let records: Vec<String> = log.snapshot().iter().map(line).collect();
+        format!("{}\n{receipts:?}\n{hash:?}\n", records.join("\n"))
+    })
+}
+
 fn recorded_runs() -> String {
-    [0x2_3101, 0x2_3102, 0x2_3103].map(run).concat()
+    let mut runs = [0x2_3101, 0x2_3102, 0x2_3103].map(run).concat();
+    runs.push_str(&[0x2_5201, 0x2_5202].map(recovered_run).concat());
+    runs
 }
 
 #[test]

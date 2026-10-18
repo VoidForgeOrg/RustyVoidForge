@@ -11,7 +11,7 @@ use voidforge_core::rules::Rules;
 use voidforge_core::state::PlayerId;
 use voidforge_core::state::World;
 use voidforge_host::{HostConfig, HostHandle, ManualClock, Receipt};
-use voidforge_store::log::{IdempotencyKey, LogError, LogRecord, LogStore, MemoryLog};
+use voidforge_store::log::{IdempotencyKey, LogError, LogRecord, LogStore, MemoryLog, SnapshotRow};
 use voidforge_store::snapshot::EngineBuild;
 use voidforge_testkit::determinism::Economy;
 
@@ -96,6 +96,20 @@ impl LogStore for GatedLog {
     async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
         self.inner.keyed_since(since).await
     }
+    async fn records_after(&mut self, seq: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.inner.records_after(seq).await
+    }
+
+    async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        self.inner.write_snapshot(row).await
+    }
+
+    async fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> Result<Option<SnapshotRow>, LogError> {
+        self.inner.latest_snapshot(build).await
+    }
 }
 
 /// Waits until nothing in the published World is due at the clock's time: every due entry has
@@ -174,4 +188,43 @@ pub fn economy(seed: u64) -> Economy {
 /// The economy's starting World.
 pub fn start(e: &Economy, rules: &Rules) -> World {
     e.world(rules)
+}
+
+/// A store that makes each append durable and then reports it failed: the crash table's "after
+/// the append, before the reply" (the host stops; the record is in the log).
+#[derive(Clone)]
+pub struct AppendThenFail(pub MemoryLog);
+
+impl LogStore for AppendThenFail {
+    async fn last(&mut self) -> Result<Option<(i64, i64)>, LogError> {
+        self.0.last().await
+    }
+    async fn append(&mut self, records: &[LogRecord]) -> Result<(), LogError> {
+        self.0.append(records).await?;
+        Err(LogError::Memory("crashed after the append".to_owned()))
+    }
+    async fn records(&mut self) -> Result<Vec<LogRecord>, LogError> {
+        self.0.records().await
+    }
+    async fn find_keys(
+        &mut self,
+        keys: &[(PlayerId, IdempotencyKey)],
+    ) -> Result<Vec<LogRecord>, LogError> {
+        self.0.find_keys(keys).await
+    }
+    async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.0.keyed_since(since).await
+    }
+    async fn records_after(&mut self, seq: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.0.records_after(seq).await
+    }
+    async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        self.0.write_snapshot(row).await
+    }
+    async fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> Result<Option<SnapshotRow>, LogError> {
+        self.0.latest_snapshot(build).await
+    }
 }

@@ -17,6 +17,7 @@ tracing.workspace = true
 [dev-dependencies]
 # Harness worlds and command scripts (dev-only), as store uses them (D-035).
 voidforge-testkit.workspace = true
+proptest.workspace = true
 sqlx.workspace = true
 
 [lints]

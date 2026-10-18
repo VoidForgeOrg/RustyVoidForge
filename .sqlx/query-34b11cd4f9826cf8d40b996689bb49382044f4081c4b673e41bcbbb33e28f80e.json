@@ -1,0 +1,123 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT seq, kind, game_time,\n                      (extract(epoch FROM wall_time) * 1000)::bigint AS \"wall_time_ms!\",\n                      player_id::text AS player_id, idempotency_key,\n                      payload::text AS \"payload!\", outcome::text AS \"outcome!\",\n                      events::text AS \"events!\", rules_version, engine_build\n               FROM log_records WHERE seq > $1 ORDER BY seq",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seq",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "log_records",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "log_records",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "game_time",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "log_records",
+            "name": "game_time"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "wall_time_ms!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "player_id",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "idempotency_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "log_records",
+            "name": "idempotency_key"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "payload!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "outcome!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "events!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "rules_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "log_records",
+            "name": "rules_version"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "engine_build",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "log_records",
+            "name": "engine_build"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      true,
+      null,
+      null,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "34b11cd4f9826cf8d40b996689bb49382044f4081c4b673e41bcbbb33e28f80e"
+}
