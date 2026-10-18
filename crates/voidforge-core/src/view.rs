@@ -485,8 +485,8 @@ impl World {
     /// finished buildings by kind; buildings under construction and ship builds at points ×
     /// delivered ÷ cost, rounded down each; each ship the player owns once, wherever it is;
     /// and ore and ingots in their storage and aboard their fleets, each resource totalled and
-    /// then rounded down once. A building being demolished counts in full until it is gone:
-    /// PROVISIONAL, parked for Tom as game intent (D-030).
+    /// then rounded down once. A building being demolished counts nothing from the instant its
+    /// demolition begins (Tom's decision, D-039).
     /// Never stored. `t` must be one at which the player's view is valid.
     pub fn score(&self, player: PlayerId, t: i64, rules: &Rules) -> Result<i64, ViewError> {
         let specs = &rules.scoring;
@@ -532,9 +532,8 @@ impl World {
                     BuildingState::UnderConstruction {
                         delivered, cost_g, ..
                     } => partial(points(b.kind), read(delivered, p.id, id.0)?, cost_g)?,
-                    BuildingState::Operational | BuildingState::Demolishing { .. } => {
-                        i128::from(points(b.kind))
-                    }
+                    BuildingState::Operational => i128::from(points(b.kind)),
+                    BuildingState::Demolishing { .. } => 0,
                 };
                 total = add(total, points)?;
             }
