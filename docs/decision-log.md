@@ -777,3 +777,33 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Why: demolition can't be cancelled, the building stops working at once, and nothing is refunded, so it is already lost to the player. D-030's reading A (counting until the demolition ended) kept points for a building that does no work.
 - The [Game Design's Scoring table](Voidforge%20MVP%20Game%20Design.md#scoring) and the Architectural Design's score bullet now say this explicitly.
 - Where it's enforced: `World::score` in `crates/voidforge-core/src/view.rs` (one match arm); `crates/voidforge-testkit/tests/views.rs` (`score_a_building_being_demolished_counts_nothing` and `score_drops_at_the_instant_demolition_begins`).
+
+### D-040: Golden logs: scenarios, recording, the fixture build and bless
+
+- Date and package: 2026-10-18, P2.6. Proposed by dev-build (`slices/26-p2-6-golden-logs/proposal-golden.md`). **Lead ruling; advisor review pending** (`ruling-lead.md`). None of it is game intent.
+- Decision:
+  - **Where the code lives (the plan's "testkit, host").** The scenarios are in testkit (`voidforge_testkit::golden`); the recording and the replay are in the host's tests (`tests/golden.rs`, `tests/common/golden.rs`). testkit stays below the host, with no new crate edge (D-035's reason). Store gains `LogRecord::{to_line, from_line}`, a record's one-line JSON form, which P2.7 can read too.
+  - **The fixture build.** Goldens are recorded and replayed under `0.1.0+golden`, a fixed, test-only build identity, as every test passes a fixed build (D-035). A golden must replay on every commit, so the git-commit build can't be in it. Production recovery keeps D-038's real-build rule, and nothing relaxes the pin. `the_fixture_build_is_never_a_real_build` asserts `ENGINE_BUILD` is never the fixture. The rules version stays pinned, so a rules change fails the goldens until they are blessed again ("refreshed on rules changes").
+  - **A golden** is `tests/golden/<scenario>/`:
+    - `start.vfsnap`: the start World as a snapshot envelope (D-035);
+    - `records.jsonl`: the host's log records, one per line. The JSON columns are values in D-036's forms, so a reviewer reads commands, outcomes and events directly;
+    - `manifest.json`: the scenario and its description, the rules version, the build, the start hash, **the state hash after every record**, the end time and hash, and every player's score at the end.
+  - **Recording**: the real host (`spawn`, `MemoryLog`, a `ManualClock`). The clock moves through each due event's own time, so advance records are stamped when their events came due, as with the system clock. At each cue the action is computed from the published World. Each cue states the outcome it must get (accepted, or rejected with a reason code), so a scenario can't quietly stop doing what it says. A keyed cue can be retried at once: it must get its first receipt and append nothing (D-037). The recording is then replayed, and it must equal the host's own World at the end, byte for byte.
+  - **Replay** (`verify`):
+    - the start is decoded strictly under the fixture build and the rules;
+    - each record goes through `store::replay` (events, outcome, gap, build and rules checked), then its state hash is checked;
+    - then the end hash and the scores.
+    - The first failure names its record: a tampered event is `Diverged` at its seq, a tampered hash is `Hash { seq }`, and a dropped record is a gap at the next seq. That's the groundwork for P2.7.
+  - **Only through `just bless`.** The freshness check, `the_goldens_are_what_a_fresh_recording_gives`, records every scenario again and compares each file byte for byte, and also checks one golden per scenario. A hand edit, or a behavior change that wasn't blessed, fails it and names the file and line. `just bless` runs the ignored `bless` test with `VOIDFORGE_BLESS=1`, prints new, unchanged or CHANGED per golden, and refuses goldens with no scenario. A PR that blesses calls out the output for review.
+  - **Where they run**:
+    - the golden binary in `.github/scripts/determinism.sh` (the CI table's golden replays) and in `test`;
+    - `every_golden_recovers_through_postgres` in the database stage: each golden's start and records go into Postgres, read back exactly through jsonb, and `recover` reaches the last checkpoint and then the end hash (the Phase 2 gate).
+  - **The first goldens**, all on Rules v0:
+    - `start-and-build`: joins, builds, a cancellation, a demolition to its end;
+    - `starve-and-resume`: starved constructions with an even split, full storage halting and resuming;
+    - `ships-and-colonize`: three ships at once and a cancelled waiting build, and a same-millisecond colonization race with a removed fleet and a failure;
+    - `transport-and-recall`: Transport, Move with Trigger unload, a recall, a return and a disband;
+    - `rejections-and-retries`: a rejection per command family, and keyed retries;
+    - `whole-loop`: the Phase 1 gate's hand-derived loop. Its recorded score, 3,239, is asserted against QA's hand derivation.
+    - A coverage guard (exhaustive matches) fails unless the goldens accept every command, produce every event, and hold a rejection and an advance.
+- Where it's enforced: `crates/voidforge-testkit/src/golden.rs`; `crates/voidforge-host/tests/{golden.rs, common/golden.rs, postgres.rs}`; `crates/voidforge-store/src/log.rs` (`to_line`, `from_line`) and `tests/line.rs`; `tests/golden/`; `justfile` (`bless`); `.github/scripts/determinism.sh`.

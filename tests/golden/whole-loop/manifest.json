@@ -1,0 +1,77 @@
+{
+  "scenario": "whole-loop",
+  "about": "The Phase 1 gate's whole Game Design loop, hand-derived by QA: join, a Shipyard, two ships, a colonization carrying 150 t of ingots, and a Drill on the colony; the score at the end is 3,239.",
+  "rules_version": 0,
+  "engine_build": "0.1.0+golden",
+  "start_hash": "7904b012749f10f6d241e96fbd9e866ca7ea043050c28bf05bf2cde48a42e4ea",
+  "records": [
+    {
+      "seq": 1,
+      "game_time": 0,
+      "state_hash": "8c6304f4a06e614e584e7dac6cd419c43c0c1f75821f5bbda3651ca03714337a"
+    },
+    {
+      "seq": 2,
+      "game_time": 0,
+      "state_hash": "354968108d2e8aa66c783c4b635abde3553e9c241aecbbc49237283edda3e46d"
+    },
+    {
+      "seq": 3,
+      "game_time": 43200000,
+      "state_hash": "548e446d508b0b952e2670392c446d44f17e72868b9f1991c4a0f42228a2ad96"
+    },
+    {
+      "seq": 4,
+      "game_time": 180000000,
+      "state_hash": "425f412a503400db68181584dbeb17d0c14215055493dddf70868a18c0d9cef5"
+    },
+    {
+      "seq": 5,
+      "game_time": 180000000,
+      "state_hash": "ea0c054bfb82de50d176c7fac3178c298d81603d37ccf0c52c881c5a0b8af61e"
+    },
+    {
+      "seq": 6,
+      "game_time": 194400000,
+      "state_hash": "cff43699290dfb19dfafc05cf32ca05af510ca997809da87a3296138a41c272e"
+    },
+    {
+      "seq": 7,
+      "game_time": 216000000,
+      "state_hash": "e4c560bf57761d2f992e98d295d59419783aca047ee4175fc77e778080c94e1d"
+    },
+    {
+      "seq": 8,
+      "game_time": 216000000,
+      "state_hash": "a29e8daa1c8be5a4a95acdbe41a8b75fc172bbdbad7554f4b160f0c1abaa97e9"
+    },
+    {
+      "seq": 9,
+      "game_time": 216000000,
+      "state_hash": "9328540d00f7a3e50b016543a3b303bda4328ea33c3735714a24f59ae31cd8c0"
+    },
+    {
+      "seq": 10,
+      "game_time": 232200000,
+      "state_hash": "c4451c38713e4ab140efb81a465214eefe72ba056d9fac520b0bde5db3dd11d6"
+    },
+    {
+      "seq": 11,
+      "game_time": 232200000,
+      "state_hash": "1e6df14a43088dbe1513da87684e8c0a4553a206304e1b4c5f3567d72d18c5da"
+    },
+    {
+      "seq": 12,
+      "game_time": 243000000,
+      "state_hash": "7be493d75ed954bfc57d920194e3f82e311a8adbb5eb4ba13db9329674b4ed5a"
+    }
+  ],
+  "end_ms": 243000000,
+  "end_hash": "7be493d75ed954bfc57d920194e3f82e311a8adbb5eb4ba13db9329674b4ed5a",
+  "scores": [
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+      "score": 3239
+    }
+  ]
+}

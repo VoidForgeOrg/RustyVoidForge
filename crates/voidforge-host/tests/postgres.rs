@@ -520,3 +520,70 @@ async fn a_snapshot_past_the_log_head_is_refused_through_postgres(pool: PgPool) 
     })
     .await;
 }
+
+/// The Phase 2 gate's "golden replays pass against Postgres" (P2.6, D-040): every golden's start
+/// and records go into Postgres, read back exactly through jsonb, and `recover` replays them to
+/// the golden's last checkpoint; advanced to the end, the World has the golden's end hash.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn every_golden_recovers_through_postgres(pool: PgPool) {
+    use common::golden::{fixture, hex, on_disk};
+    use voidforge_store::log::SnapshotRow;
+    use voidforge_store::snapshot::{self, Expected};
+
+    let rules = v0_rules();
+    let goldens = on_disk();
+    assert!(!goldens.is_empty(), "no goldens in tests/golden");
+    for (name, files) in goldens {
+        sqlx::query!("TRUNCATE log_records")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query!("DELETE FROM snapshots WHERE seq = $1", 0_i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut pg = PgLog::new(pool.clone());
+        let decoded = snapshot::decode(
+            &files.start,
+            &Expected {
+                rules_version: rules.version,
+                engine_build: &fixture(),
+            },
+        )
+        .unwrap();
+        let snap = snapshot::encode(&decoded.world, &fixture()).unwrap();
+        assert_eq!(snap.bytes, files.start, "{name}: the start re-encodes");
+        pg.write_snapshot(&SnapshotRow::new(0, &snap))
+            .await
+            .unwrap();
+        let records = files.records();
+        pg.append(&records).await.unwrap();
+        assert_eq!(
+            pg.records().await.unwrap(),
+            records,
+            "{name}: through jsonb"
+        );
+        let back = voidforge_host::recover(&mut pg, &rules, &fixture())
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let m = files.manifest();
+        assert_eq!(
+            back.last_seq,
+            m.records.last().map_or(0, |c| c.seq),
+            "{name}"
+        );
+        let mut world = back.world;
+        let last = m.records.last().map_or(&m.start_hash, |c| &c.state_hash);
+        assert_eq!(&hex(&snapshot::state_hash(&world).unwrap()), last, "{name}");
+        assert!(
+            world.advance_to(m.end_ms, &rules).unwrap().is_empty(),
+            "{name}"
+        );
+        assert_eq!(
+            hex(&snapshot::state_hash(&world).unwrap()),
+            m.end_hash,
+            "{name}"
+        );
+    }
+}

@@ -1,0 +1,77 @@
+{
+  "scenario": "ships-and-colonize",
+  "about": "Ships are queued, built three at once and one waiting build is cancelled; two lone Colony Ships reach one planet at the same millisecond: the lower fleet ID colonizes it and its emptied fleet is removed, and the other fails.",
+  "rules_version": 0,
+  "engine_build": "0.1.0+golden",
+  "start_hash": "c21fe3f7d06a29b055b8448cdda90b2fbc97226ede17b784f2bb5626684e963e",
+  "records": [
+    {
+      "seq": 1,
+      "game_time": 0,
+      "state_hash": "9aa0107b6a7a9267e04c90aec08fa3cd61d8adb69a313cf2d2523704f661fee8"
+    },
+    {
+      "seq": 2,
+      "game_time": 0,
+      "state_hash": "561fe6f6bc037eebbfde0dd907ef8a98993bae2b126c8598e5f68820f31b9296"
+    },
+    {
+      "seq": 3,
+      "game_time": 0,
+      "state_hash": "8bbd60a10b7c9f9e03e24596a762a2c1644bd226eadbb9d3def58c2614f5a547"
+    },
+    {
+      "seq": 4,
+      "game_time": 0,
+      "state_hash": "b556383139004dd62431303902b029ad9b193ed6b5a040db0e66e3114fb7e246"
+    },
+    {
+      "seq": 5,
+      "game_time": 3600000,
+      "state_hash": "60fee705fae9ac13cbd86191c8edadb43d8fec0df9c4e6041f1495cbe27b4c99"
+    },
+    {
+      "seq": 6,
+      "game_time": 14400000,
+      "state_hash": "452a5b906d20379cc9d472c62885227ae17b2ecb95e372c6201f11910946c354"
+    },
+    {
+      "seq": 7,
+      "game_time": 36000000,
+      "state_hash": "c63d646738ed78bced0453c721b0c3f536f003e9f0db7e49e68cba61e8756f5e"
+    },
+    {
+      "seq": 8,
+      "game_time": 39600000,
+      "state_hash": "285ac9239fa40f856f41c3314b622534fe76e66ba9e3948f63726f6d7a688e0e"
+    },
+    {
+      "seq": 9,
+      "game_time": 39600000,
+      "state_hash": "cc83a47c65fdebe06de9890463b8f9f9b0dd23df8b4e52def7fa4d889c0c0189"
+    },
+    {
+      "seq": 10,
+      "game_time": 39600000,
+      "state_hash": "5fdaa195a951e75a9ef992a3dc07c96d59be51c422b6c5c40ef926ba817640c7"
+    },
+    {
+      "seq": 11,
+      "game_time": 39600000,
+      "state_hash": "4ae9fa47a885b012b3693f63ddc3c08f24b031db554b36e623c30eeb0e5c389d"
+    },
+    {
+      "seq": 12,
+      "game_time": 50400000,
+      "state_hash": "592ff787fb99365bf023dfefbf11f121a6a7080e38c3a1d1cca8bd6ad7e06872"
+    }
+  ],
+  "end_ms": 57600000,
+  "end_hash": "01bb01542721b6bfe31bda4f832d27e0fdac0f54eef3fafe4029a6211457aa8b",
+  "scores": [
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+      "score": 3774
+    }
+  ]
+}

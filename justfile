@@ -1,7 +1,7 @@
 # Voidforge task runner (Technical Plan, Tech stack and CI/CD). The lint, supply-chain and test
 # recipes run the same commands as the CI jobs of the same name, so a red check reproduces here.
-# db-test and migrate arrived with P2.1 (D-034). Recipes appear with the packages that implement them: e2e (P3.6), replay (P2.7), seed (P2.9)
-# and bless (P2.6) do not exist yet (decision log D-014).
+# db-test and migrate arrived with P2.1 (D-034), bless with P2.6 (D-040). Recipes appear with the packages that implement them:
+# e2e (P3.6), replay (P2.7) and seed (P2.9) do not exist yet (decision log D-014).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -70,3 +70,8 @@ migrate:
 # The CI determinism job: the suite, then the two-process double run (decision log D-024).
 determinism:
     .github/scripts/determinism.sh
+
+# Records every golden scenario through the host into tests/golden/ (decision log D-040). Golden
+# files change only this way, and a reviewer checks every change: call it out in the PR body.
+bless:
+    VOIDFORGE_BLESS=1 cargo nextest run -p voidforge-host --test golden --locked --run-ignored only -E 'test(=bless)' --no-capture

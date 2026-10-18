@@ -1,0 +1,81 @@
+{
+  "scenario": "rejections-and-retries",
+  "about": "A rejection per command family, each logged with its reason and changing nothing; keyed commands retried with the same key get their first receipt, accepted or rejected, and append nothing.",
+  "rules_version": 0,
+  "engine_build": "0.1.0+golden",
+  "start_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09",
+  "records": [
+    {
+      "seq": 1,
+      "game_time": 0,
+      "state_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09"
+    },
+    {
+      "seq": 2,
+      "game_time": 0,
+      "state_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09"
+    },
+    {
+      "seq": 3,
+      "game_time": 0,
+      "state_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09"
+    },
+    {
+      "seq": 4,
+      "game_time": 0,
+      "state_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09"
+    },
+    {
+      "seq": 5,
+      "game_time": 0,
+      "state_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09"
+    },
+    {
+      "seq": 6,
+      "game_time": 0,
+      "state_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09"
+    },
+    {
+      "seq": 7,
+      "game_time": 0,
+      "state_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09"
+    },
+    {
+      "seq": 8,
+      "game_time": 0,
+      "state_hash": "721e4bf6a9dccc97043f93a3cedb213b84301606e809cc6c62a9a5115baf8f09"
+    },
+    {
+      "seq": 9,
+      "game_time": 3600000,
+      "state_hash": "f5b532048b4115ed500124be5ab2561349e5b45a61ab918c0f462a94ae0ea4be"
+    },
+    {
+      "seq": 10,
+      "game_time": 7200000,
+      "state_hash": "ab0ed34cdf5774943eb04aadc59028639bafe684ac71f5dff8d2ea3671b840d5"
+    },
+    {
+      "seq": 11,
+      "game_time": 14400000,
+      "state_hash": "ab60f3ed59eeef0e6cba529e6d22a43c8801f958f175ea9c95a874bb19f312fd"
+    },
+    {
+      "seq": 12,
+      "game_time": 14400000,
+      "state_hash": "ad2d65efbbaf9fcee90aee0d71f0c49e5c12a86c15221769d4b096baad67d3eb"
+    }
+  ],
+  "end_ms": 18000000,
+  "end_hash": "59e141062818675e3260f5fd2f8cec24e028c7efb42b2e174c1b7faa7ef596d0",
+  "scores": [
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+      "score": 1988
+    },
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e10",
+      "score": 1791
+    }
+  ]
+}

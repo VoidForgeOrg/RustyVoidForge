@@ -40,9 +40,10 @@ just determinism                         # includes the host's two-process doubl
 - `tests/host.rs` has one test per write-path step and crash-table row, on `MemoryLog` with a `ManualClock`. `tests/common` holds `GatedLog` (it holds the host inside an append), `settle` and the scripted economy `drive`.
 - `tests/idempotency.rs` covers keys: repeats, conflicts, per-player keys, the same turn, a restart, the window edges, the expired-key attack, and a failed lookup.
 - `tests/recovery.rs` covers snapshots and recovery: the crash table with restarts and retries, byte identity (a named test and a property test), and the snapshot choice and checks.
-- `tests/postgres.rs` holds the done-when: the same script through `MemoryLog` and `PgLog` gives identical records, receipts and World. It's `#[ignore]`d outside the database stage.
+- `tests/postgres.rs` holds the done-when: the same script through `MemoryLog` and `PgLog` gives identical records, receipts and World. It's `#[ignore]`d outside the database stage. It also recovers every golden through Postgres.
+- `tests/golden.rs` and `tests/common/golden.rs` are the golden logs (P2.6, [D-040](../../docs/decision-log.md#d-040-golden-logs-scenarios-recording-the-fixture-build-and-bless)): testkit's scenarios recorded through the host under the fixture build `0.1.0+golden`, replayed record by record with state hashes, a freshness check against a fresh recording, tamper tests and a coverage guard. `just bless` writes them.
 
-P2.3 to P2.5: commands round-trip through an in-memory store and Postgres, idempotency survives restart, and snapshot round trip and recovery pass. P2.8: crash-and-retry.
+P2.3 to P2.6: commands round-trip through an in-memory store and Postgres, idempotency survives restart, snapshot round trip and recovery pass, and the golden logs replay (also through Postgres). P2.8: crash-and-retry.
 
 ## Specs
 
