@@ -7,12 +7,13 @@ mod common;
 
 use std::collections::BTreeSet;
 
-use common::golden::{FILES, FIXTURE, Failure, Files, fixture, on_disk, record, root, verify};
+use common::golden::{on_disk, read, record, root, write};
 use voidforge_core::command::Action;
 use voidforge_core::state::DomainEvent;
+use voidforge_store::golden::{FILES, FIXTURE, Files, Manifest, fixture, verify_golden};
 use voidforge_store::log::{LogRecord, Outcome, Payload, player_uuid};
-use voidforge_store::replay::ReplayError;
 use voidforge_store::snapshot::ENGINE_BUILD;
+use voidforge_store::verify::{Finding, VerifyError};
 use voidforge_testkit::golden::scenarios;
 use voidforge_testkit::{ALICE, v0_rules};
 
@@ -39,8 +40,8 @@ fn bless() {
     for s in scenarios() {
         let files = record(&s);
         let dir = root().join(s.name);
-        let before = Files::read(&dir).ok();
-        files.write(&dir).unwrap();
+        let before = read(&dir).ok();
+        write(&files, &dir).unwrap();
         let state = match before {
             None => "new",
             Some(b) if b == files => "unchanged",
@@ -49,7 +50,7 @@ fn bless() {
         println!(
             "bless: tests/golden/{}: {state} ({} records)",
             s.name,
-            files.records().len()
+            files.records().unwrap().len()
         );
     }
 }
@@ -60,7 +61,7 @@ fn every_golden_replays_exactly() {
     let goldens = on_disk();
     assert!(!goldens.is_empty(), "no goldens in tests/golden");
     for (name, files) in goldens {
-        if let Err(f) = verify(&files, &rules) {
+        if let Err(f) = verify_golden(&files, &rules) {
             panic!("tests/golden/{name} does not replay: {f:?}");
         }
     }
@@ -108,7 +109,7 @@ fn a_hand_edit_fails_the_freshness_check() {
     let s = &scenarios()[0];
     let fresh = record(s);
     assert_eq!(stale(&fresh, &fresh), None);
-    let mut m = fresh.manifest();
+    let mut m = fresh.manifest().unwrap();
     m.about.push('.');
     let mut edited = serde_json::to_string_pretty(&m).unwrap();
     edited.push('\n');
@@ -143,7 +144,7 @@ fn a_golden_with_events() -> (String, Files, usize) {
     on_disk()
         .into_iter()
         .find_map(|(name, files)| {
-            let records = files.records();
+            let records = files.records().unwrap();
             let at = records
                 .iter()
                 .take(records.len().saturating_sub(1))
@@ -154,122 +155,90 @@ fn a_golden_with_events() -> (String, Files, usize) {
 }
 
 fn with_records(files: &Files, records: &[LogRecord]) -> Files {
-    let mut text = String::new();
-    for r in records {
-        text.push_str(&r.to_line().unwrap());
-        text.push('\n');
-    }
     Files {
-        records: text.into_bytes(),
+        records: Files::records_text(records).unwrap(),
         ..files.clone()
     }
 }
 
-/// SPEC 5 (groundwork for P2.7): a golden with one event edited is pinpointed at that record.
-#[test]
-fn a_tampered_event_is_pinpointed_at_its_record() {
-    let rules = v0_rules();
-    let (name, files, at) = a_golden_with_events();
-    let mut records = files.records();
-    let seq = records[at].seq;
-    // Two events of the record swapped: the same events, in another order.
-    records[at].events.swap(0, 1);
-    let failure = verify(&with_records(&files, &records), &rules).unwrap_err();
-    assert!(
-        matches!(
-            failure,
-            Failure::Record(ReplayError::Diverged { what: "events", .. })
-        ),
-        "{name}: {failure:?}"
-    );
-    assert_eq!(failure.seq(), Some(seq), "{name}");
+/// Where a golden fails: its seq and what differed.
+fn failure(files: &Files) -> (Option<i64>, &'static str) {
+    let e = verify_golden(files, &v0_rules()).unwrap_err();
+    let f = e.finding().expect("a finding, not an input error");
+    (f.seq, f.what)
 }
 
+fn with_manifest(files: &Files, edit: impl FnOnce(&mut Manifest)) -> Files {
+    let mut m = files.manifest().unwrap();
+    edit(&mut m);
+    Files {
+        manifest: serde_json::to_vec_pretty(&m).unwrap(),
+        ..files.clone()
+    }
+}
+
+/// A tampered golden is pinpointed at its record (the replay tool's matrix is in its own tests;
+/// these keep the host's goldens honest on their own).
 #[test]
-fn tampered_hashes_checkpoints_records_and_scores_are_caught() {
-    let rules = v0_rules();
+fn tampered_goldens_are_pinpointed() {
     let (name, files, at) = a_golden_with_events();
-    let seq = files.records()[at].seq;
-    // A state hash edited in the manifest.
-    let mut m = files.manifest();
-    m.records[at].state_hash = "00".repeat(32);
-    let tampered = Files {
-        manifest: serde_json::to_vec_pretty(&m).unwrap(),
-        ..files.clone()
-    };
-    let failure = verify(&tampered, &rules).unwrap_err();
-    assert!(
-        matches!(failure, Failure::Hash { .. }),
-        "{name}: {failure:?}"
+    let records = files.records().unwrap();
+    let seq = records[at].seq;
+    // Two events of a record swapped: the same events, in another order.
+    let mut swapped = records.clone();
+    swapped[at].events.swap(0, 1);
+    assert_eq!(
+        failure(&with_records(&files, &swapped)),
+        (Some(seq), "events"),
+        "{name}"
     );
-    assert_eq!(failure.seq(), Some(seq));
-    // A record dropped: the next one is a gap.
-    let mut records = files.records();
-    let dropped = records.remove(at);
-    let failure = verify(&with_records(&files, &records), &rules).unwrap_err();
-    assert!(
-        matches!(failure, Failure::Record(ReplayError::Gap { .. })),
-        "{name}: {failure:?}"
-    );
-    assert_eq!(failure.seq(), Some(dropped.seq + 1));
-    // The end hash edited.
-    let mut m = files.manifest();
-    m.end_hash = "00".repeat(32);
+    // A state hash edited.
+    let tampered = with_manifest(&files, |m| m.records[at].state_hash = "00".repeat(32));
+    assert_eq!(failure(&tampered), (Some(seq), "state_hash"));
+    // A record dropped: the seq expected there is reported.
+    let mut dropped = records.clone();
+    dropped.remove(at);
+    let mut m = files.manifest().unwrap();
+    m.records.remove(at);
     let tampered = Files {
         manifest: serde_json::to_vec_pretty(&m).unwrap(),
-        ..files.clone()
+        ..with_records(&files, &dropped)
     };
-    assert!(matches!(verify(&tampered, &rules), Err(Failure::EndHash)));
-    // A checkpoint's time edited, and a checkpoint added: the manifest no longer matches the
-    // records one to one.
-    let mut m = files.manifest();
-    m.records[at].game_time += 1;
-    let tampered = Files {
-        manifest: serde_json::to_vec_pretty(&m).unwrap(),
-        ..files.clone()
-    };
-    assert!(matches!(
-        verify(&tampered, &rules),
-        Err(Failure::Checkpoints)
-    ));
-    let mut m = files.manifest();
-    let extra = m.records.last().unwrap().clone();
-    m.records.push(extra);
-    let tampered = Files {
-        manifest: serde_json::to_vec_pretty(&m).unwrap(),
-        ..files.clone()
-    };
-    assert!(matches!(
-        verify(&tampered, &rules),
-        Err(Failure::Checkpoints)
-    ));
-    // A score edited.
-    let mut m = files.manifest();
-    m.scores[0].score += 1;
-    let tampered = Files {
-        manifest: serde_json::to_vec_pretty(&m).unwrap(),
-        ..files.clone()
-    };
-    assert!(matches!(verify(&tampered, &rules), Err(Failure::Scores)));
+    assert_eq!(failure(&tampered), (Some(seq), "gap"));
+    // The end hash, a checkpoint's time, an extra checkpoint and a score.
+    let tampered = with_manifest(&files, |m| m.end_hash = "00".repeat(32));
+    assert_eq!(failure(&tampered), (None, "end_hash"));
+    let tampered = with_manifest(&files, |m| m.records[at].game_time += 1);
+    assert_eq!(failure(&tampered), (Some(seq), "checkpoints"));
+    let tampered = with_manifest(&files, |m| {
+        let mut extra = m.records.last().unwrap().clone();
+        extra.seq += 1;
+        m.records.push(extra);
+    });
+    let missing = records.last().unwrap().seq + 1;
+    assert_eq!(failure(&tampered), (Some(missing), "gap"));
+    let tampered = with_manifest(&files, |m| m.scores[0].score += 1);
+    assert_eq!(failure(&tampered), (None, "scores"));
 }
 
 /// The goldens replay only under the fixture build and the rules they were recorded with.
 #[test]
 fn a_golden_replays_only_under_its_build_and_rules() {
     let (_, files) = on_disk().into_iter().next().unwrap();
-    let mut m = files.manifest();
-    m.engine_build = ENGINE_BUILD.to_owned();
-    let other = Files {
-        manifest: serde_json::to_vec_pretty(&m).unwrap(),
-        ..files.clone()
-    };
+    let other = with_manifest(&files, |m| m.engine_build = ENGINE_BUILD.to_owned());
     assert!(matches!(
-        verify(&other, &v0_rules()),
-        Err(Failure::Build(_))
+        verify_golden(&other, &v0_rules()),
+        Err(VerifyError::Refused(Finding { what: "build", .. }))
     ));
     let mut rules = v0_rules();
     rules.version += 1;
-    assert!(matches!(verify(&files, &rules), Err(Failure::Start(_))));
+    assert!(matches!(
+        verify_golden(&files, &rules),
+        Err(VerifyError::Refused(Finding {
+            what: "rules_version",
+            ..
+        }))
+    ));
 }
 
 fn action_index(a: &Action) -> usize {
@@ -314,7 +283,7 @@ fn the_goldens_cover_every_command_event_and_outcome() {
     let mut events = BTreeSet::new();
     let (mut rejected, mut advances) = (0, 0);
     for (_, files) in on_disk() {
-        for r in files.records() {
+        for r in files.records().unwrap() {
             events.extend(r.events.iter().map(event_index));
             match (&r.payload, r.outcome) {
                 (Payload::Command(c), Outcome::Accepted { .. }) => {
@@ -342,7 +311,7 @@ fn the_whole_loop_golden_scores_as_derived_by_hand() {
         .into_iter()
         .find(|(n, _)| n == "whole-loop")
         .expect("the whole-loop golden");
-    let m = files.manifest();
+    let m = files.manifest().unwrap();
     assert_eq!(m.end_ms, 675 * voidforge_core::quantity::MS_PER_HOUR / 10);
     assert_eq!(m.scores.len(), 1);
     assert_eq!(m.scores[0].player, player_uuid(ALICE));

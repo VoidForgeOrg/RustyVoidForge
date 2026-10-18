@@ -527,9 +527,11 @@ async fn a_snapshot_past_the_log_head_is_refused_through_postgres(pool: PgPool) 
 #[sqlx::test(migrator = "MIGRATOR")]
 #[ignore = "needs Postgres: just db-test"]
 async fn every_golden_recovers_through_postgres(pool: PgPool) {
-    use common::golden::{fixture, hex, on_disk};
+    use common::golden::on_disk;
+    use voidforge_store::golden::fixture;
     use voidforge_store::log::SnapshotRow;
     use voidforge_store::snapshot::{self, Expected};
+    use voidforge_store::verify::hex;
 
     let rules = v0_rules();
     let goldens = on_disk();
@@ -557,7 +559,7 @@ async fn every_golden_recovers_through_postgres(pool: PgPool) {
         pg.write_snapshot(&SnapshotRow::new(0, &snap))
             .await
             .unwrap();
-        let records = files.records();
+        let records = files.records().unwrap();
         pg.append(&records).await.unwrap();
         assert_eq!(
             pg.records().await.unwrap(),
@@ -567,7 +569,7 @@ async fn every_golden_recovers_through_postgres(pool: PgPool) {
         let back = voidforge_host::recover(&mut pg, &rules, &fixture())
             .await
             .unwrap_or_else(|e| panic!("{name}: {e}"));
-        let m = files.manifest();
+        let m = files.manifest().unwrap();
         assert_eq!(
             back.last_seq,
             m.records.last().map_or(0, |c| c.seq),

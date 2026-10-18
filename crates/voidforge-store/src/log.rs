@@ -188,6 +188,35 @@ impl SnapshotRow {
     }
 }
 
+/// A snapshot row without its payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotMeta {
+    /// The last log record included; 0 before any.
+    pub seq: i64,
+    /// The header's game time.
+    pub game_time: i64,
+    /// The header's rules version.
+    pub rules_version: u32,
+    /// The header's engine build.
+    pub engine_build: String,
+    /// The header's state hash.
+    pub state_hash: Vec<u8>,
+}
+
+impl SnapshotRow {
+    /// The row's columns without the payload.
+    #[must_use]
+    pub fn meta(&self) -> SnapshotMeta {
+        SnapshotMeta {
+            seq: self.seq,
+            game_time: self.game_time,
+            rules_version: self.rules_version,
+            engine_build: self.engine_build.clone(),
+            state_hash: self.state_hash.clone(),
+        }
+    }
+}
+
 /// Why the log could not be read or written.
 #[derive(Debug, thiserror::Error)]
 pub enum LogError {
@@ -253,6 +282,16 @@ pub trait LogStore: Send + 'static {
         &mut self,
         build: Option<&str>,
     ) -> impl Future<Output = Result<Option<SnapshotRow>, LogError>> + Send;
+    /// Every snapshot's columns except the payload, in seq order: the replay tool's checkpoints
+    /// and inventory (D-041).
+    fn snapshot_index(
+        &mut self,
+    ) -> impl Future<Output = Result<Vec<SnapshotMeta>, LogError>> + Send;
+    /// The snapshot taken after record `seq`, if there is one.
+    fn snapshot_at(
+        &mut self,
+        seq: i64,
+    ) -> impl Future<Output = Result<Option<SnapshotRow>, LogError>> + Send;
 }
 
 // --- JSON and UUID forms ---
@@ -272,6 +311,17 @@ fn outcome_json(o: Outcome) -> Result<String, serde_json::Error> {
         }
         Outcome::Rejected(reason) => serde_json::to_string(&OutcomeJson::Rejected { reason }),
     }
+}
+
+/// Events in their log JSON form, for reports (never fails: an unrepresentable value is shown
+/// as an error string).
+pub(crate) fn events_json(events: &[DomainEvent]) -> String {
+    serde_json::to_string(events).unwrap_or_else(|e| format!("<{e}>"))
+}
+
+/// An outcome in its log JSON form, for reports.
+pub(crate) fn outcome_text(o: Outcome) -> String {
+    outcome_json(o).unwrap_or_else(|e| format!("<{e}>"))
 }
 
 fn parse_payload(s: &str) -> Result<Payload, serde_json::Error> {
@@ -627,6 +677,21 @@ impl LogStore for MemoryLog {
             .max_by_key(|s| s.seq)
             .cloned())
     }
+
+    async fn snapshot_index(&mut self) -> Result<Vec<SnapshotMeta>, LogError> {
+        let mut index: Vec<SnapshotMeta> = self
+            .lock()
+            .snapshots
+            .iter()
+            .map(SnapshotRow::meta)
+            .collect();
+        index.sort_by_key(|s| s.seq);
+        Ok(index)
+    }
+
+    async fn snapshot_at(&mut self, seq: i64) -> Result<Option<SnapshotRow>, LogError> {
+        Ok(self.lock().snapshots.iter().find(|s| s.seq == seq).cloned())
+    }
 }
 
 // --- The Postgres store ---
@@ -704,6 +769,14 @@ impl PgLog {
             .max_connections(1)
             .connect_lazy_with(options);
         Self { pool }
+    }
+    /// [`PgLog::lazy`] from a database URL (the replay tool's `--database-url`).
+    ///
+    /// # Errors
+    /// [`LogError::Database`] if the URL is not a Postgres URL.
+    pub fn lazy_url(url: &str) -> Result<Self, LogError> {
+        let options: sqlx::postgres::PgConnectOptions = url.parse()?;
+        Ok(Self::lazy(options))
     }
 }
 
@@ -867,6 +940,55 @@ impl LogStore for PgLog {
                FROM snapshots WHERE ($1::text IS NULL OR engine_build = $1)
                ORDER BY seq DESC LIMIT 1"#,
             build,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| {
+            Ok(SnapshotRow {
+                seq: r.seq,
+                game_time: r.game_time,
+                rules_version: u32::try_from(r.rules_version).map_err(|_| LogError::Corrupt {
+                    seq: r.seq,
+                    what: format!("snapshot rules version {}", r.rules_version),
+                })?,
+                engine_build: r.engine_build,
+                state_hash: r.state_hash,
+                payload: r.payload,
+            })
+        })
+        .transpose()
+    }
+
+    async fn snapshot_index(&mut self) -> Result<Vec<SnapshotMeta>, LogError> {
+        let rows = sqlx::query!(
+            r#"SELECT seq, game_time, rules_version, engine_build, state_hash
+               FROM snapshots ORDER BY seq"#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(SnapshotMeta {
+                    seq: r.seq,
+                    game_time: r.game_time,
+                    rules_version: u32::try_from(r.rules_version).map_err(|_| {
+                        LogError::Corrupt {
+                            seq: r.seq,
+                            what: format!("snapshot rules version {}", r.rules_version),
+                        }
+                    })?,
+                    engine_build: r.engine_build,
+                    state_hash: r.state_hash,
+                })
+            })
+            .collect()
+    }
+
+    async fn snapshot_at(&mut self, seq: i64) -> Result<Option<SnapshotRow>, LogError> {
+        let row = sqlx::query!(
+            r#"SELECT seq, game_time, rules_version, engine_build, state_hash, payload
+               FROM snapshots WHERE seq = $1"#,
+            seq,
         )
         .fetch_optional(&self.pool)
         .await?;

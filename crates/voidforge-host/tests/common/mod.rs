@@ -112,6 +112,16 @@ impl LogStore for GatedLog {
     ) -> Result<Option<SnapshotRow>, LogError> {
         self.inner.latest_snapshot(build).await
     }
+
+    async fn snapshot_index(
+        &mut self,
+    ) -> Result<Vec<voidforge_store::log::SnapshotMeta>, LogError> {
+        self.inner.snapshot_index().await
+    }
+
+    async fn snapshot_at(&mut self, seq: i64) -> Result<Option<SnapshotRow>, LogError> {
+        self.inner.snapshot_at(seq).await
+    }
 }
 
 /// Waits until nothing in the published World is due at the clock's time: every due entry has
@@ -229,6 +239,16 @@ impl LogStore for AppendThenFail {
     ) -> Result<Option<SnapshotRow>, LogError> {
         self.0.latest_snapshot(build).await
     }
+
+    async fn snapshot_index(
+        &mut self,
+    ) -> Result<Vec<voidforge_store::log::SnapshotMeta>, LogError> {
+        self.0.snapshot_index().await
+    }
+
+    async fn snapshot_at(&mut self, seq: i64) -> Result<Option<SnapshotRow>, LogError> {
+        self.0.snapshot_at(seq).await
+    }
 }
 
 /// A store that lets `n` appends through and then refuses every later one, without writing it:
@@ -283,6 +303,16 @@ impl<T: LogStore + Clone + Sync> LogStore for FailAfter<T> {
         build: Option<&str>,
     ) -> Result<Option<SnapshotRow>, LogError> {
         self.inner.latest_snapshot(build).await
+    }
+
+    async fn snapshot_index(
+        &mut self,
+    ) -> Result<Vec<voidforge_store::log::SnapshotMeta>, LogError> {
+        self.inner.snapshot_index().await
+    }
+
+    async fn snapshot_at(&mut self, seq: i64) -> Result<Option<SnapshotRow>, LogError> {
+        self.inner.snapshot_at(seq).await
     }
 }
 

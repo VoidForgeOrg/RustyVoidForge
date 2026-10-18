@@ -534,7 +534,8 @@ async fn a_tampered_tail_record_is_a_divergence() {
         recover(&store, &v0_rules()).await,
         Err(RecoverError::Replay(ReplayError::Diverged {
             seq: 3,
-            what: "outcome"
+            what: "outcome",
+            ..
         }))
     ));
 }
@@ -712,7 +713,8 @@ async fn a_tail_record_with_other_events_is_a_divergence() {
         recover(&store, &v0_rules()).await,
         Err(RecoverError::Replay(ReplayError::Diverged {
             seq: 2,
-            what: "events"
+            what: "events",
+            ..
         }))
     ));
 }
@@ -861,7 +863,7 @@ async fn a_record_whose_events_were_emptied_diverges() {
     log.tamper(r);
     assert!(matches!(
         recover(&log, &v0_rules()).await,
-        Err(RecoverError::Replay(ReplayError::Diverged { seq: s, what: "events" })) if s == seq
+        Err(RecoverError::Replay(ReplayError::Diverged { seq: s, what: "events", .. })) if s == seq
     ));
 }
 

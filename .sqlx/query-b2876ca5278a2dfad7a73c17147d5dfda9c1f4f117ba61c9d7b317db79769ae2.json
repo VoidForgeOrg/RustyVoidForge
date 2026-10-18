@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE log_records SET events = jsonb_build_array(events->1, events->0, events->2) WHERE seq = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b2876ca5278a2dfad7a73c17147d5dfda9c1f4f117ba61c9d7b317db79769ae2"
+}

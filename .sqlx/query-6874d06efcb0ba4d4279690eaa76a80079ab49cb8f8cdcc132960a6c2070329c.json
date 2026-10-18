@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT seq, game_time, rules_version, engine_build, state_hash\n               FROM snapshots ORDER BY seq",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seq",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "game_time",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "game_time"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "rules_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "rules_version"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "engine_build",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "engine_build"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "state_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "state_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6874d06efcb0ba4d4279690eaa76a80079ab49cb8f8cdcc132960a6c2070329c"
+}
