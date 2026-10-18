@@ -34,12 +34,27 @@ use voidforge_core::state::{EngineError, Planet, PlanetId, Position, StateError,
 /// Draws for one planet before generation gives up with [`WorldgenError::Exhausted`].
 pub const MAX_ATTEMPTS: u32 = 10_000;
 
+/// The most planets a universe may have (players × planets per expected player), checked before
+/// anything is allocated: [`WorldgenError::TooLarge`]. Generation is linear in planets (measured
+/// in release: 100,000 planets in about 0.26 s and a 4 MB snapshot), so this bounds an operator's
+/// request well before time or memory become a problem. At Rules v0 it is 5,000 players, far
+/// above the default cube's own limit of about 240 (decision log D-033, D-043).
+pub const MAX_PLANETS: u64 = 100_000;
+
 /// Why a world could not be generated.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WorldgenError {
     /// A universe needs at least one expected player.
     #[error("a universe needs at least one expected player")]
     NoPlayers,
+    /// The universe asked for is larger than [`MAX_PLANETS`].
+    #[error("a universe of {planets} planets is too large: the limit is {max} planets")]
+    TooLarge {
+        /// Players × planets per expected player.
+        planets: u64,
+        /// [`MAX_PLANETS`].
+        max: u64,
+    },
     /// The rules are not valid.
     #[error(transparent)]
     Rules(#[from] RulesError),
@@ -92,6 +107,12 @@ pub fn generate(seed: u64, players: u32, rules: &Rules) -> Result<World, Worldge
     let radius = g.homeworld_neighbor_radius_du / unit;
     // Two u32 values in u64 (D-032).
     let total = u64::from(players).strict_mul(u64::from(g.planets_per_expected_player));
+    if total > MAX_PLANETS {
+        return Err(WorldgenError::TooLarge {
+            planets: total,
+            max: MAX_PLANETS,
+        });
+    }
 
     // Necessary packing bounds. Balls of radius s/2 around n points pairwise s apart are
     // disjoint and lie in the cube widened by s/2 on each side, so n × (π/6) × s³ ≤ (L + s)³.

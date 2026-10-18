@@ -39,3 +39,75 @@ pub async fn migrate(pool: &PgPool) -> Result<(), StoreError> {
     MIGRATOR.run(pool).await?;
     Ok(())
 }
+
+/// Why a universe could not be bootstrapped.
+#[derive(Debug, thiserror::Error)]
+pub enum BootstrapError {
+    /// The database URL is not a Postgres URL.
+    #[error("the database URL is not a Postgres URL")]
+    Url,
+    /// The database could not be reached or written.
+    #[error("database: {0}")]
+    Database(#[from] sqlx::Error),
+    /// Applying the migrations failed.
+    #[error("migrations failed: {0}")]
+    Migrate(#[from] MigrateError),
+    /// The snapshot row's rules version exceeds the column.
+    #[error("rules version {0} exceeds i32")]
+    RulesVersion(u32),
+    /// The database already holds a universe (any snapshot or log record): never overwritten.
+    #[error("the database already holds a universe")]
+    NotEmpty {
+        /// The existing seq-0 snapshot's state hash, if there is one.
+        seq0_state_hash: Option<Vec<u8>>,
+    },
+}
+
+/// Bootstraps a universe (Technical Plan P2.9; decision log D-043): connects to `url`, applies
+/// the migrations, and writes `snapshot` at seq 0, in one transaction that holds both
+/// tables locked and refuses unless the database is empty. A universe is never overwritten.
+///
+/// # Errors
+/// [`BootstrapError::NotEmpty`] if any snapshot or log record exists; otherwise the connection,
+/// migration or write failure.
+pub async fn bootstrap(url: &str, snapshot: &snapshot::Snapshot) -> Result<(), BootstrapError> {
+    let row = log::SnapshotRow::new(0, snapshot);
+    let options: sqlx::postgres::PgConnectOptions = url.parse().map_err(|_| BootstrapError::Url)?;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await?;
+    migrate(&pool).await.map_err(|StoreError::Migrate(e)| e)?;
+    let rules_version = i32::try_from(row.rules_version)
+        .map_err(|_| BootstrapError::RulesVersion(row.rules_version))?;
+    let mut tx = pool.begin().await?;
+    // Two seeds at once cannot both find the database empty.
+    sqlx::query!("LOCK TABLE snapshots, log_records IN EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
+    let used = sqlx::query_scalar!(
+        r#"SELECT (EXISTS (SELECT 1 FROM snapshots) OR EXISTS (SELECT 1 FROM log_records)) AS "used!""#
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if used {
+        let seq0_state_hash = sqlx::query_scalar!("SELECT state_hash FROM snapshots WHERE seq = 0")
+            .fetch_optional(&mut *tx)
+            .await?;
+        return Err(BootstrapError::NotEmpty { seq0_state_hash });
+    }
+    sqlx::query!(
+        r#"INSERT INTO snapshots (seq, game_time, rules_version, engine_build, state_hash, payload)
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
+        row.seq,
+        row.game_time,
+        rules_version,
+        row.engine_build,
+        row.state_hash,
+        row.payload,
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
