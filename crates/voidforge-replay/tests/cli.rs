@@ -18,6 +18,12 @@ fn goldens() -> PathBuf {
     repo().join("tests/golden")
 }
 
+/// Rules v0, passed explicitly for golden copies under the target directory, which may be outside
+/// the repository (P2.7 QA L1): the default search looks only above the golden.
+fn v0() -> String {
+    repo().join("rules/v0.toml").to_str().unwrap().to_owned()
+}
+
 struct Run {
     code: i32,
     stdout: String,
@@ -123,7 +129,7 @@ fn write_manifest(dir: &Path, m: &Value) {
 
 /// The first divergence of a golden run: (exit, result, seq, what).
 fn divergence(dir: &Path) -> (i32, String, Option<i64>, String) {
-    let (code, v) = json(&["golden", dir.to_str().unwrap()]);
+    let (code, v) = json(&["golden", dir.to_str().unwrap(), "--rules", &v0()]);
     let s = &v["sources"][0];
     let d = &s["divergence"];
     (
@@ -267,7 +273,7 @@ fn a_divergence_reports_what_the_record_holds_and_what_replay_found() {
     ev.swap(0, 1);
     records[9] = with_events(&records[9], &ev);
     write_lines(&dir, &records);
-    let (_, v) = json(&["golden", dir.to_str().unwrap()]);
+    let (_, v) = json(&["golden", dir.to_str().unwrap(), "--rules", &v0()]);
     let d = &v["sources"][0]["divergence"];
     assert_ne!(d["expected"], d["found"]);
     assert!(
@@ -282,7 +288,7 @@ fn a_divergence_reports_what_the_record_holds_and_what_replay_found() {
             .unwrap()
             .starts_with("[{\"FleetArrived\"")
     );
-    let r = run(&["golden", dir.to_str().unwrap()]);
+    let r = run(&["golden", dir.to_str().unwrap(), "--rules", &v0()]);
     assert!(r.stdout.starts_with("DIVERGED "), "{}", r.stdout);
     assert!(r.stdout.contains("events at seq 10"), "{}", r.stdout);
 }
@@ -293,7 +299,7 @@ fn a_build_or_rules_mismatch_is_refused() {
     let mut m = manifest(&dir);
     m["engine_build"] = Value::from("0.1.0+someothercommit");
     write_manifest(&dir, &m);
-    let (code, v) = json(&["golden", dir.to_str().unwrap()]);
+    let (code, v) = json(&["golden", dir.to_str().unwrap(), "--rules", &v0()]);
     assert_eq!(code, 3);
     assert_eq!(v["result"], "refused");
     assert_eq!(v["sources"][0]["divergence"]["what"], "build");
@@ -323,10 +329,11 @@ fn the_same_input_gives_byte_identical_output() {
     ev.pop();
     records[11] = with_events(&records[11], &ev);
     write_lines(&dir, &records);
+    let rules = v0();
     for args in [
         vec!["golden", goldens().to_str().unwrap()],
         vec!["golden", goldens().to_str().unwrap(), "--json"],
-        vec!["golden", dir.to_str().unwrap(), "--json"],
+        vec!["golden", dir.to_str().unwrap(), "--rules", &rules, "--json"],
         vec!["inspect", "golden", goldens().to_str().unwrap()],
     ] {
         let (a, b) = (run(&args), run(&args));

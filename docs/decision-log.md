@@ -848,3 +848,43 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `tests/postgres.rs` runs in the database stage.
     - `just replay` runs the tool.
 - Where it's enforced: `crates/voidforge-store/src/{golden.rs, verify.rs, replay.rs, log.rs}`, `crates/voidforge-replay/`, `crates/voidforge-host/tests/{golden.rs, common/golden.rs}`, `.sqlx/`, `deny.toml`, the [version table](versions.md), `justfile`, `.github/scripts/determinism.sh`.
+
+### D-042: The crash-and-retry harness
+
+- Date and package: 2026-10-18, P2.8. Proposed by dev-build (`slices/28-p2-8-crash-retry/proposal-crash.md`). **Lead ruling; advisor review pending** (`ruling-lead.md`). None of it is game intent.
+- Decision:
+  - **A kill is a real process death at a seeded point.**
+    - `crates/voidforge-host/tests/crash.rs` re-invokes its own test binary as a child (the ignored `crash_child`). The child recovers from the store (D-038), runs the real host with a `ManualClock`, and talks JSON lines over stdin and stdout, prefixed `@crash `.
+    - The child calls `std::process::abort()` at the Nth hit of a named kill point, with the point and N chosen from the seed. So no destructors, flush, reply or snapshot happen after it.
+    - The kill points live in the child's store wrapper and protocol loop, which are test code. **No production code has a hook.**
+  - **The kill points and their crash-table rows:**
+
+    | Point | Crash-table row |
+    | --- | --- |
+    | `append.before` | before the append |
+    | `append.during` | before the append (atomicity) |
+    | `append.after` | after the append, before the reply |
+    | `reply.after` | after the reply |
+    | `snapshot.before`, `snapshot.during` (file store only), `snapshot.after` | between the reply and the snapshot |
+    | `recover.during` | during recovery |
+
+    - A kill inside a multi-command turn is asserted as hit.
+    - Per batch, the parent checks by effect that a batch killed before or during its append is absent after the death, and one killed after it is durable.
+  - **Postgres's `append.during` dies inside PgLog's own open transaction.**
+    - A test-only trigger on `log_records`, armed through a `crash_hold` table, holds PgLog's first INSERT in `pg_sleep`. The child aborts once it sees that backend sleeping.
+    - The test database's `client_connection_check_interval` is 20 ms, set with `ALTER DATABASE` because it must be in place before a statement starts. The server notices the dead client and rolls the transaction back.
+    - This is PgLog's exact statements, with no copied SQL and no hook. A Postgres snapshot is one autocommit INSERT, so Postgres has no separate `snapshot.during`.
+    - The harness's control SQL (the trigger, the hold, `pg_stat_activity`) is test-only and uses `sqlx::raw_sql`, not checked queries.
+  - **The memory variant is a file-backed test store,** `FileLog` (`tests/common/filelog.rs`): JSONL records, each append ending in a commit line and `sync_all`, with a torn tail discarded. That way a death keeps exactly what was durable.
+  - **Clients retry every unacknowledged command with its key** in the next life. The last life has no kill, so it completes the script and shuts down cleanly.
+  - **The checks, after every seed:**
+    - exactly one record per (player, key), and none unplanned;
+    - each client's final receipt equals its record (seq, t, outcome, own events);
+    - `verify_log` from the seq-0 snapshot (D-041);
+    - gap-free seqs;
+    - the log and the World at the end equal a reference host that never died, given the logged commands at their logged times.
+  - **Determinism:** each life's kill point and N are functions of the seed. How a turn's commands are batched depends on scheduling, so the records inside a multi-command turn may differ between runs of one seed. The checks don't depend on it, and a failure names its seed.
+  - **Bounds:**
+    - per PR, 12 seeds of 40 commands on the file store in `test` (about 5 s), and 4 seeds of 30 commands on Postgres in the database stage (about 6 s; the filter gains the crash binary's Postgres test);
+    - the nightly shape (P5.3 schedules it) is the ignored `crash_nightly`, with `VOIDFORGE_CRASH_SEED_BASE`, `VOIDFORGE_CRASH_SEEDS` and `VOIDFORGE_CRASH_COMMANDS`.
+- Where it's enforced: `crates/voidforge-host/tests/{crash.rs, common/filelog.rs}`, `.github/scripts/database.sh`.
