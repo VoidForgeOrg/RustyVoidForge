@@ -122,7 +122,9 @@ async fn a_command_is_applied_logged_durably_then_acknowledged() {
             player: Some(ALICE),
             idempotency_key: None,
             payload: Payload::Command(build_drill(home)),
-            outcome: Outcome::Accepted,
+            outcome: Outcome::Accepted {
+                own_events: u32::try_from(applied.outcome.as_ref().unwrap().len()).unwrap(),
+            },
             events,
             rules_version: 0,
             engine_build: build(),

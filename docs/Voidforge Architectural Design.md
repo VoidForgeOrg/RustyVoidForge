@@ -273,7 +273,7 @@ At the crossing the quantity is set exactly to B and its remainder to 0. A cross
 The engine host is the only writer for its universe: one thread owns the `World`, and everything else reaches it through a bounded inbox. A command is acknowledged only after its log record is durable.
 
 1. Wait until a command arrives or the next queue entry comes due.
-2. For a command, look up its idempotency key. A known key returns the logged outcome without applying anything.
+2. For a command, look up its idempotency key. A known key returns the logged outcome without applying anything; the same key with a different command is refused as a conflict (D-037).
 3. Stamp t = max(wall clock, last t) and take the next sequence number.
 4. Run `apply(command, t)`, or `advance_to(t)` when only time has passed.
 5. Append one log record with the command, t, the outcome and the domain events. A step that only advances time and fires no domain events appends nothing: replay reproduces it through observation invariance, because the next logged step advances through the same instant to the same state (D-024, D-036). Under load, several records share one durable write (group commit).
@@ -285,7 +285,7 @@ The engine host is the only writer for its universe: one thread owns the `World`
 | After the append, before the reply | The command is in the log and is replayed | A retry with the same key returns the logged outcome |
 | After the reply | The command is in the log | Nothing further |
 
-A failed append is fatal: the host stops and recovers rather than run on with memory the log does not contain. A full inbox makes the API answer 503 with Retry-After. Idempotency keys stay known for a configurable window and are rebuilt from the log on recovery.
+A failed append is fatal: the host stops and recovers rather than run on with memory the log does not contain. A full inbox makes the API answer 503 with Retry-After. A repeated idempotency key always returns its first outcome, at any age: the host caches the keys of a configurable window of game time, rebuilds that cache from the log on start, and looks a key that misses the cache up in the log, so a used key never reaches the append (D-037).
 
 ## Persistence
 
