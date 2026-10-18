@@ -458,3 +458,171 @@ async fn the_memory_store_refuses_a_duplicate_key_like_the_table() {
     );
     assert!(fresh.snapshot().is_empty(), "all or none");
 }
+
+/// A clock whose sleeps never end: the host never wakes on its own, so due events run only
+/// inside the next command's apply, and command records hold advance events too.
+#[derive(Clone)]
+struct NoWake(ManualClock);
+
+impl voidforge_host::Clock for NoWake {
+    fn now_unix_ms(&self) -> i64 {
+        self.0.now_unix_ms()
+    }
+    async fn sleep_until_unix_ms(&self, _at: i64) {
+        std::future::pending::<()>().await;
+    }
+}
+
+#[tokio::test]
+async fn every_receipt_survives_a_restart_exactly() {
+    // A whole keyed economy script with no wakes between commands, then a restart from the same
+    // log: every keyed command, resubmitted, gets exactly its first receipt, from the rebuilt
+    // cache and, with a tiny window, through the log. Records hold events that came due before
+    // the command as well as the command's own, so the receipt must split them correctly.
+    use voidforge_host::Clock;
+    use voidforge_store::log::{Outcome, Payload};
+    let e = common::economy(0x2_4001);
+    let rules = v0_rules();
+    let log = MemoryLog::new();
+    let clock = NoWake(clock_at(0));
+    let (handle, task) = {
+        let log = log.clone();
+        voidforge_host::spawn(
+            common::start(&e, &rules),
+            rules.clone(),
+            move || log,
+            clock.clone(),
+            config(),
+        )
+        .unwrap()
+    };
+    let mut receipts = Vec::new();
+    for (at, k) in e.script() {
+        clock.0.set(EPOCH + at);
+        let command = e.command(k, &handle.read().world);
+        receipts.push(
+            timeout(handle.submit_with_key(command, common::key_for(k)))
+                .await
+                .unwrap(),
+        );
+    }
+    let world = handle.read().world.as_ref().clone();
+    drop(handle);
+    task.join().unwrap();
+    let records = log.snapshot();
+    assert_eq!(
+        records.len(),
+        receipts.len(),
+        "only command records: the host never woke"
+    );
+    let advanced = records.iter().filter(|r| match r.outcome {
+        Outcome::Accepted { own_events } => (own_events as usize) < r.events.len(),
+        Outcome::Rejected(_) => !r.events.is_empty(),
+        Outcome::Empty => false,
+    });
+    let own = records
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Accepted { own_events } if own_events > 0));
+    let (advanced, own) = (advanced.count(), own.count());
+    println!(
+        "records {}, with advance events {advanced}, with own events {own}",
+        records.len()
+    );
+    assert!(advanced > 0, "some commands ran due events first");
+    for window in [config().key_window_ms, 1] {
+        let mut cfg = config();
+        cfg.key_window_ms = window;
+        let (handle, task) = {
+            let log = log.clone();
+            voidforge_host::spawn(
+                world.clone(),
+                rules.clone(),
+                move || log,
+                clock.clone(),
+                cfg,
+            )
+            .unwrap()
+        };
+        for (record, first) in records.iter().zip(&receipts) {
+            let Payload::Command(command) = &record.payload else {
+                panic!("a command record")
+            };
+            let key = record.idempotency_key.clone().unwrap();
+            let again = timeout(handle.submit_with_key(command.clone(), key)).await;
+            assert_eq!(
+                again.as_ref(),
+                Ok(first),
+                "record {} (window {window})",
+                record.seq
+            );
+        }
+        assert_eq!(handle.stats().steps(), 0, "nothing applied");
+        let _ = clock.now_unix_ms();
+        drop(handle);
+        task.join().unwrap();
+    }
+    assert_eq!(log.snapshot().len(), receipts.len(), "nothing appended");
+}
+
+#[tokio::test]
+async fn a_rebuilt_receipt_returns_exactly_the_commands_own_events() {
+    // A logged record whose last two of three events are the command's own (own_events = 2):
+    // a restart answers the key with exactly those two, from the cache and through the log.
+    // (Under Rules v0 a command's own events are rare, so the log is seeded directly.)
+    use voidforge_core::state::{BuildingId, DomainEvent};
+    use voidforge_store::log::{Outcome, Payload};
+    let event = |n: u64| DomainEvent::BuildingCompleted {
+        planet: PlanetId(1),
+        building: BuildingId(n),
+        kind: BuildingKind::Drill,
+    };
+    let mut b = WorldBuilder::new().at(100 * H);
+    let home = b.player(ALICE);
+    let world = b.build();
+    let log = MemoryLog::new();
+    {
+        let mut log = log.clone();
+        log.append(&[LogRecord {
+            seq: 1,
+            kind: RecordKind::Command,
+            game_time: H,
+            wall_time_ms: EPOCH + H,
+            player: Some(ALICE),
+            idempotency_key: Some(key("seeded")),
+            payload: Payload::Command(drill(home)),
+            outcome: Outcome::Accepted { own_events: 2 },
+            events: vec![event(1), event(2), event(3)],
+            rules_version: 0,
+            engine_build: common::build(),
+        }])
+        .await
+        .unwrap();
+    }
+    for window in [1_000 * H, 1] {
+        let mut cfg = config();
+        cfg.key_window_ms = window;
+        let (handle, task) = {
+            let log = log.clone();
+            voidforge_host::spawn(
+                world.clone(),
+                v0_rules(),
+                move || log,
+                clock_at(100 * H),
+                cfg,
+            )
+            .unwrap()
+        };
+        let receipt = timeout(handle.submit_with_key(drill(home), key("seeded")))
+            .await
+            .unwrap();
+        assert_eq!(receipt.seq, 1);
+        assert_eq!(receipt.t, H);
+        assert_eq!(
+            receipt.outcome,
+            Ok(vec![event(2), event(3)]),
+            "window {window}"
+        );
+        drop(handle);
+        task.join().unwrap();
+    }
+}
