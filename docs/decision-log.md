@@ -1007,8 +1007,19 @@ Each entry records its date, the package that made it, the decision, the reasons
     - the nullable fields that are always sent are required by serde too (`deserialize_with = "Option::deserialize"`), as the schema requires them;
     - the `Idempotency-Key` header carries `IdempotencyKey::parse`'s rule as a pattern;
     - `near` carries a pattern of three integers. A coordinate beyond i64 that fits the pattern is P3.4's `invalid_query`, the one remaining gap; a regular expression can't bound i64 exactly.
-    - The deliberate difference stays: a duplicate ship ID is well-formed to serde (a list), so that `check_unique_ships` answers 400 `duplicate_ship_ids`.
+    - **Two deliberate differences, and only two:**
+      - a duplicate ship ID is well-formed to serde (a list), so that `check_unique_ships` answers 400 `duplicate_ship_ids`;
+      - an **integral float** (`1042.0` where an integer goes) is an integer in JSON Schema 2020-12, so the schema accepts it, but serde refuses it for an integer field. In a request, that's 400 `malformed_body`, which P3.4 confirms. The server never writes one. (Repair round 2, dev-qa's I1.)
   - **Tests:** each composed view refuses a typo and another state's field (schema and serde), while every legitimate state validates. Each integer kind is checked at its valid edge and one past it, through a component, a referenced ID, the path ID and the `radius` query parameter.
     - JSON past i64's minimum or u64's maximum parses as a float, so the first value past i64::MIN is the nearest float, -2^63 - 2048.
     - An agreement table checks UUID forms, times (leap days, month ends, 24:00, :60, no milliseconds, offsets), missing and null fields, idempotency keys and `near`.
+- **Repair round 2** (QA's Q1 and I1 on 5571ab7; review-r2 PASS): tests and docs only, with no product change.
+  - The agreement tests now hold dev-qa's cases:
+    - century leap years;
+    - every month's last day and the next, in a common and a leap year;
+    - a wrong byte at each timestamp separator;
+    - every always-sent nullable field missing, one by one;
+    - every other state's field in every building and fleet state, directly and inside the whole view, against each state's field set pinned as contract (so a field added to a state fails even when serde and the schema agree on it).
+  - dev-qa's 11 drift mutants, of which 4 were caught before, are now all caught.
+  - The integral float is named as the second deliberate difference, above.
 - Where it's enforced: `crates/voidforge-api-types/` (`src/`, `openapi.json`, `tests/contract.rs`, `tests/openapi_file.rs`), `crates/voidforge-server/tests/api_codes.rs`, `justfile` (`openapi`), `deny.toml`, the [version table](versions.md), the Architectural Design's Read side and API.

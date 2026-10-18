@@ -630,7 +630,8 @@ fn integers_are_bounded_by_their_rust_type() {
 }
 
 /// The recurring class behind F1 and L1: anywhere the schema and serde could disagree, they give
-/// the same verdict. The one deliberate exception is a duplicate ship ID, which serde reads into
+/// the same verdict. The deliberate exceptions are two: an integral float (pinned below) and a
+/// duplicate ship ID, which serde reads into
 /// a list so `check_unique_ships` can answer 400 `duplicate_ship_ids` (covered above).
 #[test]
 fn the_schema_and_serde_agree() {
@@ -714,6 +715,17 @@ fn the_schema_and_serde_agree() {
             "parse on {k:?}"
         );
     }
+    // The second deliberate difference (D-045): an integral float is an integer to JSON Schema
+    // 2020-12, while serde refuses it; a request carrying one is 400 malformed_body.
+    let float_id = json!({"type": "recall_fleet", "payload": {"fleet_id": 8001.0}});
+    assert!(
+        c.check("CommandRequest", &float_id).is_ok(),
+        "the schema accepts 8001.0"
+    );
+    assert!(
+        serde_json::from_value::<CommandRequest>(float_id).is_err(),
+        "serde refuses 8001.0"
+    );
     let near = c.parameter("/planets", "get", "near");
     for (n, valid) in [
         ("120000,-45500,3000", true),
@@ -723,5 +735,234 @@ fn the_schema_and_serde_agree() {
         ("x,y,z", false),
     ] {
         assert_eq!(near.is_valid(&json!(n)), valid, "near {n:?}");
+    }
+}
+
+/// Repair round 2 (dev-qa's Q1): the cases that caught QA's schema/serde drift mutants, so this
+/// suite catches them too. Times: century leap years, every month's last day and the next in a
+/// common and a leap year, and a wrong byte at each separator.
+#[test]
+fn times_agree_on_the_calendar_and_every_separator() {
+    let c = Contract::new();
+    let player = json!({"player_id": ALICE, "homeworld_id": 1042, "planet_ids": [1042],
+        "score": 1, "as_of": t("12:00:00"), "valid_until": null});
+    let at = |time: &str| with(&player, "/as_of", json!(time));
+    for (date, valid) in [
+        ("2000-02-29", true),
+        ("1900-02-29", false),
+        ("2100-02-29", false),
+    ] {
+        agree::<PlayerView>(
+            &c,
+            "PlayerView",
+            &at(&format!("{date}T00:00:00.000Z")),
+            valid,
+        );
+    }
+    for (year, february) in [(2026, 28), (2028, 29)] {
+        let lengths = [31, february, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        for (month, last) in (1..=12).zip(lengths) {
+            let day = |d: u32| format!("{year}-{month:02}-{d:02}T12:00:00.000Z");
+            agree::<PlayerView>(&c, "PlayerView", &at(&day(last)), true);
+            agree::<PlayerView>(&c, "PlayerView", &at(&day(last + 1)), false);
+        }
+    }
+    let good = "2026-10-01T12:00:00.000Z";
+    for position in [4, 7, 10, 13, 16, 19, 23] {
+        for wrong in ['0', 'x', ' '] {
+            let mut bytes = good.as_bytes().to_vec();
+            bytes[position] = wrong as u8;
+            let time = String::from_utf8(bytes).unwrap();
+            agree::<PlayerView>(&c, "PlayerView", &at(&time), false);
+        }
+    }
+}
+
+/// Every nullable field that's always sent, missing: refused by both (null is fine, covered
+/// above). One case per field, so a field that drifts back to optional in serde is caught.
+#[test]
+fn every_always_sent_field_is_required_by_both() {
+    let c = Contract::new();
+    let planet = planet_view();
+    let near = json!({"as_of": t("12:00:00"), "valid_until": null, "planets": [
+        {"planet_id": 1077, "position": {"x": 0, "y": 0, "z": 0}, "owner": null, "distance": 1}]});
+    let player = json!({"player_id": ALICE, "homeworld_id": 1042, "planet_ids": [1042],
+        "score": 1, "as_of": t("12:00:00"), "valid_until": null});
+    let fleets = fleets_view();
+    agree::<PlanetsNearView>(&c, "PlanetsNearView", &near, true);
+    let drop = |value: &Value, at: &str, name: &str| {
+        let mut v = value.clone();
+        v.pointer_mut(at)
+            .and_then(Value::as_object_mut)
+            .unwrap_or_else(|| panic!("{at} is an object"))
+            .remove(name)
+            .unwrap_or_else(|| panic!("{at}/{name} exists"));
+        v
+    };
+    agree::<PlanetView>(&c, "PlanetView", &drop(&planet, "", "owner"), false);
+    agree::<PlanetView>(&c, "PlanetView", &drop(&planet, "", "valid_until"), false);
+    agree::<PlanetView>(
+        &c,
+        "PlanetView",
+        &drop(&planet, "/buildings/1", "eta"),
+        false,
+    );
+    agree::<PlanetView>(
+        &c,
+        "PlanetView",
+        &drop(&planet, "/ship_builds/0", "eta"),
+        false,
+    );
+    agree::<PlanetView>(
+        &c,
+        "PlanetView",
+        &drop(&planet, "/ship_builds/1", "eta"),
+        false,
+    );
+    agree::<PlanetsNearView>(
+        &c,
+        "PlanetsNearView",
+        &drop(&near, "", "valid_until"),
+        false,
+    );
+    agree::<PlanetsNearView>(
+        &c,
+        "PlanetsNearView",
+        &drop(&near, "/planets/0", "owner"),
+        false,
+    );
+    agree::<PlayerView>(&c, "PlayerView", &drop(&player, "", "valid_until"), false);
+    agree::<FleetsView>(&c, "FleetsView", &drop(&fleets, "", "valid_until"), false);
+}
+
+/// The fields of each state, as the contract (D-045). Pinned here rather than read from the
+/// document, so a field added to a state (an optional `mission` on a returning fleet, say)
+/// fails even when serde and the schema agree on it.
+fn state_fields() -> [(&'static str, &'static str, &'static [&'static str]); 6] {
+    [
+        (
+            "BuildingView",
+            "under_construction",
+            &["delivered_g", "cost_g", "rate_g_per_h", "eta"],
+        ),
+        ("BuildingView", "operational", &[]),
+        ("BuildingView", "demolishing", &["demolition_ends_at"]),
+        ("FleetView", "stationed", &["at_planet_id"]),
+        (
+            "FleetView",
+            "in_transit",
+            &[
+                "origin_planet_id",
+                "target_planet_id",
+                "mission",
+                "departed_at",
+                "arrives_at",
+            ],
+        ),
+        (
+            "FleetView",
+            "returning",
+            &["origin_planet_id", "arrives_at"],
+        ),
+    ]
+}
+
+/// A well-typed value for a state field, so a refusal is about the field's presence.
+fn sample(field: &str) -> Value {
+    match field {
+        "delivered_g" | "cost_g" | "rate_g_per_h" => json!(1),
+        "eta" | "demolition_ends_at" | "departed_at" | "arrives_at" => t("13:00:00"),
+        "at_planet_id" | "origin_planet_id" | "target_planet_id" => json!(1042),
+        "mission" => json!("move"),
+        other => panic!("no sample for {other}"),
+    }
+}
+
+/// Every other state's field, injected into every state of both composed views, is refused by
+/// both, directly and inside the whole view; and each state's fields are exactly the contract's.
+#[test]
+fn every_other_states_field_is_refused_in_every_state() {
+    use voidforge_api_types::view::{BuildingView, FleetView};
+    let c = Contract::new();
+    let common: BTreeMap<&str, BTreeSet<&str>> = [
+        (
+            "BuildingView",
+            BTreeSet::from(["id", "type", "status", "state"]),
+        ),
+        (
+            "FleetView",
+            BTreeSet::from([
+                "fleet_id",
+                "ships",
+                "cargo",
+                "capacity_g",
+                "speed_du_per_h",
+                "state",
+            ]),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    for (view, state, fields) in state_fields() {
+        let branch = c.doc["components"]["schemas"][view]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["properties"]["state"]["enum"][0] == state)
+            .unwrap_or_else(|| panic!("{view} has {state}"));
+        let declared: BTreeSet<&str> = branch["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected: BTreeSet<&str> = common[view]
+            .iter()
+            .copied()
+            .chain(fields.iter().copied())
+            .collect();
+        assert_eq!(
+            declared, expected,
+            "{view} {state}'s fields are the contract's"
+        );
+    }
+    let planet = planet_view();
+    let fleets = fleets_view();
+    let examples: BTreeMap<(&str, &str), Value> = planet["buildings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| ("BuildingView", b))
+        .chain(
+            fleets["fleets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| ("FleetView", f)),
+        )
+        .map(|(view, v)| ((view, v["state"].as_str().unwrap()), v.clone()))
+        .collect();
+    for (view, state, own) in state_fields() {
+        let example = &examples[&(view, state)];
+        let foreign: BTreeSet<&str> = state_fields()
+            .into_iter()
+            .filter(|(v, s, _)| *v == view && *s != state)
+            .flat_map(|(_, _, fields)| fields.iter().copied())
+            .filter(|f| !own.contains(f))
+            .collect();
+        for f in foreign {
+            let bad = field(example, f, Some(sample(f)));
+            if view == "BuildingView" {
+                agree::<BuildingView>(&c, view, &bad, false);
+                let mut whole = planet.clone();
+                whole["buildings"] = json!([bad]);
+                agree::<PlanetView>(&c, "PlanetView", &whole, false);
+            } else {
+                agree::<FleetView>(&c, view, &bad, false);
+                let mut whole = fleets.clone();
+                whole["fleets"] = json!([bad]);
+                agree::<FleetsView>(&c, "FleetsView", &whole, false);
+            }
+        }
     }
 }

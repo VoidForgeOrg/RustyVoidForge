@@ -22,7 +22,9 @@ Library. P3.1 filled it ([D-045](../../docs/decision-log.md#d-045-the-public-api
   - A tagged union whose serde form refuses unknown fields gets a closed schema (the `Closed` modifier). A state-dependent view is one union whose variants list every field of their state; never `#[serde(flatten)]`, which defeats `deny_unknown_fields`.
   - Every integer schema carries its Rust type's exact bounds (`bound_integers`; a new integer kind needs adding there).
   - A pattern in the schema has the same check in the type's deserialization (`PlayerId`, `Timestamp`).
-  - The only deliberate difference: duplicate ship IDs, refused at the edge by `check_unique_ships`.
+  - Two deliberate differences, and only two:
+    - duplicate ship IDs, refused at the edge by `check_unique_ships`;
+    - integral floats (`1042.0` for an integer): JSON Schema 2020-12 counts them as integers, serde refuses them, and a request carrying one is 400 `malformed_body` (P3.4 confirms).
 - **`openapi.json` beside this crate is the public contract**: it changes only through `just openapi`, its freshness test fails on any difference, and a reviewer checks every change, as with goldens.
 
 ## Tests
