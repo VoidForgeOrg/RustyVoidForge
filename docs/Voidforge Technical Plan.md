@@ -154,7 +154,7 @@ One `docker compose` file runs everything a developer or an agent needs, and `ju
 | voidforge-server | Game API | localhost:8080 |
 | voidforge-web | Rudimentary server-rendered frontend | localhost:8081 |
 
-`just seed` creates a universe from a fixed seed, and dex ships with two static test users. A fixed seed means every developer and every CI run starts from the same world. Rules v0 is the default; RULES=fast swaps in the fast test variant, where an hour of play takes a second, for end-to-end tests, smoke tests and hand-played gates.
+`just seed` creates a universe from a fixed seed in the local stack's `voidforge_dev` database, never in `voidforge`, and refuses when one already exists; `just seed-reset` drops and recreates `voidforge_dev`, then seeds (decision log D-043). Dex ships with two static test users. A fixed seed means every developer and every CI run starts from the same world. Rules v0 is the default; RULES=fast swaps in the fast test variant, where an hour of play takes a second, for end-to-end tests, smoke tests and hand-played gates.
 
 dex's issuer URL must resolve the same way from the browser and from the containers. dex is published on `localhost:5556`, and containers that need the issuer (the discovery probe of `just up` now, the server and web images later) use host networking, so `http://localhost:5556/dex` means the same thing in the browser, on the host and in those containers. A host alias cannot redirect `localhost` inside a container. A host-network container cannot use compose service names either, so it reaches Postgres and the other services through their published `localhost` ports, like a binary run with cargo.
 

@@ -2,13 +2,13 @@
 
 The game API process. It checks tokens, maps accounts to players, runs the routes and the leaderboard job, and has the universe bootstrap subcommand. It serves `/openapi.json` on localhost:8080 locally.
 
-Binary. It is a stub today; P2.9 is the first package that fills it. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+Binary. P2.9 added its first subcommand, `seed`, the universe bootstrap ([D-043](../../docs/decision-log.md#d-043-the-universe-bootstrap-the-world-size-cap-and-just-seed)). It generates a universe and writes snapshot seq 0 into an empty database, and never overwrites one. `just seed` targets only `voidforge_dev`, never `voidforge`. Exit codes: 0 seeded, 2 usage, 3 refused, 4 input or database error, 5 telemetry. The API arrives with Phase 3. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 
 - Workspace: `voidforge-host`, `voidforge-store`, `voidforge-rules`, `voidforge-worldgen`, `voidforge-api-types`, `voidforge-telemetry`.
 - External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): The API stack from the Tech stack: tokio, axum, tower-http, jsonwebtoken, uuid (v7), utoipa, tower_governor, clap and anyhow.
-- Never: voidforge-core directly. Engine state changes only through the host.
+- Never: voidforge-core directly. Engine state changes only through the host. (Its database-stage tests take core as a dev-dependency only, to build a Join game command for the host.)
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
 ## Invariants
@@ -26,8 +26,11 @@ Binary. It is a stub today; P2.9 is the first package that fills it. The layerin
 ```sh
 cargo build -p voidforge-server
 cargo clippy -p voidforge-server --all-targets -- -D warnings
-cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-server` alone exits 4
+cargo nextest run -p voidforge-server
 ```
+
+- `tests/cli.rs` covers the cap, the exit codes, and that the URL is never printed.
+- `tests/postgres.rs` (database stage) covers the pinned seed hash on fresh databases, the refusal on a non-empty database, and recovery after seed.
 
 P2.9: on an empty database, the bootstrap always yields the same state hash. P3.2 to P3.5 and P3.8: token, account, route (insta contract snapshots), leaderboard and rate-limit tests.
 
