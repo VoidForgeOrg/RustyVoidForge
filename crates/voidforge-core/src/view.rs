@@ -508,43 +508,59 @@ impl World {
                     error,
                 })
         };
-        // Partial credit: points × delivered ÷ cost, rounded down (all values are not negative).
+        // Every step is checked: rules that validate can still give a score beyond i128, which
+        // is ScoreOutOfRange in every build profile, never a panic or a wrapped value (D-030).
+        let over = || ViewError::ScoreOutOfRange;
+        let add = |sum: i128, x: i128| sum.checked_add(x).ok_or_else(over);
+        // Partial credit: points × delivered ÷ cost, rounded down (all values are not negative;
+        // validated costs are positive).
         let partial = |points: i64, delivered: i128, cost: i64| {
-            i128::from(points) * delivered.max(0) / i128::from(cost.max(1))
+            i128::from(points)
+                .checked_mul(delivered.max(0))
+                .and_then(|x| x.checked_div(i128::from(cost.max(1))))
+                .ok_or_else(over)
         };
         let mut total: i128 = 0;
         let (mut ore, mut ingots): (i128, i128) = (0, 0);
         for p in self.planets.values().filter(|p| p.owner == Some(player)) {
-            total += i128::from(specs.planet);
-            ore += read(p.ore, p.id, p.id.0)?;
-            ingots += read(p.ingots, p.id, p.id.0)?;
+            total = add(total, i128::from(specs.planet))?;
+            ore = add(ore, read(p.ore, p.id, p.id.0)?)?;
+            ingots = add(ingots, read(p.ingots, p.id, p.id.0)?)?;
             for id in &p.buildings {
                 let b = &self.buildings[id];
-                total += match b.state {
+                let points = match b.state {
                     BuildingState::UnderConstruction {
                         delivered, cost_g, ..
-                    } => partial(points(b.kind), read(delivered, p.id, id.0)?, cost_g),
+                    } => partial(points(b.kind), read(delivered, p.id, id.0)?, cost_g)?,
                     BuildingState::Operational | BuildingState::Demolishing { .. } => {
                         i128::from(points(b.kind))
                     }
                 };
+                total = add(total, points)?;
             }
             for s in self.ship_builds.values() {
                 if p.buildings.contains(&s.shipyard) {
                     let delivered = read(s.delivered, p.id, s.id.0)?;
-                    total += partial(ship_points(s.kind), delivered, s.cost_g);
+                    total = add(total, partial(ship_points(s.kind), delivered, s.cost_g)?)?;
                 }
             }
         }
         for ship in self.ships.values().filter(|s| s.owner == player) {
-            total += i128::from(ship_points(ship.kind));
+            total = add(total, i128::from(ship_points(ship.kind)))?;
         }
         for f in self.fleets.values().filter(|f| f.owner == player) {
-            ore += i128::from(f.cargo.ore_g);
-            ingots += i128::from(f.cargo.ingots_g);
+            ore = add(ore, i128::from(f.cargo.ore_g))?;
+            ingots = add(ingots, i128::from(f.cargo.ingots_g))?;
         }
-        let mass = |grams: i128, m: MassPoints| grams * i128::from(m.points) / i128::from(m.per_g);
-        total += mass(ore, specs.ore) + mass(ingots, specs.ingots);
+        // Once per resource: grams × points ÷ grams per point, rounded down (per_g is positive).
+        let mass = |grams: i128, m: MassPoints| {
+            grams
+                .checked_mul(i128::from(m.points))
+                .and_then(|x| x.checked_div(i128::from(m.per_g)))
+                .ok_or_else(over)
+        };
+        total = add(total, mass(ore, specs.ore)?)?;
+        total = add(total, mass(ingots, specs.ingots)?)?;
         i64::try_from(total).map_err(|_| ViewError::ScoreOutOfRange)
     }
 }

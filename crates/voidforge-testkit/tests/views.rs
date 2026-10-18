@@ -360,6 +360,46 @@ fn score(w: &World, player: PlayerId, t: i64) -> i64 {
     w.score(player, t, &v0_rules()).unwrap()
 }
 
+/// The Phase 1 gate's finding (review-r2): rules that validate can give a true score beyond
+/// i128. Three planets full of ore at i64::MAX points per gram total about 1.5 × 2^127: the score
+/// is ScoreOutOfRange in every build profile, never a panic or a wrapped 0. Beyond i64 but
+/// within i128 is ScoreOutOfRange too; ordinary scores are exact (the tests below).
+#[test]
+fn score_beyond_the_range_is_score_out_of_range_never_a_panic_or_a_wrap() {
+    let mut rules = v0_rules();
+    rules.planet.ore_cap_g = i64::MAX;
+    rules.scoring.ore = voidforge_core::rules::MassPoints {
+        points: i64::MAX,
+        per_g: 1,
+    };
+    rules.validate().unwrap();
+    let world = |planets: usize| {
+        let mut b = WorldBuilder::with_rules(rules.clone());
+        let home = b.player(ALICE);
+        let mut owned = vec![home];
+        for _ in 1..planets {
+            owned.push(b.planet(Some(ALICE)));
+        }
+        for p in owned {
+            b.stocks(p, Quantity::new(i64::MAX, 0, 0), Quantity::new(0, 0, 0));
+        }
+        b.build()
+    };
+    for planets in [1, 3] {
+        assert_eq!(
+            world(planets).score(ALICE, 0, &rules),
+            Err(ViewError::ScoreOutOfRange),
+            "{planets} planets"
+        );
+    }
+    // The player view reports it as a typed error as well.
+    let w = world(3);
+    assert_eq!(
+        w.view(&Query::Player { player: ALICE }, 0, &rules),
+        Err(ViewError::ScoreOutOfRange)
+    );
+}
+
 #[test]
 fn score_counts_planets_buildings_ships_and_resources() {
     // A homeworld: 1 planet + Drill + Refinery = 1,250; 2,000 t ore = 200; 1,500 t ingots = 300.
