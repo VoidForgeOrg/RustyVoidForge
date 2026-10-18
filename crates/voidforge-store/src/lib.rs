@@ -5,12 +5,16 @@
 //! ([`snapshot`]) and the canonical encoding it hashes ([`canonical`]; D-024, D-035).
 //! P2.3 adds the log ([`log`]): typed records, the `LogStore` interface, an in-memory store and the
 //! Postgres store (D-036). P2.5 adds snapshot storage and [`replay`], the one record→core function
-//! the host and the replay tool share (D-038).
+//! the host and the replay tool share (D-038). P2.6 and P2.7 add the golden format ([`golden`]) and
+//! offline verification ([`verify`]), which the host's tests and the replay tool share (D-040,
+//! D-041).
 
 pub mod canonical;
+pub mod golden;
 pub mod log;
 pub mod replay;
 pub mod snapshot;
+pub mod verify;
 
 use sqlx::PgPool;
 use sqlx::migrate::{MigrateError, Migrator};

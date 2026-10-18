@@ -233,6 +233,13 @@ allow = [
     { crate = "shlex" },
     # The engine host (P2.3, decision log D-036): tokio's select! and test macros.
     { crate = "tokio-macros" },
+    # voidforge-replay's command line (P2.7, decision log D-041): clap with std, derive, help,
+    # usage, error-context and env, and what it pulls in.
+    { crate = "anstyle" },
+    { crate = "clap" },
+    { crate = "clap_builder" },
+    { crate = "clap_derive" },
+    { crate = "clap_lex" },
 ]
 # Duplicates allowed by name and version, each with its reason (decision log D-017).
 skip = [

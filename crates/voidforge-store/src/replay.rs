@@ -132,6 +132,10 @@ pub enum ReplayError {
         seq: i64,
         /// "events" or "outcome".
         what: &'static str,
+        /// What the record holds, in its log JSON form.
+        recorded: String,
+        /// What replay produced, in the same form.
+        replayed: String,
     },
     /// The engine failed on the record.
     #[error("record {seq}: {error}")]
@@ -198,12 +202,16 @@ pub fn replay_record(
         return Err(ReplayError::Diverged {
             seq,
             what: "events",
+            recorded: crate::log::events_json(&record.events),
+            replayed: crate::log::events_json(&stepped.events),
         });
     }
     if stepped.outcome != record.outcome {
         return Err(ReplayError::Diverged {
             seq,
             what: "outcome",
+            recorded: crate::log::outcome_text(record.outcome),
+            replayed: crate::log::outcome_text(stepped.outcome),
         });
     }
     Ok(())

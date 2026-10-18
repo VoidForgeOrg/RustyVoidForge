@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE log_records SET engine_build = $1 WHERE seq = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7c6efb0316c7eea3319ee5f3c0664401c6e4b7280f1930a57e567c94b7f56f88"
+}

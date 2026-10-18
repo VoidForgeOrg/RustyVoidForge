@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE snapshots SET state_hash = $1 WHERE seq = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1965078d6b6f4eb1ad87ac17ed875aa3c2619dd927fd58bb9628aba42405c354"
+}

@@ -8,8 +8,23 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The replay CLI (P2.7, D-041): one verification path, voidforge_store::{golden, verify}.
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 tracing.workspace = true
+voidforge-core.workspace = true
+voidforge-rules.workspace = true
+voidforge-store.workspace = true
 voidforge-telemetry.workspace = true
+
+[dev-dependencies]
+# Drives the binary on goldens and edits their files; the Postgres tests load goldens into a
+# migrated database (P2.7, D-041).
+serde_json.workspace = true
+sqlx.workspace = true
+voidforge-rules.workspace = true
 
 [lints]
 workspace = true

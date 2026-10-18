@@ -419,6 +419,16 @@ impl LogStore for BlindLog {
     ) -> Result<Option<SnapshotRow>, LogError> {
         self.0.latest_snapshot(build).await
     }
+
+    async fn snapshot_index(
+        &mut self,
+    ) -> Result<Vec<voidforge_store::log::SnapshotMeta>, LogError> {
+        self.0.snapshot_index().await
+    }
+
+    async fn snapshot_at(&mut self, seq: i64) -> Result<Option<SnapshotRow>, LogError> {
+        self.0.snapshot_at(seq).await
+    }
 }
 
 #[tokio::test]

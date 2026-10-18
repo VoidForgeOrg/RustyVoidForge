@@ -13,6 +13,8 @@ cargo nextest run -p voidforge-store --test determinism --locked
 cargo nextest run -p voidforge-host --test determinism --locked
 # Golden replays (P2.6, D-040): every golden replays exactly and is what a fresh recording gives.
 cargo nextest run -p voidforge-host --test golden --locked
+# The replay tool on every golden, and on tampered copies (P2.7, D-041).
+cargo nextest run -p voidforge-replay --test cli --locked
 
 target_dir="${CARGO_TARGET_DIR:-target}"
 mkdir -p "$target_dir/determinism"
