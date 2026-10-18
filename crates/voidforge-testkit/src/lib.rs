@@ -6,9 +6,10 @@
 //! [`WorldBuilder::build`] checks the links before handing the world over. Misuse panics with a
 //! message, because these are test helpers. [`busy_world`] is a ready-made world with every
 //! entity, state and queue kind. [`determinism`] holds what the determinism suite's harnesses
-//! share (decision log D-024).
+//! share (decision log D-024). [`golden`] holds the golden scenarios the host records (D-040).
 
 pub mod determinism;
+pub mod golden;
 
 use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::{BuildCost, Rules};

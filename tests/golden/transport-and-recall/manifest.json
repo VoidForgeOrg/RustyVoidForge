@@ -1,0 +1,67 @@
+{
+  "scenario": "transport-and-recall",
+  "about": "A Transport unloads ingots on arrival; a Move carries ore that a Trigger unload delivers; a fleet recalled in flight returns to where it left and is disbanded.",
+  "rules_version": 0,
+  "engine_build": "0.1.0+golden",
+  "start_hash": "ac9864c305141afc2cb670ce4ec183c94a27029ce6bbb8767bba1e193fd1d6bf",
+  "records": [
+    {
+      "seq": 1,
+      "game_time": 0,
+      "state_hash": "665c99256e0a1806d6d5af99081bc7da749d5d5cf9533bce1134d92d2d139b4c"
+    },
+    {
+      "seq": 2,
+      "game_time": 0,
+      "state_hash": "1f8a92175ae113cf50d00788fb4ca68207b46e7e6c52291988752f0f66a6b50e"
+    },
+    {
+      "seq": 3,
+      "game_time": 0,
+      "state_hash": "0694ee81721b87579269e5a0191bffb66871b17ac991bbd6780ad62044a00c97"
+    },
+    {
+      "seq": 4,
+      "game_time": 0,
+      "state_hash": "d774b514b25e43402e9f71b3e976aa3b1d57a561cda0bb538d447e500b49385a"
+    },
+    {
+      "seq": 5,
+      "game_time": 7200000,
+      "state_hash": "04f2defb47648674d5c21680d0cb45c2754d2c9fda8a313b210c123b1d2298c5"
+    },
+    {
+      "seq": 6,
+      "game_time": 10800000,
+      "state_hash": "42722a0f005745ec85bedb40722d2b86024aab5e9e3944dad4264d0fc6de5e1a"
+    },
+    {
+      "seq": 7,
+      "game_time": 10800000,
+      "state_hash": "63841481ed712c5848608476e1043798954e5fc2d772bafd8b89d10b4243d9fa"
+    },
+    {
+      "seq": 8,
+      "game_time": 14400000,
+      "state_hash": "489c7a88afefd0411f1a8b004347a990c89be924794afb82a68ecefa86d83f84"
+    },
+    {
+      "seq": 9,
+      "game_time": 18000000,
+      "state_hash": "e400313a822691fdc655c4e3755f342d9b42d66aca52bfcc39c1d13475c7c7c5"
+    },
+    {
+      "seq": 10,
+      "game_time": 21600000,
+      "state_hash": "d578f8f5636ca807e61514428ae42997168ab07a97ce6af68026233a6d81b5fc"
+    }
+  ],
+  "end_ms": 25200000,
+  "end_hash": "88b2c15b274604dc9d642425d3181046902ddee2d7c8b53ba61141347061b75d",
+  "scores": [
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+      "score": 3073
+    }
+  ]
+}

@@ -11,6 +11,8 @@ cargo nextest run -p voidforge-worldgen --test determinism --locked
 cargo nextest run -p voidforge-store --test determinism --locked
 # The engine host: the same script and clock give the same records (P2.3, D-036).
 cargo nextest run -p voidforge-host --test determinism --locked
+# Golden replays (P2.6, D-040): every golden replays exactly and is what a fresh recording gives.
+cargo nextest run -p voidforge-host --test golden --locked
 
 target_dir="${CARGO_TARGET_DIR:-target}"
 mkdir -p "$target_dir/determinism"

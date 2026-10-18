@@ -340,6 +340,101 @@ impl LogRecord {
     }
 }
 
+/// A record as one line of JSON, the golden files' form (P2.6; decision log D-040): the columns
+/// by name, with `payload`, `outcome` and `events` as JSON values in their documented forms, not
+/// as strings.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LineJson {
+    seq: i64,
+    kind: String,
+    game_time: i64,
+    wall_time_ms: i64,
+    player_id: Option<String>,
+    idempotency_key: Option<String>,
+    payload: Option<Command>,
+    outcome: Option<OutcomeJson>,
+    events: Vec<DomainEvent>,
+    rules_version: u32,
+    engine_build: String,
+}
+
+impl LogRecord {
+    /// The record as one line of JSON (no newline): every column by name, the JSON columns as
+    /// values in their documented forms. [`LogRecord::from_line`] reads it back exactly.
+    ///
+    /// # Errors
+    /// [`LogError::Unrepresentable`] if serde_json refuses a value (not expected).
+    pub fn to_line(&self) -> Result<String, LogError> {
+        let line = LineJson {
+            seq: self.seq,
+            kind: self.kind.as_str().to_owned(),
+            game_time: self.game_time,
+            wall_time_ms: self.wall_time_ms,
+            player_id: self.player.map(player_uuid),
+            idempotency_key: self.idempotency_key.as_ref().map(|k| k.as_str().to_owned()),
+            payload: match &self.payload {
+                Payload::Empty => None,
+                Payload::Command(c) => Some(c.clone()),
+            },
+            outcome: match self.outcome {
+                Outcome::Empty => None,
+                Outcome::Accepted { own_events } => Some(OutcomeJson::Accepted { own_events }),
+                Outcome::Rejected(reason) => Some(OutcomeJson::Rejected { reason }),
+            },
+            events: self.events.clone(),
+            rules_version: self.rules_version,
+            engine_build: self.engine_build.as_str().to_owned(),
+        };
+        serde_json::to_string(&line).map_err(|e| LogError::Unrepresentable {
+            seq: self.seq,
+            what: e.to_string(),
+        })
+    }
+
+    /// Reads a record written by [`LogRecord::to_line`], with the same checks as a Postgres row.
+    ///
+    /// # Errors
+    /// [`LogError::Corrupt`] if the line is not a valid record (seq 0 when unreadable).
+    pub fn from_line(line: &str) -> Result<Self, LogError> {
+        let l: LineJson = serde_json::from_str(line).map_err(|e| LogError::Corrupt {
+            seq: 0,
+            what: format!("record line: {e}"),
+        })?;
+        let seq = l.seq;
+        let corrupt = |what: String| LogError::Corrupt { seq, what };
+        Ok(Self {
+            seq,
+            kind: RecordKind::parse(&l.kind)
+                .ok_or_else(|| corrupt(format!("kind {:?}", l.kind)))?,
+            game_time: l.game_time,
+            wall_time_ms: l.wall_time_ms,
+            player: match l.player_id {
+                None => None,
+                Some(p) => {
+                    Some(parse_player_uuid(&p).ok_or_else(|| corrupt(format!("player id {p:?}")))?)
+                }
+            },
+            idempotency_key: match l.idempotency_key {
+                None => None,
+                Some(k) => Some(
+                    IdempotencyKey::new(k).map_err(|e| corrupt(format!("idempotency key: {e}")))?,
+                ),
+            },
+            payload: l.payload.map_or(Payload::Empty, Payload::Command),
+            outcome: match l.outcome {
+                None => Outcome::Empty,
+                Some(OutcomeJson::Accepted { own_events }) => Outcome::Accepted { own_events },
+                Some(OutcomeJson::Rejected { reason }) => Outcome::Rejected(reason),
+            },
+            events: l.events,
+            rules_version: l.rules_version,
+            engine_build: EngineBuild::new(l.engine_build)
+                .map_err(|e| corrupt(format!("engine build: {e}")))?,
+        })
+    }
+}
+
 // --- The in-memory store ---
 
 #[derive(Debug, Default)]

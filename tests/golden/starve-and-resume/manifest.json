@@ -1,0 +1,46 @@
+{
+  "scenario": "starve-and-resume",
+  "about": "Constructions starve at zero ingots and split the Refinery's output evenly; full storage halts a Refinery and then a Drill, and a Shipyard drawing ingots resumes them.",
+  "rules_version": 0,
+  "engine_build": "0.1.0+golden",
+  "start_hash": "0ad26fa62ce8e5b1bbd80ec5f8f544336fdcf3699c57903fafc8bb0c8e3edc71",
+  "records": [
+    {
+      "seq": 1,
+      "game_time": 0,
+      "state_hash": "58d1a5b4361bbb84d1689f1f5798ed1fd7a1a4c18c6e32c3db16308de43387d3"
+    },
+    {
+      "seq": 2,
+      "game_time": 0,
+      "state_hash": "15ff00152e40622b13afd296bbc24bd0601db9fad2c50d772627911498959110"
+    },
+    {
+      "seq": 3,
+      "game_time": 18000000,
+      "state_hash": "bb551d4ca343e7316f4e0b905fb0067f113b21b07084b1f692bed339f1ea4ae3"
+    },
+    {
+      "seq": 4,
+      "game_time": 53395518,
+      "state_hash": "436352010fc610fa29383f5527f5ba8083f216e15d849eacb4ee0fdb1c941077"
+    },
+    {
+      "seq": 5,
+      "game_time": 61200000,
+      "state_hash": "5b01ddb52490d7d559a7f8467ad4c6a7246cabd7741fc4b906a3870dc3f74bc5"
+    }
+  ],
+  "end_ms": 72000000,
+  "end_hash": "10bf99f02e8d2cb619696311930fccf53e3687b2acf12ad5c766eeac322deac2",
+  "scores": [
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+      "score": 3558
+    },
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e10",
+      "score": 1671
+    }
+  ]
+}

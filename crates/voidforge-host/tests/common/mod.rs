@@ -15,6 +15,8 @@ use voidforge_store::log::{IdempotencyKey, LogError, LogRecord, LogStore, Memory
 use voidforge_store::snapshot::EngineBuild;
 use voidforge_testkit::determinism::Economy;
 
+pub mod golden;
+
 /// The universe epoch the tests use: game time 0 is this Unix millisecond.
 pub const EPOCH: i64 = 1_760_000_000_000;
 /// Long enough for anything a test waits on; a hang fails instead of blocking forever.

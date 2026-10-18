@@ -1,0 +1,71 @@
+{
+  "scenario": "start-and-build",
+  "about": "Two players join; a Drill and a Shipyard are built to completion, a Refinery's construction is cancelled, and an original Drill is demolished to its end.",
+  "rules_version": 0,
+  "engine_build": "0.1.0+golden",
+  "start_hash": "a80a4bff3a183c8d90b1457212fbdc95c29affde95bc07446a2decd2ce41941d",
+  "records": [
+    {
+      "seq": 1,
+      "game_time": 0,
+      "state_hash": "02ad5e345a30f73853b2cf8dabbe8d1a1d43728fca94df2637a0c3b8f0c78e38"
+    },
+    {
+      "seq": 2,
+      "game_time": 0,
+      "state_hash": "d398f233076559142aa6b77bdab530c19dded657e4648ce1964384e7906a3103"
+    },
+    {
+      "seq": 3,
+      "game_time": 0,
+      "state_hash": "bf5e9623f3f59116a35992b3f87d82b8562f20f8fa6219b0412a6018cbb9f045"
+    },
+    {
+      "seq": 4,
+      "game_time": 0,
+      "state_hash": "a2610fd4fc8d5171df774b20f7ef3e2178c91629cfa25e1389fa3e47553a7ec0"
+    },
+    {
+      "seq": 5,
+      "game_time": 0,
+      "state_hash": "5d709c95c8121f2a1aef5fe348c9121f93c1b487665d9bfc40becb3c928a4374"
+    },
+    {
+      "seq": 6,
+      "game_time": 3600000,
+      "state_hash": "c58233c625ecc75773d7af05820b69305bb2c5bafb53345944fc7441b1064656"
+    },
+    {
+      "seq": 7,
+      "game_time": 10800000,
+      "state_hash": "c6844968b92a2545188d184d03632bf702ba334184a831e4fe9e7ae0e0740fdc"
+    },
+    {
+      "seq": 8,
+      "game_time": 18000000,
+      "state_hash": "3053b85aa197ef8aaa3357f88daf8b0c0b5ddd5904000c852db5283a09d4109d"
+    },
+    {
+      "seq": 9,
+      "game_time": 21600000,
+      "state_hash": "2dc68acd40acd0915b13e581441fd09fe33424c87b7d61c6e1c9b909cec35dfa"
+    },
+    {
+      "seq": 10,
+      "game_time": 43200000,
+      "state_hash": "d0762eb044d8130a28725d3d9278e87c817850f2ee08c00f6266649df551985a"
+    }
+  ],
+  "end_ms": 46800000,
+  "end_hash": "3b8686530a271c08d6a70a9813723b077e6361ed83a61aeddacdc472750b2c6b",
+  "scores": [
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+      "score": 1753
+    },
+    {
+      "player": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e10",
+      "score": 2053
+    }
+  ]
+}
