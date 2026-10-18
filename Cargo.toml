@@ -46,3 +46,8 @@ all = { level = "warn", priority = -1 }
 dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
+
+# Overflow panics in release too, so a missed site anywhere in the workspace fails loudly instead
+# of wrapping silently (D-032). The core, rules and worldgen also forbid unchecked operators.
+[profile.release]
+overflow-checks = true

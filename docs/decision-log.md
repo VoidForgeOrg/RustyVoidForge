@@ -538,3 +538,22 @@ Each entry records its date, the package that made it, the decision, the reasons
     - The same seed gives identical canonical postcard bytes, the bytes P2.2's state hash covers (D-024).
     - worldgen's own `tests/determinism.rs` joins `just determinism`: an in-process double run over generation, a generated world with three players joined and played for 100 hours, and a two-process run (`double-run-worldgen.bin`).
     - Timing: the 100-player default (2,000 planets) generates in about 0.1 s in a debug build and 0.02 s in release.
+
+### D-032: Checked arithmetic in the core, rules and worldgen
+
+- Date and package: 2026-10-18, the Phase 1 gate repair. Proposed by dev-build and approved by orch-lead. It extends [D-010](#d-010-determinism-bans-in-core-rules-and-worldgen)'s determinism bans.
+- Why: the same class reached review three times (P1.6 solver aggregates, P1.12 feasibility, P1.11 score). Rules that validate drove an integer operation past its range, which panicked in debug and wrapped silently in release, so the two profiles decided differently. That breaks "Integer arithmetic" and the typed-error contract.
+- Decision:
+  - **The ban**: `clippy::arithmetic_side_effects` is forbidden at crate level in voidforge-core, voidforge-rules and voidforge-worldgen. It is applied with `cfg_attr(not(test), ...)`, so in-crate unit tests are exempt. No library item can allow or expect it (the gate's "no lint exceptions"), exactly like the D-010 bans.
+  - **The two allowed forms**:
+    - `checked_*` with a typed error, wherever rules-valid input or reachable state can drive the operation (the score: `ScoreOutOfRange`; Recall's return time: `unreachable_target` and `FleetOutOfRange`);
+    - `strict_*`, which panics in every profile, only where a bound is proven. Each proof is in a code comment tagged D-032 and in the gate repair's arithmetic audit, which reviewers check.
+  - **The audit**: all 74 flagged operations at ab984fd are classified in `missions/voidforge-mvp/proof/phase1-gate-repair/arithmetic-audit.md`: 3 sites fixed with regressions, the rest strict with proofs.
+  - **The guardrail fixtures** (D-012's harness):
+    - `arithmetic.rs` must fail with the lint in each crate; `arithmetic.ok.rs` (checked and strict) must pass;
+    - `exceptions.rs` refuses an `allow` of it (E0453);
+    - the `floats.ok.rs` and `clocks.ok.rs` controls use checked operations.
+
+    The harness covers 133 cases.
+  - **Release overflow checks**: `overflow-checks = true` in the workspace's `[profile.release]`, so code outside the ban (the host and the binaries from Phase 2) panics on overflow instead of wrapping.
+  - **New code** in these crates writes `checked_*` or `strict_*`; the lint enforces it. A strict site needs its bound argued in the review.
