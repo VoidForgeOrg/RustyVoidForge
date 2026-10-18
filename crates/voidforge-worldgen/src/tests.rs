@@ -51,18 +51,12 @@ const BELOW_PINNED: [u64; 4] = [
 ];
 
 /// review-r1's gate LOW: a planet at exactly the neighbor radius counts as a neighbor ("within
-/// 100 units", inclusive); one unit further does not. Kills `<=` → `<` in `neighbor_counts`.
+/// 100 units", inclusive); one unit further does not. Kills `<=` → `<` in `within`, which both
+/// the neighborhood count and the neighborhood placement use.
 #[test]
 fn a_planet_at_exactly_the_radius_is_a_neighbor() {
-    let r = 100;
-    let points = [
-        [200, 200, 200],
-        [300, 200, 200],
-        [200, 100, 200],
-        [200, 200, 301],
-    ];
-    let counts = neighbor_counts(&points, r);
-    // (300,200,200) and (200,100,200) are exactly 100 away; (200,200,301) is 101 away.
-    assert_eq!(counts[0], 2);
-    assert_eq!(counts[3], 0);
+    let c = [200, 200, 200];
+    assert!(within([300, 200, 200], c, 100));
+    assert!(within([200, 100, 200], c, 100));
+    assert!(!within([200, 200, 301], c, 100));
 }

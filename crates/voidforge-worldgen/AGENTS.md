@@ -26,7 +26,7 @@ cargo clippy -p voidforge-worldgen --all-targets -- -D warnings
 cargo nextest run -p voidforge-worldgen
 ```
 
-P1.12: `src/tests.rs` pins the RNG stream and the unbiased sampler; `tests/worldgen.rs` checks every default by brute force on 100-player Rules v0 worlds and on denser rules for 1 and 7 players, plus feasibility errors and Join game; `tests/determinism.rs` is part of `just determinism` (in-process and two-process double runs over generation and a generated world played for 100 hours).
+P1.12: `src/tests.rs` pins the RNG stream and the unbiased sampler; `tests/worldgen.rs` checks every default by brute force on Rules v0 worlds of 1, 7 and 100 players (D-031 option A) and on altered rules, plus feasibility errors, the player limit and Join game; `tests/determinism.rs` is part of `just determinism` (in-process and two-process double runs over generation and a generated world played for 100 hours).
 
 ## Specs
 

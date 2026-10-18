@@ -4,7 +4,7 @@
 
 use voidforge_core::command::{Action, Command};
 use voidforge_core::quantity::MS_PER_HOUR;
-use voidforge_core::rules::{DISTANCE_UNITS_PER_WORLD_UNIT, Rules};
+use voidforge_core::rules::Rules;
 use voidforge_core::state::World;
 use voidforge_testkit::determinism::{CAROL, canonical_bytes};
 use voidforge_testkit::{ALICE, BOB, v0_rules};
@@ -26,13 +26,6 @@ fn played(seed: u64, players: u32, rules: &Rules) -> World {
     w
 }
 
-/// Rules v0 with a 413-unit cube: 7 players at the 100-player density.
-fn dense() -> Rules {
-    let mut rules = v0_rules();
-    rules.worldgen.cube_size_du = 413 * DISTANCE_UNITS_PER_WORLD_UNIT;
-    rules
-}
-
 #[test]
 fn generation_double_run_in_process() {
     for seed in [0, 9, u64::MAX] {
@@ -44,8 +37,8 @@ fn generation_double_run_in_process() {
 
 #[test]
 fn a_generated_world_played_twice_gives_identical_bytes() {
-    let a = canonical_bytes(&played(4, 7, &dense()));
-    let b = canonical_bytes(&played(4, 7, &dense()));
+    let a = canonical_bytes(&played(4, 7, &v0_rules()));
+    let b = canonical_bytes(&played(4, 7, &v0_rules()));
     assert!(a == b);
 }
 
@@ -57,7 +50,7 @@ fn recorded() -> Vec<u8> {
         .chain(
             [5u64, 6]
                 .iter()
-                .map(|&seed| canonical_bytes(&played(seed, 7, &dense()))),
+                .map(|&seed| canonical_bytes(&played(seed, 7, &v0_rules()))),
         )
         .collect();
     canonical_bytes(&runs)

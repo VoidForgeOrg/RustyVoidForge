@@ -103,8 +103,7 @@ fn round_trip_an_economy_mid_advance_with_fleets_and_commands() {
 
 #[test]
 fn round_trip_a_generated_world_before_and_after_join_game() {
-    // 100 players, as worldgen's own suite uses: under D-031's provisional option B the default
-    // rules refuse small worlds (D-033), and 40 is not enough for every seed.
+    // 100 players, the default universe size (D-031).
     let rules = v0_rules();
     let mut w = voidforge_worldgen::generate(0x2_2002, 100, &rules).unwrap();
     assert_round_trip(&w);
