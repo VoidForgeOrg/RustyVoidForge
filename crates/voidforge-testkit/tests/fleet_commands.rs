@@ -861,3 +861,36 @@ fn fleet_commands_check_ownership_before_state() {
     let applied = apply(&mut s.w, ALICE, &action, 1);
     assert_eq!(applied.outcome, Err(Rejection::NotOwner));
 }
+
+/// review-r1's gate LOW (P1.3's HIGH, now reachable end to end through commands): a fleet sent,
+/// recalled, returned and disbanded leaves its original arrival entry in the queue for a fleet
+/// that no longer exists. The world saves and loads (deserialization runs `check_links`), the
+/// stale entry is skipped when its time comes, and the bytes survive the round trip.
+#[test]
+fn recall_return_disband_then_save_and_load_keeps_the_stale_arrival_harmless() {
+    let mut s = setup();
+    let fleet = fleet_of(&mut s.w, s.home, &[s.colony_ship], Cargo::default());
+    accept(&mut s.w, ALICE, &send(fleet, s.free, Mission::Colonize), 0);
+    let lands = arrival(&s.w, fleet);
+    accept(&mut s.w, ALICE, &Action::RecallFleet { fleet }, lands / 3);
+    let back = match s.w.fleets[&fleet].state {
+        FleetState::Returning { arrives_at_ms, .. } => arrives_at_ms,
+        other => panic!("{other:?}"),
+    };
+    assert!(back < lands);
+    s.w.advance_to(back, &v0_rules()).unwrap();
+    accept(&mut s.w, ALICE, &Action::DisbandFleet { fleet }, back);
+    assert!(!s.w.fleets.contains_key(&fleet));
+    assert!(
+        s.w.queue()
+            .iter()
+            .any(|e| e.kind == voidforge_core::state::QueueKind::FleetArrival(fleet)),
+        "the original arrival entry is still queued, stale"
+    );
+    let bytes = canonical_bytes(&s.w);
+    let mut loaded: World = postcard::from_bytes(&bytes).expect("the world loads");
+    assert!(canonical_bytes(&loaded) == bytes);
+    // The stale entry is skipped when it comes due: nothing arrives, nothing is colonized.
+    assert_eq!(loaded.advance_to(lands + 1, &v0_rules()).unwrap(), []);
+    assert_eq!(loaded.planets[&s.free].owner, None);
+}
