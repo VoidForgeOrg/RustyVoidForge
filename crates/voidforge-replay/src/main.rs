@@ -370,33 +370,58 @@ fn print_sources(sources: Vec<Source>, json: bool) -> Exit {
 type Found = Result<PathBuf, (String, VerifyError)>;
 
 /// The golden directories under `paths`: a path with a manifest is one golden; otherwise its
-/// subdirectories with manifests, sorted. A path with none is an input error.
+/// subdirectories with manifests, sorted. A path with none is an input error, and so is anything
+/// that can't be read on the way: an unreadable entry is never skipped (phase 2 gate sweep).
 fn goldens(paths: &[PathBuf]) -> Vec<Found> {
     let mut out = Vec::new();
     for path in paths {
-        if path.join("manifest.json").is_file() {
-            out.push(Ok(path.clone()));
-            continue;
+        let failed = |e: String| Err((path.display().to_string(), VerifyError::Input(e)));
+        match has_manifest(path) {
+            Ok(true) => {
+                out.push(Ok(path.clone()));
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                out.push(failed(e));
+                continue;
+            }
         }
-        let mut dirs: Vec<PathBuf> = std::fs::read_dir(path)
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .map(|e| e.path())
-                    .filter(|p| p.join("manifest.json").is_file())
-                    .collect()
-            })
-            .unwrap_or_default();
-        dirs.sort();
-        if dirs.is_empty() {
-            out.push(Err((
-                path.display().to_string(),
-                VerifyError::Input("no golden here (no manifest.json)".to_owned()),
-            )));
+        let dirs = std::fs::read_dir(path)
+            .map_err(|e| e.to_string())
+            .and_then(|entries| {
+                let mut dirs = Vec::new();
+                for entry in entries {
+                    let dir = entry.map_err(|e| e.to_string())?.path();
+                    if has_manifest(&dir)? {
+                        dirs.push(dir);
+                    }
+                }
+                Ok(dirs)
+            });
+        match dirs {
+            Err(e) => out.push(failed(e)),
+            Ok(dirs) if dirs.is_empty() => {
+                out.push(failed("no golden here (no manifest.json)".to_owned()));
+            }
+            Ok(mut dirs) => {
+                dirs.sort();
+                out.extend(dirs.into_iter().map(Ok));
+            }
         }
-        out.extend(dirs.into_iter().map(Ok));
     }
     out
+}
+
+/// Whether `dir` holds a manifest: absent is `false`; any other failure to look is an error.
+fn has_manifest(dir: &Path) -> Result<bool, String> {
+    let manifest = dir.join("manifest.json");
+    match std::fs::metadata(&manifest) {
+        Ok(m) => Ok(m.is_file()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => Ok(false),
+        Err(e) => Err(format!("{}: {e}", manifest.display())),
+    }
 }
 
 fn read_golden(dir: &Path) -> Result<Files, VerifyError> {

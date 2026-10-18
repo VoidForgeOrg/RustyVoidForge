@@ -221,6 +221,38 @@ fn tampered_goldens_are_pinpointed() {
     assert_eq!(failure(&tampered), (None, "scores"));
 }
 
+/// A scoring error is a divergence, never a score (phase 2 gate, R2 L1): with a planet worth
+/// `i64::MAX`, every player's score is out of range, and a manifest naming the sentinel the
+/// verifier once substituted (`i64::MIN`) still fails, naming the player and the core's error.
+#[test]
+fn a_scoring_error_is_never_verified_as_a_score() {
+    let (name, files) = on_disk().into_iter().next().unwrap();
+    let mut rules = v0_rules();
+    rules.scoring.planet = i64::MAX;
+    rules.validate().unwrap();
+    // Scoring weights don't change the simulation: the records and hashes still replay, and only
+    // the end's scores fail.
+    let end = files.manifest().unwrap().end_ms;
+    let world = verify_golden(&files, &v0_rules()).unwrap().world;
+    let player = *world.players.keys().next().unwrap();
+    let error = world.score(player, end, &rules).unwrap_err();
+    let sentinel = with_manifest(&files, |m| {
+        for s in &mut m.scores {
+            s.score = i64::MIN;
+        }
+    });
+    let e = verify_golden(&sentinel, &rules).unwrap_err();
+    let VerifyError::Diverged(f) = e else {
+        panic!("{name}: a divergence, not {e:?}")
+    };
+    assert_eq!((f.seq, f.what), (None, "scores"), "{name}");
+    assert_eq!(
+        f.expected,
+        format!("a score for player {}", player_uuid(player))
+    );
+    assert_eq!(f.found, error.to_string());
+}
+
 /// The goldens replay only under the fixture build and the rules they were recorded with.
 #[test]
 fn a_golden_replays_only_under_its_build_and_rules() {

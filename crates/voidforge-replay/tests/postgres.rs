@@ -12,7 +12,7 @@ use voidforge_store::MIGRATOR;
 use voidforge_store::golden::{Files, fixture};
 use voidforge_store::log::{LogStore, PgLog, SnapshotRow};
 use voidforge_store::replay;
-use voidforge_store::snapshot::{self, Expected};
+use voidforge_store::snapshot::{self, EngineBuild, Expected};
 
 const BIN: &str = env!("CARGO_BIN_EXE_voidforge-replay");
 
@@ -45,6 +45,12 @@ fn url(pool: &PgPool) -> String {
 /// Loads a golden into Postgres: its start as the snapshot at seq 0, its records, and snapshots
 /// after records 4 and 8 (the log's hash checkpoints).
 async fn load(pool: &PgPool, name: &str) {
+    load_on(pool, name, &fixture()).await;
+}
+
+/// As [`load`], with the start snapshot written by `start_build`, as after an engine upgrade: the
+/// golden's records then sit on another build's snapshot.
+async fn load_on(pool: &PgPool, name: &str, start_build: &EngineBuild) {
     let files = golden(name);
     let rules = voidforge_rules::parse(&std::fs::read_to_string(rules_file()).unwrap()).unwrap();
     let build = fixture();
@@ -59,7 +65,7 @@ async fn load(pool: &PgPool, name: &str) {
     .unwrap();
     pg.write_snapshot(&SnapshotRow::new(
         0,
-        &snapshot::encode(&start.world, &build).unwrap(),
+        &snapshot::encode(&start.world, start_build).unwrap(),
     ))
     .await
     .unwrap();
@@ -229,11 +235,18 @@ async fn a_tampered_postgres_log_is_pinpointed(pool: PgPool) {
 #[ignore = "needs Postgres: just db-test"]
 async fn another_build_is_refused(pool: PgPool) {
     load(&pool, "start-and-build").await;
-    // This binary's own build is not the log's: the start snapshot is refused.
+    // This binary's own build is not the log's: its first record is refused (the snapshot decodes
+    // under its row's build; the pin is on records).
     let (code, v) = replay(&pool, &[]);
     let s = &v["sources"][0];
     assert_eq!((code, s["result"].as_str()), (3, Some("refused")));
-    assert_eq!(s["divergence"]["what"], "build");
+    assert_eq!(
+        (
+            s["divergence"]["seq"].as_i64(),
+            s["divergence"]["what"].as_str()
+        ),
+        (Some(1), Some("build"))
+    );
     assert_eq!(s["build_from_flag"], false);
     // Another build's record in the tail.
     sqlx::query!(
@@ -249,6 +262,33 @@ async fn another_build_is_refused(pool: PgPool) {
     assert_eq!(
         (code, d["seq"].as_i64(), d["what"].as_str()),
         (3, Some(5), Some("build"))
+    );
+}
+
+/// The R1 LOW at the gate, through the binary: after an engine upgrade the new build's records sit
+/// on the earlier build's snapshot, which recovery accepts. They verify under the new build's pin;
+/// the earlier build's pin refuses the first of them.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn records_on_an_earlier_builds_snapshot_verify(pool: PgPool) {
+    load_on(
+        &pool,
+        "whole-loop",
+        &EngineBuild::new("0.1.0+earlier").unwrap(),
+    )
+    .await;
+    let (code, v) = replay(&pool, &GOLDEN_BUILD);
+    let s = &v["sources"][0];
+    assert_eq!((code, s["result"].as_str()), (0, Some("verified")), "{v}");
+    assert_eq!(
+        (s["records"].as_u64(), s["checkpoints"].as_u64()),
+        (Some(12), Some(3))
+    );
+    let (code, v) = replay(&pool, &["--build", "0.1.0+earlier"]);
+    let d = &v["sources"][0]["divergence"];
+    assert_eq!(
+        (code, d["seq"].as_i64(), d["what"].as_str()),
+        (3, Some(1), Some("build"))
     );
 }
 

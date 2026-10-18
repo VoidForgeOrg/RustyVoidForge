@@ -1,7 +1,9 @@
 //! `verify_log` over a store (Technical Plan P2.7; decision log D-041), on `MemoryLog`: a golden
 //! loaded as a log with snapshots as checkpoints. dev-qa's P2.7 findings on c29210c are pinned
 //! here: a snapshot taken after an unlogged eventless advance verifies (F1), and every later
-//! snapshot is decoded strictly and refused when corrupt, past the head or inconsistent (F2).
+//! snapshot is decoded strictly and refused when corrupt, past the head or inconsistent (F2). The
+//! pin is on the records only (phase 2 gate, R1 LOW): a snapshot decodes under its row's build,
+//! as recovery does, so an upgraded build's records verify on an earlier build's snapshot.
 
 use std::path::Path;
 
@@ -9,7 +11,7 @@ use voidforge_core::state::World;
 use voidforge_store::golden::{Files, fixture};
 use voidforge_store::log::{LogRecord, LogStore, MemoryLog, SnapshotRow};
 use voidforge_store::replay;
-use voidforge_store::snapshot::{self, Expected};
+use voidforge_store::snapshot::{self, EngineBuild, Expected};
 use voidforge_store::verify::{VerifyError, verify_log};
 use voidforge_testkit::v0_rules;
 
@@ -180,5 +182,80 @@ async fn a_later_snapshot_of_another_state_diverges_on_its_hash() {
     assert_eq!(
         finding(verify(&mut l.log).await.unwrap_err()),
         (Some(8), "state_hash")
+    );
+}
+
+/// A snapshot row written by another build.
+fn row_by(seq: i64, world: &World, build: &str) -> SnapshotRow {
+    let build = EngineBuild::new(build).unwrap();
+    SnapshotRow::new(seq, &snapshot::encode(world, &build).unwrap())
+}
+
+/// The R1 LOW at the gate: after an upgrade, the new build's records sit on the earlier build's
+/// snapshot, and recovery accepts them. They verify under the new build's pin, with the start and
+/// a checkpoint each decoded under its own row's build.
+#[tokio::test]
+async fn an_upgraded_builds_records_verify_on_an_earlier_builds_snapshots() {
+    let mut l = load().await;
+    let start = l.log.snapshot_at(0).await.unwrap().unwrap();
+    let world = snapshot::decode(
+        &start.payload,
+        &Expected {
+            rules_version: 0,
+            engine_build: &fixture(),
+        },
+    )
+    .unwrap()
+    .world;
+    let mut log = MemoryLog::new();
+    log.write_snapshot(&row_by(0, &world, "0.1.0+earlier"))
+        .await
+        .unwrap();
+    log.append(&l.records).await.unwrap();
+    log.write_snapshot(&row_by(8, &l.worlds[7], "0.1.0+between"))
+        .await
+        .unwrap();
+    assert_eq!(verify(&mut log).await.unwrap(), (12, 2));
+    // And from the checkpoint, the newest snapshot, which is where recovery starts (D-038).
+    let report = verify_log(&mut log, &v0_rules(), &fixture(), Some(8), None)
+        .await
+        .unwrap();
+    assert_eq!((report.start_seq, report.last_seq), (8, 12));
+}
+
+/// The pin still holds for records: under the earlier build's pin, the upgraded build's first
+/// record is refused; another build's record in the tail is refused at its seq.
+#[tokio::test]
+async fn another_builds_records_are_still_refused() {
+    let mut l = load().await;
+    let earlier = EngineBuild::new("0.1.0+earlier").unwrap();
+    let e = verify_log(&mut l.log, &v0_rules(), &earlier, None, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, VerifyError::Refused(_)), "{e:?}");
+    assert_eq!(finding(e), (Some(1), "build"));
+    let mut records = l.records.clone();
+    records[4].engine_build = earlier;
+    let mut log = MemoryLog::new();
+    log.write_snapshot(&l.log.snapshot_at(0).await.unwrap().unwrap())
+        .await
+        .unwrap();
+    log.append(&records).await.unwrap();
+    let e = verify(&mut log).await.unwrap_err();
+    assert!(matches!(e, VerifyError::Refused(_)), "{e:?}");
+    assert_eq!(finding(e), (Some(5), "build"));
+}
+
+/// A row naming another build than its payload's header diverges at the snapshot, like any column
+/// that disagrees with the header.
+#[tokio::test]
+async fn a_snapshot_row_naming_another_build_than_its_header_diverges() {
+    let mut l = load().await;
+    let mut bad = row(8, &l.worlds[7]);
+    bad.engine_build = "0.1.0+other".to_owned();
+    l.log.write_snapshot(&bad).await.unwrap();
+    assert_eq!(
+        finding(verify(&mut l.log).await.unwrap_err()),
+        (Some(8), "snapshot")
     );
 }

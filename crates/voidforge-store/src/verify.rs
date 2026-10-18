@@ -235,9 +235,14 @@ pub(crate) fn replay_checked(
 /// record up to `to` (the head when `None`) replayed through the shared function, with the state
 /// hash checked at every later snapshot row.
 ///
+/// The pin is on the records, as in recovery (D-038): every replayed record must be `build`'s,
+/// while a snapshot row, the start's included, decodes under the build its row names. So the
+/// records an upgraded build wrote on an earlier build's snapshot verify, and no replay crosses
+/// builds (phase 2 gate, R1 LOW). The rules version is pinned everywhere.
+///
 /// # Errors
-/// [`VerifyError`]: the first divergence, a refusal (another build or rules version), or an
-/// unreadable source (no snapshot at `from`, or none at all).
+/// [`VerifyError`]: the first divergence, a refusal (another build's record, or another rules
+/// version), or an unreadable source (no snapshot at `from`, or none at all).
 pub async fn verify_log<S: LogStore>(
     store: &mut S,
     rules: &Rules,
@@ -271,7 +276,7 @@ pub async fn verify_log<S: LogStore>(
         .await?
         .ok_or_else(|| VerifyError::Input(format!("the snapshot at seq {} vanished", start.seq)))?;
     let seq = row.seq;
-    let mut world = decode_row(&row, rules, build)?;
+    let mut world = decode_row(&row, rules)?;
     let records: Vec<LogRecord> = store
         .records_after(seq)
         .await?
@@ -289,7 +294,7 @@ pub async fn verify_log<S: LogStore>(
                 VerifyError::Input(format!("the snapshot at seq {} vanished", meta.seq))
             })?;
             // Strict decoding refuses a corrupt payload; the columns must match its header.
-            decode_row(&row, rules, build)?;
+            decode_row(&row, rules)?;
             later.push(row);
         }
     }
@@ -331,17 +336,30 @@ pub async fn verify_log<S: LogStore>(
     })
 }
 
-/// Decodes a snapshot row strictly under the pin and checks its columns against its header.
-fn decode_row(row: &SnapshotRow, rules: &Rules, build: &EngineBuild) -> Result<World, VerifyError> {
+/// Decodes a snapshot row strictly, under the rules pin and the build its row names (as
+/// recovery does), and checks its columns against its header.
+fn decode_row(row: &SnapshotRow, rules: &Rules) -> Result<World, VerifyError> {
     let seq = Some(row.seq);
+    let row_build =
+        EngineBuild::new(row.engine_build.clone()).map_err(|e| snapshot_error(seq, e))?;
     let decoded = snapshot::decode(
         &row.payload,
         &Expected {
             rules_version: rules.version,
-            engine_build: build,
+            engine_build: &row_build,
         },
     )
-    .map_err(|e| snapshot_error(seq, e))?;
+    .map_err(|e| match e {
+        // The expected build is the row's own, so a mismatch is the row disagreeing with its
+        // header, like any other column: a divergence, not a refusal.
+        SnapshotError::BuildMismatch { found, .. } => VerifyError::diverged(
+            seq,
+            "snapshot",
+            format!("engine_build {found}"),
+            row.engine_build.clone(),
+        ),
+        other => snapshot_error(seq, other),
+    })?;
     let h = &decoded.header;
     let columns = [
         (

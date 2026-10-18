@@ -321,6 +321,48 @@ fn a_build_or_rules_mismatch_is_refused() {
     assert_eq!(v["sources"][0]["divergence"]["what"], "rules_version");
 }
 
+/// A scoring error diverges with exit 1, never verifies as a score (phase 2 gate, R2 L1): under
+/// rules whose planet is worth `i64::MAX`, a manifest naming `i64::MIN` (the sentinel the verifier
+/// once substituted) fails at the scores, with the core's error as what was found.
+#[test]
+fn a_scoring_error_diverges_and_is_never_a_score() {
+    let dir = copy_golden("whole-loop", "score-error");
+    let mut m = manifest(&dir);
+    for s in m["scores"].as_array_mut().unwrap() {
+        s["score"] = Value::from(i64::MIN);
+    }
+    write_manifest(&dir, &m);
+    let rules = Path::new(env!("CARGO_TARGET_TMPDIR")).join("replay-cli/score-max.toml");
+    let text = std::fs::read_to_string(repo().join("rules/v0.toml")).unwrap();
+    assert!(
+        text.contains("planet = 1_000"),
+        "rules/v0.toml names the planet's score"
+    );
+    let max = text.replacen("planet = 1_000", &format!("planet = {}", i64::MAX), 1);
+    std::fs::write(&rules, max).unwrap();
+    let args = [
+        "golden",
+        dir.to_str().unwrap(),
+        "--rules",
+        rules.to_str().unwrap(),
+    ];
+    let (code, v) = json(&args);
+    let s = &v["sources"][0];
+    assert_eq!((code, v["result"].as_str()), (1, Some("diverged")), "{v}");
+    assert_eq!(s["divergence"]["what"], "scores");
+    assert!(
+        s["divergence"]["expected"]
+            .as_str()
+            .unwrap()
+            .starts_with("a score for player "),
+        "{v}"
+    );
+    assert!(
+        s["divergence"]["found"].as_str().unwrap().contains("score"),
+        "the core's error: {v}"
+    );
+}
+
 #[test]
 fn the_same_input_gives_byte_identical_output() {
     let dir = copy_golden("ships-and-colonize", "identical");
@@ -389,6 +431,43 @@ fn exit_codes_for_usage_and_input_errors() {
     ]);
     assert_eq!(r.code, 4);
     assert!(!r.stdout.contains("not a url"), "the URL is never echoed");
+}
+
+/// A directory of goldens with one that can't be looked into is an input error, never a pass over
+/// the readable rest (phase 2 gate sweep: the search once skipped what it couldn't read).
+#[cfg(unix)]
+#[test]
+fn an_unreadable_golden_is_an_input_error_not_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("replay-cli/unreadable");
+    if root.exists() {
+        // A previous run's locked directory: unlock it so it can be removed.
+        let _ = std::fs::set_permissions(root.join("b"), std::fs::Permissions::from_mode(0o755));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["a", "b"] {
+        let dir = root.join(name);
+        std::fs::create_dir(&dir).unwrap();
+        for f in ["start.vfsnap", "records.jsonl", "manifest.json"] {
+            std::fs::copy(goldens().join("whole-loop").join(f), dir.join(f)).unwrap();
+        }
+    }
+    assert_eq!(
+        json(&["golden", root.to_str().unwrap(), "--rules", &v0()]).0,
+        0
+    );
+    let locked = root.join("b");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = std::fs::metadata(locked.join("manifest.json")).is_ok();
+    let (code, v) = json(&["golden", root.to_str().unwrap(), "--rules", &v0()]);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if readable {
+        // Root ignores permissions, so there is nothing unreadable to find.
+        eprintln!("skipped: permissions are not enforced for this user");
+        return;
+    }
+    assert_eq!((code, v["result"].as_str()), (4, Some("error")), "{v}");
 }
 
 /// The lead's Q3 requirement: --help says what a pass under --build means.

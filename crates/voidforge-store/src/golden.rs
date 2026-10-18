@@ -148,8 +148,9 @@ impl Files {
 
 /// Verifies a golden under [`FIXTURE`] and `rules`: the start decoded strictly, every record
 /// replayed through the shared function with the state hash after each, the end (no events due)
-/// and its hash, and every player's score. The first failure names its record; for a missing or
-/// reordered record that is the seq expected there.
+/// and its hash, and every player's score (a scoring error is a divergence, never a score). The
+/// first failure names its record; for a missing or reordered record that is the seq expected
+/// there.
 ///
 /// # Errors
 /// [`VerifyError`]: the first divergence, a refusal (another build or rules version), or a file
@@ -236,14 +237,24 @@ pub fn verify_golden(files: &Files, rules: &Rules) -> Result<Report, VerifyError
             end_hash,
         ));
     }
-    let scores: Vec<Score> = world
+    // A scoring error is a failure, never a score: no sentinel value can stand in for it, since
+    // a manifest could name that value (phase 2 gate, R2 L1).
+    let scores = world
         .players
         .keys()
-        .map(|&p| Score {
-            player: player_uuid(p),
-            score: world.score(p, manifest.end_ms, rules).unwrap_or(i64::MIN),
+        .map(|&p| {
+            let player = player_uuid(p);
+            match world.score(p, manifest.end_ms, rules) {
+                Ok(score) => Ok(Score { player, score }),
+                Err(e) => Err(VerifyError::diverged(
+                    None,
+                    "scores",
+                    format!("a score for player {player}"),
+                    e.to_string(),
+                )),
+            }
         })
-        .collect();
+        .collect::<Result<Vec<Score>, VerifyError>>()?;
     if scores != manifest.scores {
         return Err(VerifyError::diverged(
             None,

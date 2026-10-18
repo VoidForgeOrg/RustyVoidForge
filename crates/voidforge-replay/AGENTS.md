@@ -17,6 +17,7 @@ voidforge-replay inspect postgres [--database-url <URL>] [--json]
 - **`postgres`** verifies from a snapshot (`--from`, default the earliest) to the head (or `--to`). `--database-url` defaults to `DATABASE_URL` and is never printed.
   - Every later snapshot row is a checkpoint: it's decoded strictly and cross-checked, then compared with the replayed World brought to the snapshot's own game time (which reproduces unlogged eventless advances).
   - A snapshot past the log head is refused.
+  - The build pin is on the records, as in recovery: every snapshot row, the start's included, decodes under the build its row names. So after an engine upgrade, the new build's records verify on the earlier build's snapshot ([D-044](../../docs/decision-log.md#d-044-phase-2-gate-repair-verification-failures-the-record-pin-the-database-stage-lock-and-the-epoch)).
 - **`inspect`** reports builds, rules versions, snapshot headers and record ranges. It reads headers through `decode_any`, so **nothing it prints is verified** (D-035): text output says UNVERIFIED, and JSON says `"verified": false`.
 - **`--build <ID>`** asserts the build that wrote the log (default: this binary's own `ENGINE_BUILD`). **A pass under `--build` means this binary's code reproduces that log, not that the named build's code was verified.** A production incident log is verified by its own build's binary. The output always names the build and whether `--build` gave it.
 
@@ -48,7 +49,8 @@ voidforge-replay inspect postgres [--database-url <URL>] [--json]
 
 - Telemetry: `main` calls `voidforge_telemetry::init` once, first, and `Telemetry::shutdown` before exit, reporting a failed shutdown with a non-zero exit ([D-016](../../docs/decision-log.md#d-016-telemetry-bootstrap)). It never configures its own exporter or subscriber.
 - Replay is an offline caller of the core: it rebuilds a world from a snapshot and the log and never touches live state. Every record goes through `voidforge_store::replay::replay_record`, the same function host recovery uses. There's no second path.
-- Replays are pinned to a build and a rules version, and a mismatch is refused (exit 3).
+- Replays are pinned to a build and a rules version, and a mismatch is refused (exit 3). The build pin applies to records; snapshot rows decode under their own build.
+- A failure is never turned into a value: a core error (a score out of range, say) is a divergence, and an unreadable golden is an input error, never skipped.
 - `advance` records are recomputed and checked against their recorded events, never applied.
 - Replaying the same log gives byte-identical state, the same domain events and the same output every time.
 
@@ -63,12 +65,14 @@ cargo nextest run -p voidforge-replay
 - `tests/cli.rs` drives the binary as a process:
   - every golden verifies;
   - the tamper matrix (an event swapped or edited, an outcome flipped, a hash, a record removed or the last one dropped, two records swapped, the end hash, a score) is pinpointed to its seq with exit 1;
+  - a scoring error in the core diverges with exit 1, even when the manifest names `i64::MIN`;
+  - an unreadable golden in a directory of goldens is an input error (exit 4);
   - a build or rules mismatch is refused with exit 3;
   - inspection is labeled unverified;
   - the output is byte-identical;
   - usage and input errors give exits 2 and 4;
   - `--help` says what a pass under `--build` means.
-- `tests/postgres.rs` (the database stage) covers a golden loaded into Postgres with snapshot checkpoints, a tampered row and checkpoint, another build refused, and inspection.
+- `tests/postgres.rs` (the database stage) covers a golden loaded into Postgres with snapshot checkpoints, a tampered row and checkpoint, another build refused, records on an earlier build's snapshot verifying, and inspection.
 
 ## Specs
 

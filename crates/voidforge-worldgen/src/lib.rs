@@ -37,8 +37,9 @@ pub const MAX_ATTEMPTS: u32 = 10_000;
 /// The most planets a universe may have (players × planets per expected player), checked before
 /// anything is allocated: [`WorldgenError::TooLarge`]. Generation is linear in planets (measured
 /// in release: 100,000 planets in about 0.26 s and a 4 MB snapshot), so this bounds an operator's
-/// request well before time or memory become a problem. At Rules v0 it is 5,000 players, far
-/// above the default cube's own limit of about 240 (decision log D-033, D-043).
+/// request well before time or memory become a problem. At Rules v0 it is 5,000 players, above
+/// the default cube's own limits: [`WorldgenError::Exhausted`] from about 241 to 256 players
+/// (seed-dependent), and [`WorldgenError::Infeasible`] from 902 (decision log D-033, D-043).
 pub const MAX_PLANETS: u64 = 100_000;
 
 /// Why a world could not be generated.

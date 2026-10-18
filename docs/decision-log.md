@@ -495,7 +495,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Date and package: 2026-10-18, P1.12. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 18, `ruling-lead-overnight.md`.) **Placement: Tom chose option A on 2026-10-18** (slice 25), replacing the provisional option B.
 - Decision:
   - **Entry point**: `voidforge_worldgen::generate(seed, players, &Rules) -> Result<World, WorldgenError>`.
-    - It produces the universe's first `World`: at time 0 (the host sets the epoch in P2.9), under the rules' version, with the seed recorded.
+    - It produces the universe's first `World`: at time 0, under the rules' version, with the seed recorded. The epoch isn't in the World: it's the host's configuration. **Amended at the Phase 2 gate** (D-044): this once said the host sets the epoch in P2.9, which P2.9 didn't do. Phase 3 owns a stable epoch source.
     - It holds `players × planets_per_expected_player` unowned planets with the rules' slots and caps and empty stocks, plus `players` homeworld candidates.
     - Every planet is solved (D-025), and the links hold.
   - **Placement, option A** (Tom's decision, 2026-10-18; the brief is `missions/voidforge-mvp/tom-decision-worldgen.md`):
@@ -612,6 +612,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Local runs and the owner's data**: `just db-test` runs the same commands against the `just up` stack.
     - `database.sh` refuses any `DATABASE_URL` whose database isn't `voidforge_test`.
     - It only ever creates `voidforge_test`, and only ever drops databases named `_sqlx_test_*` (before and after each run, so nothing accumulates).
+    - **Amended at the Phase 2 gate** (D-044, QA O1): it also creates and drops its lock database `voidforge_test_lock`, so one run at a time uses a server, and its cleanup never terminates a session.
     - It never connects to `voidforge`.
     - `just migrate` has no default target: it requires an explicit `DATABASE_URL`. Applying the schema to the owner's `voidforge` database stays with the owner.
 - Carried obligations:
@@ -673,7 +674,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **The write path**, in order:
     1. wait for a command or the next queue entry (`select!`, biased to the inbox, against a sleep until `epoch + at_ms`), never polling; an idle host doesn't wake (`HostStats::wakes`);
     2. idempotency is P2.4;
-    3. stamp t = max(wall clock − epoch, last t), where the clock is injected (`SystemClock`, or `ManualClock` for tests) and the epoch is configuration until P2.9; take the next seq, gap-free from 1 and after existing records, and refuse a World behind the log's last record;
+    3. stamp t = max(wall clock − epoch, last t), where the clock is injected (`SystemClock`, or `ManualClock` for tests) and the epoch is configuration (`HostConfig::epoch_unix_ms`; **amended at the Phase 2 gate**: this once said "until P2.9", but the bootstrap records no epoch, and Phase 3 owns a stable source, D-044); take the next seq, gap-free from 1 and after existing records, and refuse a World behind the log's last record;
     4. `apply(command, t)`, or `advance_to(t)` when only time has passed;
     5. one durable `append` for the whole turn: commands already waiting join it, up to `max_batch` (64), with no added delay;
     6. reply, then publish.
@@ -828,7 +829,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `inspect golden|postgres`: metadata through `decode_any`, labeled unverified in text and JSON (D-035's caveat);
     - `--json` on all of them.
     - There's no interactive mode, and the database URL is never printed.
-  - **The build pin.** The expected build is the binary's own `ENGINE_BUILD`. `--build <ID>` asserts another, such as a test build or an earlier deploy's. **A pass under `--build` means this binary's code reproduces that log, not that the named build's code was verified.** A production incident log is verified by its own build's binary. `--help`, the crate guide and the output say so, and the output names the build and whether the flag gave it. Goldens always use the fixture build (D-040).
+  - **The build pin.** **Amended at the Phase 2 gate** (D-044, R1 LOW): the pin is on the records, as in recovery (D-038). Every snapshot row, the start's included, decodes under the build its row names, so an upgraded build's records verify on an earlier build's snapshot. The rules version is pinned everywhere. The expected build is the binary's own `ENGINE_BUILD`. `--build <ID>` asserts another, such as a test build or an earlier deploy's. **A pass under `--build` means this binary's code reproduces that log, not that the named build's code was verified.** A production incident log is verified by its own build's binary. `--help`, the crate guide and the output say so, and the output names the build and whether the flag gave it. Goldens always use the fixture build (D-040).
   - **Exit codes (a stable contract):**
     - 0: verified;
     - 1: diverged;
@@ -896,7 +897,10 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **The world-size cap** (D-033's carry, the P1.12 QA LOW): `voidforge_worldgen::MAX_PLANETS = 100_000` on players × planets per expected player.
     - It's checked before anything is allocated, as a typed `WorldgenError::TooLarge { planets, max }`, and the error names the limit.
     - Measured in release (generation plus canonical bytes): 2,000 planets in 6 ms (74 KB); 20,000 in 47 ms (0.8 MB); 100,000 in 0.26 s (4.1 MB). Linear growth.
-    - At Rules v0 the cap is 5,000 players, far above the default cube's own limit of about 240 (`Exhausted`), so it binds only for custom, larger cubes.
+    - At Rules v0 the cap is 5,000 players, so it binds only for custom, larger cubes. Below it, the default cube refuses earlier, in two ways (**amended at the Phase 2 gate**, D-044; measured by dev-qa at P2.9):
+      - from about 241 to 256 players, depending on the seed, homeworld candidates run out of room: `Exhausted`;
+      - from 902 to 5,000 players, the packing pre-check refuses before any draw: `Infeasible`. The pre-check's bound (about 901) is a necessary condition, so the `Exhausted` limit binds first.
+      - Both are world-generation errors: `voidforge-server seed` exits 4 for them (only `TooLarge` and no players are refusals, exit 3).
   - **`voidforge-server seed --seed --players --rules [--database-url] [--json]`:**
     1. generate (option A, D-031);
     2. encode the snapshot under this binary's `ENGINE_BUILD`;
@@ -918,3 +922,27 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `tests/postgres.rs` (database stage) covers the pinned hash on two fresh databases, equal to `generate` in-process; a second seed refused with the database unchanged; and the host recovering from seq 0 (D-038), serving a Join game, and recovering again with the player.
 - Carried from P2.8 (R2 LOW): `CRASH_DEBUG` keeps the crash harness's child stderr piped and echoes it, so the kill marker is always parsed.
 - Where it's enforced: `crates/voidforge-worldgen/src/lib.rs`, `crates/voidforge-store/src/lib.rs` (`bootstrap`), `crates/voidforge-server/`, `.github/scripts/seed.sh`, `justfile`, `.sqlx/`.
+
+### D-044: Phase 2 gate repair: verification failures, the record pin, the database-stage lock and the epoch
+
+- Date and package: 2026-10-18, the Phase 2 gate repair (the lead's gate brief on 145daee: QA PASS, review-r1 CLEAR, review-r2 REQUIRES REPAIR). Proposed by dev-build. None of it is game intent.
+- Decision:
+  - **A failure is never a value** (review-r2 L1). `verify_golden` once turned a core scoring error into `i64::MIN`, so a manifest naming that number verified while the core returned `ScoreOutOfRange`.
+    - Now a scoring error is `VerifyError::Diverged` (`scores`), naming the player and the core's error. `voidforge-replay golden` exits 1.
+    - The sweep of the verify paths (store's `golden`, `verify` and `replay`, and the replay CLI) found one more: the CLI's golden search skipped a directory entry it couldn't read, so a directory of goldens could pass on the readable rest. An unreadable entry is now an input error (exit 4).
+    - The rest are display fallbacks for report text only (`events_json`, `outcome_text`, the CLI's text for a pass). Every comparison is typed.
+  - **The build pin is on the records** (review-r1 LOW, the shared-path principle). `verify_log` once decoded every snapshot row under the pinned build, while recovery decodes the row under its own build (D-038). So after an engine upgrade, recovery accepted a tail that `voidforge-replay postgres` refused.
+    - Now every snapshot row, the start's included, decodes under the build its row names, and the pin applies to records only. The rules version stays pinned everywhere.
+    - A row naming another build than its payload's header is a divergence at that snapshot, like any other column mismatch.
+    - The host's upgrade matrix (`upgrade_cases`, on memory and Postgres) now checks that `verify_log` agrees with recovery: from A's snapshot, B's records verify under B's pin, and A's pin refuses B's first record.
+  - **The database stage holds a lock, and its cleanup never ends a session** (dev-qa O1). On the shared local stack, one seat's `just db-test` force-dropped every `_sqlx_test_*` database and killed another seat's live run.
+    - `database.sh` takes `voidforge_test_lock` (CREATE DATABASE is atomic) before anything else, and a second run waits up to `VOIDFORGE_DB_LOCK_WAIT` seconds (default 1,800), then fails naming the holder.
+    - The lock's comment names its holder's host and pid. A lock whose holder is a dead process on the same host is taken over.
+    - Cleanup drops only idle `_sqlx_test_*` databases, without `FORCE`. Before a run, a test database in use is an error (exit 2): another test run is using the server. After a run, one in use is left with a warning. sqlx's bookkeeping rows are cleared only for databases that are gone.
+    - It doesn't help a direct `cargo nextest` against `voidforge_test`, which takes no lock, and sqlx's per-test database names are fixed, so two runs of the same test still collide (the later one fails, and nothing is killed).
+    - Checked on the local stack: a live holder makes a run wait, then fail; an in-use test database stops a run and survives it; a stale lock is taken over; two runs started together run one after the other, both green.
+  - **The universe epoch** (review-r2 INFO). D-031 and D-036 said P2.9 would record or set the epoch. It doesn't: the bootstrap writes a time-0 World, and `HostConfig::epoch_unix_ms` is supplied by the caller. Those promises are amended.
+    - **Obligation for Phase 3, P3.4** (the first package that starts the host in the server, projects views to now and returns UTC times): the server's startup takes a stable epoch, the same value on every start, from configuration or from a durable record written at seeding. A changed epoch would move game time for every player.
+  - **D-043's wording**: the default cube's limits are `Exhausted` from about 241 to 256 players (seed-dependent) and `Infeasible` from 902 to 5,000, below the 5,000-player cap.
+- Carried: `crash_nightly` shares the per-PR `file-{seed}` scratch prefix; it gets its own before P5.3 schedules it (review-r1 INFO).
+- Where it's enforced: `crates/voidforge-store/src/{golden.rs, verify.rs}`, `crates/voidforge-replay/src/main.rs`, `crates/voidforge-store/tests/verify.rs`, `crates/voidforge-host/tests/{golden.rs, common/mod.rs}`, `crates/voidforge-replay/tests/{cli.rs, postgres.rs}`, `.github/scripts/database.sh`.

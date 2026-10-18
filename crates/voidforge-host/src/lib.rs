@@ -51,8 +51,9 @@ pub use clock::{Clock, ManualClock, SystemClock};
 /// How a host runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostConfig {
-    /// The universe epoch in Unix milliseconds: game time is wall time minus this. An input until
-    /// the universe bootstrap (P2.9) records it.
+    /// The universe epoch in Unix milliseconds: game time is wall time minus this. An input: the
+    /// bootstrap (P2.9) records none, and the server's startup must supply the same value on every
+    /// start (Phase 3, decision log D-044).
     pub epoch_unix_ms: i64,
     /// How many commands may wait in the inbox before [`HostError::Busy`].
     pub inbox_capacity: usize,
