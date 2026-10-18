@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT state_hash FROM snapshots WHERE seq = 0",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "snapshots",
+            "name": "state_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ca61b604dfc6f17940e01a711b6665a595a257d9296d5e7323fcd697d1ae651d"
+}

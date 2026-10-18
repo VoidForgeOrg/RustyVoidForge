@@ -465,11 +465,8 @@ impl Life {
             .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(if std::env::var("CRASH_DEBUG").is_ok() {
-                Stdio::inherit()
-            } else {
-                Stdio::piped()
-            })
+            // Always piped, so the kill marker is parsed; CRASH_DEBUG echoes it afterwards.
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
         let stdin = child.stdin.take().unwrap();
@@ -523,6 +520,9 @@ impl Life {
         drop(self.stdin);
         let out = self.child.wait_with_output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
+        if std::env::var("CRASH_DEBUG").is_ok() {
+            eprint!("{stderr}");
+        }
         let kill = stderr.lines().find_map(|l| {
             let rest = l.strip_prefix("@crash-kill ")?;
             let mut f = rest.split(' ');

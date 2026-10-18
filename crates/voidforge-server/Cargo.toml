@@ -8,8 +8,25 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The universe bootstrap, `seed` (P2.9, D-043).
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 tracing.workspace = true
+voidforge-rules.workspace = true
+voidforge-store.workspace = true
 voidforge-telemetry.workspace = true
+voidforge-worldgen.workspace = true
+
+[dev-dependencies]
+# The database-stage tests boot the host on a seeded database (P2.9, D-043).
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+voidforge-core.workspace = true
+voidforge-host.workspace = true
+voidforge-testkit.workspace = true
 
 [lints]
 workspace = true

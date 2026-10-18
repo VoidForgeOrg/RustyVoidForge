@@ -9,7 +9,7 @@ use voidforge_core::rules::{DISTANCE_UNITS_PER_WORLD_UNIT, Rules};
 use voidforge_core::state::{PlanetId, World};
 use voidforge_testkit::determinism::{canonical_bytes, mix};
 use voidforge_testkit::{ALICE, v0_rules};
-use voidforge_worldgen::{WorldgenError, generate};
+use voidforge_worldgen::{MAX_PLANETS, WorldgenError, generate};
 
 const U: i64 = DISTANCE_UNITS_PER_WORLD_UNIT;
 
@@ -359,8 +359,9 @@ fn feasibility_a_dense_but_possible_packing_is_not_called_impossible() {
 }
 
 /// review-r2's M1 on the generation side: products of extreme but valid values are decided,
-/// not overflowed. u32::MAX players of u32::MAX planets at a half-cube spacing cannot fit, and
-/// the answer is the typed `Infeasible` in every build profile, never a panic or a wrapped
+/// not overflowed. u32::MAX players of u32::MAX planets are refused by the size cap first
+/// (`TooLarge`, D-043); within the cap, the largest distances at a half-cube spacing cannot fit,
+/// and the answer is the typed `Infeasible` in every build profile, never a panic or a wrapped
 /// decision.
 #[test]
 fn feasibility_extreme_counts_and_distances_are_decided_without_overflow() {
@@ -375,8 +376,38 @@ fn feasibility_extreme_counts_and_distances_are_decided_without_overflow() {
     rules.validate().unwrap();
     assert_eq!(
         generate(0, u32::MAX, &rules),
+        Err(WorldgenError::TooLarge {
+            planets: u64::from(u32::MAX) * u64::from(u32::MAX),
+            max: MAX_PLANETS
+        })
+    );
+    rules.worldgen.planets_per_expected_player = 100;
+    assert_eq!(
+        generate(0, 1_000, &rules),
         Err(WorldgenError::Infeasible(
             "the planets cannot keep their spacing in the cube"
         ))
     );
+}
+
+/// D-033's carry (P1.12 QA LOW), D-043: the world size an operator can ask for is capped at
+/// MAX_PLANETS, refused before anything is generated, with the limit in the error. The edge
+/// itself generates in a cube large enough to hold it.
+#[test]
+fn the_world_size_is_capped_at_max_planets() {
+    let rules = v0_rules();
+    let players = (MAX_PLANETS / 20) as u32;
+    assert_eq!(
+        generate(0, players + 1, &rules),
+        Err(WorldgenError::TooLarge {
+            planets: MAX_PLANETS + 20,
+            max: MAX_PLANETS
+        })
+    );
+    let message = generate(0, u32::MAX, &rules).unwrap_err().to_string();
+    assert!(message.contains("the limit is 100000 planets"), "{message}");
+    let mut big = v0_rules();
+    big.worldgen.cube_size_du = 6_000 * U;
+    let w = generate(1, players, &big).unwrap();
+    assert_eq!(w.planets.len() as u64, MAX_PLANETS);
 }

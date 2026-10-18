@@ -560,7 +560,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Decision:
   - **P2.5** (snapshots and restore): restore must not rely on `World::check_links` for gameplay fields. It is a structural check only (D-022: "not a gameplay validator"; P1.3 LOW).
   - **P2.9** (the universe bootstrap):
-    - It caps the total world size an operator can ask for (players × planets per player; P1.12 QA LOW).
+    - It caps the total world size an operator can ask for (players × planets per player; P1.12 QA LOW). **Done in D-043** (`MAX_PLANETS = 100_000`).
     - **Superseded on 2026-10-18** by D-031 option A (Tom's decision): any player count up to about 240 generates under the default rules, so the bootstrap and P3.6 need no minimum player count or denser rules. (It read: under option B, worlds below roughly 31 to 40 expected players were refused, so P2.9 and P3.6 had to use at least about 40 players or denser rules.)
   - **P3.6** (the end-to-end scenario): dex configuration parity between local and CI becomes a mechanical check (a Phase 0 carry).
 
@@ -888,3 +888,33 @@ Each entry records its date, the package that made it, the decision, the reasons
     - per PR, 12 seeds of 40 commands on the file store in `test` (about 5 s), and 4 seeds of 30 commands on Postgres in the database stage (about 6 s; the filter gains the crash binary's Postgres test);
     - the nightly shape (P5.3 schedules it) is the ignored `crash_nightly`, with `VOIDFORGE_CRASH_SEED_BASE`, `VOIDFORGE_CRASH_SEEDS` and `VOIDFORGE_CRASH_COMMANDS`.
 - Where it's enforced: `crates/voidforge-host/tests/{crash.rs, common/filelog.rs}`, `.github/scripts/database.sh`.
+
+### D-043: The universe bootstrap, the world-size cap and `just seed`
+
+- Date and package: 2026-10-18, P2.9. Proposed by dev-build (`slices/29-p2-9-bootstrap/proposal-seed.md`). **Lead ruling; advisor review pending** (`ruling-lead.md`). None of it is game intent.
+- Decision:
+  - **The world-size cap** (D-033's carry, the P1.12 QA LOW): `voidforge_worldgen::MAX_PLANETS = 100_000` on players × planets per expected player.
+    - It's checked before anything is allocated, as a typed `WorldgenError::TooLarge { planets, max }`, and the error names the limit.
+    - Measured in release (generation plus canonical bytes): 2,000 planets in 6 ms (74 KB); 20,000 in 47 ms (0.8 MB); 100,000 in 0.26 s (4.1 MB). Linear growth.
+    - At Rules v0 the cap is 5,000 players, far above the default cube's own limit of about 240 (`Exhausted`), so it binds only for custom, larger cubes.
+  - **`voidforge-server seed --seed --players --rules [--database-url] [--json]`:**
+    1. generate (option A, D-031);
+    2. encode the snapshot under this binary's `ENGINE_BUILD`;
+    3. `voidforge_store::bootstrap`: connect, apply the migrations, then, in one transaction with both tables locked (`EXCLUSIVE`), refuse unless `snapshots` and `log_records` are empty, and write the snapshot at seq 0.
+    - **A universe is never overwritten:** the refusal is `NotEmpty` and names the existing seq-0 state hash.
+    - The output is the state hash (or one JSON document). The database URL is never printed.
+    - Exit codes as D-041's: 0 seeded, 2 usage, 3 refused (not empty, too large, or no players), 4 input or database error, 5 telemetry.
+    - The state hash covers the World only (D-035), so the same seed, players and rules give the same hash under any build.
+  - **`just seed` and owner safety:**
+    - `.github/scripts/seed.sh` targets only `voidforge_dev` on the local stack (created if missing). It never names or migrates the owner's `voidforge` database (D-034 stands).
+    - `just seed` refuses (exit 3) when `voidforge_dev` holds a universe.
+    - `just seed-reset`, the only reset, drops and recreates `voidforge_dev` (the name is fixed in the script), then seeds.
+    - The defaults are `SEED=20261018` and `PLAYERS=100` on Rules v0; `RULES=fast` uses `rules/v0-fast.toml`. Its state hash under Rules v0 is `63185376ae382891972632b6f15eb52cf87816dbce27a20a48c2efa23ea487f5`, pinned in the database-stage test.
+    - The script builds with `SQLX_OFFLINE=true`, so queries are checked against `.sqlx/`, never against the dev database.
+    - Phase 3's local server runs against `voidforge_dev` too.
+  - **Dependencies:** the server gains clap (D-041), serde, serde_json, tokio, rules, store and worldgen; its tests gain host, core, testkit and sqlx. There's no new crate in the tree.
+  - **Tests:**
+    - `crates/voidforge-server/tests/cli.rs` covers the cap and no players (exit 3, before any connection), a bad URL (exit 4, never echoed), and usage (exit 2);
+    - `tests/postgres.rs` (database stage) covers the pinned hash on two fresh databases, equal to `generate` in-process; a second seed refused with the database unchanged; and the host recovering from seq 0 (D-038), serving a Join game, and recovering again with the player.
+- Carried from P2.8 (R2 LOW): `CRASH_DEBUG` keeps the crash harness's child stderr piped and echoes it, so the kill marker is always parsed.
+- Where it's enforced: `crates/voidforge-worldgen/src/lib.rs`, `crates/voidforge-store/src/lib.rs` (`bootstrap`), `crates/voidforge-server/`, `.github/scripts/seed.sh`, `justfile`, `.sqlx/`.
