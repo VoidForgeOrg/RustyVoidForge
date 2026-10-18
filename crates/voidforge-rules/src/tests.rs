@@ -476,3 +476,23 @@ fn a_colony_ship_carries_nothing() {
     // plain sum over ships; v0 and v0-fast comply, and any other value is rejected above.
     assert_eq!(v0().ships.colony_ship.cargo_capacity_g, 0);
 }
+
+/// review-r1's gate LOW (P1.2 QA): the slot-fit boundary. Starting buildings exactly filling the
+/// slots fit; one more does not (kills a `> slots + 1` mutant).
+#[test]
+fn homeworld_buildings_fit_exactly_in_the_slots_and_not_one_more() {
+    let exact = edited("drills = 1 ", "drills = 7 ");
+    let rules = parse(&exact).expect("7 Drills and 1 Refinery fit in 8 slots");
+    assert_eq!(
+        rules.homeworld.drills + rules.homeworld.refineries,
+        rules.planet.slots
+    );
+    let error = invalid(&edited("drills = 1 ", "drills = 8 "));
+    assert_eq!(error.field, "homeworld");
+    assert!(
+        error
+            .problem
+            .contains("9 starting buildings do not fit in 8 slots"),
+        "{error}"
+    );
+}

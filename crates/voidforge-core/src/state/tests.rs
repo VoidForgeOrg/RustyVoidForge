@@ -590,3 +590,23 @@ fn unknown_fields_do_not_deserialize() {
     let error = reload(&text).expect_err("rejected").to_string();
     assert!(error.contains("unknown field `sneaky`"), "{error}");
 }
+
+/// review-r1's gate LOW (P1.3 QA survivor): a queue entry for a fleet ID equal to `next_id` was
+/// never allocated, so it is an error; one ID below (allocated, held by nothing) is stale. Kills
+/// a `>` in place of `>=` in `entry_status`.
+#[test]
+fn an_entry_for_the_next_unallocated_id_is_an_error_and_one_below_is_stale() {
+    let mut w = sample_world();
+    let freed = FleetId(w.allocate_id().unwrap()); // allocated, held by nothing
+    let entry = |id: FleetId| QueueEntry {
+        at_ms: 9,
+        kind: QueueKind::FleetArrival(id),
+        version: 0,
+    };
+    assert_eq!(w.entry_status(&entry(freed)), Ok(EntryStatus::Stale));
+    let next = FleetId(w.next_id);
+    assert!(
+        matches!(w.entry_status(&entry(next)), Err(StateError::Link(m)) if m.contains("does not exist")),
+        "an entry for next_id must be an error"
+    );
+}

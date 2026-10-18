@@ -15,6 +15,7 @@ Library. P1.1 delivered `quantity` ([D-018](../../docs/decision-log.md#d-018-qua
 ## Invariants
 
 - No I/O, no clock reads, no threads, no random numbers ([Engine core](../../docs/Voidforge%20Architectural%20Design.md#engine-core)). Game time is a signed 64-bit count of milliseconds since the universe epoch, passed in by the caller ([Time model](../../docs/Voidforge%20Architectural%20Design.md#time-model)).
+- Checked arithmetic: every integer operator is `checked_*` (with a typed error where input or state can reach overflow) or `strict_*` (only where a bound is proven, argued in a D-032 comment); `clippy::arithmetic_side_effects` is forbidden here ([D-032](../../docs/decision-log.md#d-032-checked-arithmetic-in-the-core-rules-and-worldgen)).
 - Integers only: 64-bit storage, 128-bit intermediates, masses in grams, rates in grams per hour. No float types ([State model](../../docs/Voidforge%20Architectural%20Design.md#state-model)).
 - Every collection iterates in ID order. Entities refer to each other by integer ID, never by pointer.
 - New entities take `World.next_id`. Player UUIDs and other external keys arrive in commands; the core never generates them.

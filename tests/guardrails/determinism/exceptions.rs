@@ -15,3 +15,8 @@ pub fn expected_map() -> usize {
 pub fn allowed_float(x: i64) -> i64 {
     (x as f64 * 1.5) as i64
 }
+
+#[allow(clippy::arithmetic_side_effects)]
+pub fn allowed_overflow(a: i64, b: i64) -> i64 {
+    a + b
+}

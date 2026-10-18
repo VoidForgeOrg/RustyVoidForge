@@ -8,6 +8,9 @@
 
 // Determinism guardrails (Technical Plan P0.4). Forbidden, so no item can opt out; the banned
 // paths are in this crate's clippy.toml.
+// Every integer operation in the library is checked or strict (D-032), so nothing wraps
+// silently in release; unit tests are exempt.
+#![cfg_attr(not(test), forbid(clippy::arithmetic_side_effects))]
 #![forbid(
     clippy::disallowed_methods,
     clippy::disallowed_types,

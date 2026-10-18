@@ -591,3 +591,24 @@ fn an_advance_from_inside_a_step_is_refused_and_stops_the_outer_one() {
         assert!(serde_json::to_string(&w).is_err());
     }
 }
+
+/// review-r1's gate LOW (P1.4): a backwards nested advance, whose target is before the instant
+/// being processed, is still `NestedAdvance` (not `TimeBeforeNow`, which would not be latched),
+/// and the outer advance stops and poisons even when the step swallows the refusal.
+#[test]
+fn a_backwards_advance_from_inside_a_step_is_refused_and_latched() {
+    let mut w = sample_world();
+    let mut nested = Probe(|w: &mut World, kind| {
+        if kind == QueueKind::PlanetChange(P1) {
+            let now = w.time_ms;
+            let inner = w.advance_with(now - 50, &mut settled());
+            assert_eq!(inner, Err(EngineError::NestedAdvance));
+        }
+        settle(w, kind)
+    });
+    assert_eq!(
+        w.advance_with(400, &mut nested),
+        Err(EngineError::NestedAdvance)
+    );
+    assert!(w.is_poisoned());
+}

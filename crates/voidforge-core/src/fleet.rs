@@ -19,7 +19,8 @@ use crate::state::{
 /// (D-021), rounded down; `None` if it leaves 64 bits.
 pub fn distance(a: Position, b: Position) -> Option<i64> {
     let square = |from: i64, to: i64| {
-        let d = i128::from(to) - i128::from(from);
+        // Two i64 values widened: the difference fits in i128 (D-032).
+        let d = i128::from(to).strict_sub(i128::from(from));
         d.checked_mul(d)
     };
     let sum = square(a.x, b.x)?
@@ -31,7 +32,10 @@ pub fn distance(a: Position, b: Position) -> Option<i64> {
 /// ceil(distance × 3,600,000 / speed) milliseconds, with speed in distance units per hour;
 /// `None` if it leaves 64 bits. `distance` is not negative and `speed` is positive.
 pub fn travel_time_ms(distance: i64, speed_du_per_h: i64) -> Option<i64> {
-    let scaled = u128::try_from(distance).ok()? * MS_PER_HOUR as u128;
+    // distance < 2^63 and MS_PER_HOUR < 2^22: the product is below 2^85 (D-032).
+    let scaled = u128::try_from(distance)
+        .ok()?
+        .strict_mul(MS_PER_HOUR as u128);
     let speed = u128::try_from(speed_du_per_h).ok().filter(|&s| s > 0)?;
     i64::try_from(scaled.div_ceil(speed)).ok()
 }
@@ -129,13 +133,13 @@ impl World {
             return Ok(());
         }
         // Departure is never after now, so the time traveled is not negative.
-        let arrives_at_ms =
-            (now - departed_at_ms)
-                .checked_add(now)
-                .ok_or(EngineError::FleetOutOfRange {
-                    fleet,
-                    what: "return time",
-                })?;
+        let arrives_at_ms = now
+            .checked_sub(departed_at_ms)
+            .and_then(|traveled| traveled.checked_add(now))
+            .ok_or(EngineError::FleetOutOfRange {
+                fleet,
+                what: "return time",
+            })?;
         self.reschedule(
             fleet,
             FleetState::Returning {
@@ -274,8 +278,8 @@ impl World {
         p.ingots = ingots;
         let f = self.fleets.get_mut(&fleet).expect("read above");
         // Each amount is at most what is aboard, so neither difference goes negative.
-        f.cargo.ore_g -= ore_g;
-        f.cargo.ingots_g -= ingots_g;
+        f.cargo.ore_g = f.cargo.ore_g.strict_sub(ore_g);
+        f.cargo.ingots_g = f.cargo.ingots_g.strict_sub(ingots_g);
         Ok(Cargo { ore_g, ingots_g })
     }
 
@@ -292,7 +296,8 @@ impl World {
                 return Ok(stock);
             }
             Quantity::from_parts(
-                stock.value_g() - grams,
+                // Validation loaded at most the stock, and both are not negative (D-032).
+                stock.value_g().strict_sub(grams),
                 0,
                 stock.remainder(),
                 stock.checkpoint_ms(),
@@ -352,7 +357,8 @@ fn filled(
     }
     // value + taken is at most the cap, so it fits.
     let stock = Quantity::from_parts(
-        stock.value_g() + taken,
+        // taken is at most the free storage, so the sum is at most the cap (D-032).
+        stock.value_g().strict_add(taken),
         0,
         stock.remainder(),
         stock.checkpoint_ms(),
