@@ -638,8 +638,14 @@ async fn run_seed(at: &Where, points: &[&str], seed: u64, commands: u64) -> Seen
                 died = true;
                 break;
             }
+            // The host keeps working after the clock's reply (a snapshot after a turn), so the
+            // child can die while we plan: like any death, the next life plans this group again
+            // (dev-qa's F1 on 963646a).
             let (replies, d) = child.ask(&ToChild::Plan(ks.clone()), 1);
-            assert!(!d, "seed {seed}: planning has no kill point");
+            if d {
+                died = true;
+                break;
+            }
             let Some(FromChild::Commands(cmds)) = replies.into_iter().next() else {
                 panic!("seed {seed}: no plan")
             };
