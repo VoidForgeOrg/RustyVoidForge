@@ -46,28 +46,22 @@ pub enum FlowStatus {
     Halted,
 }
 
-/// A building on a planet.
+/// A building on a planet, tagged by its `state`. Each state lists every field it has and no
+/// other, so a misspelled field or another state's field is refused by serde and by the schema
+/// alike (repair round 1, F1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct BuildingView {
-    /// The building.
-    pub id: BuildingId,
-    /// What it is.
-    #[serde(rename = "type")]
-    pub building_type: BuildingType,
-    /// Its state, with the fields that state has.
-    #[serde(flatten)]
-    pub state: BuildingState,
-    /// How its flow is doing; absent when it has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<FlowStatus>,
-}
-
-/// A building's state, tagged by `state`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum BuildingState {
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BuildingView {
     /// Receiving ingots until it reaches its cost.
     UnderConstruction {
+        /// The building.
+        id: BuildingId,
+        /// What it is.
+        #[serde(rename = "type")]
+        building_type: BuildingType,
+        /// How its flow is doing; absent when it has none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<FlowStatus>,
         /// Grams of ingots delivered at `as_of`.
         delivered_g: i64,
         /// Grams it costs.
@@ -76,12 +70,30 @@ pub enum BuildingState {
         rate_g_per_h: i64,
         /// When it completes at the current rate, exactly; null while nothing flows.
         #[schema(required = true)]
+        #[serde(deserialize_with = "Option::deserialize")]
         eta: Option<Timestamp>,
     },
     /// Working.
-    Operational,
+    Operational {
+        /// The building.
+        id: BuildingId,
+        /// What it is.
+        #[serde(rename = "type")]
+        building_type: BuildingType,
+        /// How its flow is doing; absent when it has none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<FlowStatus>,
+    },
     /// Stopped and being demolished; the slot frees at `demolition_ends_at`.
     Demolishing {
+        /// The building.
+        id: BuildingId,
+        /// What it is.
+        #[serde(rename = "type")]
+        building_type: BuildingType,
+        /// How its flow is doing; absent when it has none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<FlowStatus>,
         /// When demolition ends.
         demolition_ends_at: Timestamp,
     },
@@ -120,6 +132,7 @@ pub struct ShipBuildView {
     pub rate_g_per_h: i64,
     /// When it completes at the current rate, exactly; null while nothing flows.
     #[schema(required = true)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub eta: Option<Timestamp>,
 }
 
@@ -143,11 +156,13 @@ pub struct PlanetView {
     pub planet_id: PlanetId,
     /// Its owner; null while unowned.
     #[schema(required = true)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub owner: Option<PlayerId>,
     /// When the view is computed for.
     pub as_of: Timestamp,
     /// When it next changes (the planet's next event); null when nothing is scheduled.
     #[schema(required = true)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub valid_until: Option<Timestamp>,
     /// Its storage.
     pub stocks: Stocks,
@@ -173,6 +188,7 @@ pub struct PlanetSummary {
     pub position: Position,
     /// Its owner; null while unowned.
     #[schema(required = true)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub owner: Option<PlayerId>,
     /// Its distance from the query's point, in distance units.
     pub distance: i64,
@@ -186,6 +202,7 @@ pub struct PlanetsNearView {
     pub as_of: Timestamp,
     /// When it next changes; null when nothing is scheduled.
     #[schema(required = true)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub valid_until: Option<Timestamp>,
     /// The planets.
     pub planets: Vec<PlanetSummary>,
@@ -207,6 +224,7 @@ pub struct PlayerView {
     pub as_of: Timestamp,
     /// When it next changes; null when nothing is scheduled.
     #[schema(required = true)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub valid_until: Option<Timestamp>,
 }
 
@@ -220,35 +238,39 @@ pub struct FleetShip {
     pub ship_type: ShipType,
 }
 
-/// One of the player's fleets.
+/// One of the player's fleets, tagged by its `state`. Each state lists every field it has and no
+/// other, so a misspelled field or another state's field is refused by serde and by the schema
+/// alike (repair round 1, F1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct FleetView {
-    /// The fleet.
-    pub fleet_id: FleetId,
-    /// Its ships.
-    pub ships: Vec<FleetShip>,
-    /// What it carries.
-    pub cargo: Cargo,
-    /// How many grams it can carry.
-    pub capacity_g: i64,
-    /// Its speed, in distance units per hour.
-    pub speed_du_per_h: i64,
-    /// Where it is, with the fields that state has.
-    #[serde(flatten)]
-    pub state: FleetState,
-}
-
-/// A fleet's state, tagged by `state`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum FleetState {
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FleetView {
     /// At a planet.
     Stationed {
+        /// The fleet.
+        fleet_id: FleetId,
+        /// Its ships.
+        ships: Vec<FleetShip>,
+        /// What it carries.
+        cargo: Cargo,
+        /// How many grams it can carry.
+        capacity_g: i64,
+        /// Its speed, in distance units per hour.
+        speed_du_per_h: i64,
         /// The planet.
         at_planet_id: PlanetId,
     },
     /// Flying a mission.
     InTransit {
+        /// The fleet.
+        fleet_id: FleetId,
+        /// Its ships.
+        ships: Vec<FleetShip>,
+        /// What it carries.
+        cargo: Cargo,
+        /// How many grams it can carry.
+        capacity_g: i64,
+        /// Its speed, in distance units per hour.
+        speed_du_per_h: i64,
         /// Where it left from.
         origin_planet_id: PlanetId,
         /// Where it goes.
@@ -262,6 +284,16 @@ pub enum FleetState {
     },
     /// Recalled, flying back.
     Returning {
+        /// The fleet.
+        fleet_id: FleetId,
+        /// Its ships.
+        ships: Vec<FleetShip>,
+        /// What it carries.
+        cargo: Cargo,
+        /// How many grams it can carry.
+        capacity_g: i64,
+        /// Its speed, in distance units per hour.
+        speed_du_per_h: i64,
         /// Where it returns to.
         origin_planet_id: PlanetId,
         /// When it gets back.
@@ -278,6 +310,7 @@ pub struct FleetsView {
     pub as_of: Timestamp,
     /// When it next changes; null when nothing is scheduled.
     #[schema(required = true)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub valid_until: Option<Timestamp>,
     /// The fleets.
     pub fleets: Vec<FleetView>,

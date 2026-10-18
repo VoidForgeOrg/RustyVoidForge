@@ -84,4 +84,4 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest | P2.3 | D-036 |
 | clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line | P2.7 | D-041 |
 | utoipa | =6.0.0 (macros; default features off) | api-types, the OpenAPI document | P3.1 | D-045 |
-| boon | =0.6.1 (default features off) | api-types, dev-dependency only: validates examples against the OpenAPI schemas (draft 2020-12) | P3.1 | D-045 |
+| jsonschema | =0.59.0 (default features off: no HTTP or TLS) | api-types, dev-dependency only: validates examples against the OpenAPI schemas (draft 2020-12), with exact integer bounds | P3.1 | D-045 |

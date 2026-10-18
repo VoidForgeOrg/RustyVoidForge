@@ -31,7 +31,7 @@ mod paths {
         post,
         path = "/commands",
         request_body = CommandRequest,
-        params(("Idempotency-Key" = String, Header,
+        params(("Idempotency-Key" = String, Header, pattern = "^[!-~]{1,128}$",
             description = "1 to 128 bytes of printable ASCII without spaces, unique per player. \
                 A repeat returns the first response for the key, whatever its age.")),
         responses(
@@ -70,7 +70,9 @@ mod paths {
         get,
         path = "/planets",
         params(
-            ("near" = String, Query, description = "The point, as x,y,z in distance units"),
+            ("near" = String, Query, pattern = "^-?[0-9]{1,19},-?[0-9]{1,19},-?[0-9]{1,19}$",
+                description = "The point, as x,y,z in distance units (each an i64; a value \
+                    beyond i64 is invalid_query)"),
             ("radius" = i64, Query, description = "The radius, in distance units"),
         ),
         responses(
@@ -149,8 +151,9 @@ impl Modify for Bearer {
     }
 }
 
-/// Closes each variant of the tagged unions whose serde form refuses unknown fields, so the
-/// schema refuses what serde refuses: utoipa leaves a tagged variant's object open.
+/// Closes each variant of the tagged unions whose serde form refuses unknown fields (the
+/// command, the event, and the per-state building and fleet views), so the schema refuses what
+/// serde refuses: utoipa leaves a tagged variant's object open.
 struct Closed;
 
 impl Modify for Closed {
@@ -160,7 +163,7 @@ impl Modify for Closed {
         let Some(components) = openapi.components.as_mut() else {
             return;
         };
-        for name in ["CommandRequest", "Event"] {
+        for name in ["CommandRequest", "Event", "BuildingView", "FleetView"] {
             if let Some(RefOr::T(Schema::OneOf(one_of))) = components.schemas.get_mut(name) {
                 for item in &mut one_of.items {
                     if let RefOr::T(Schema::Object(object)) = item {
@@ -193,21 +196,61 @@ impl Modify for Closed {
 )]
 struct Doc;
 
-/// The OpenAPI document: every path, request, response and error, served at `/openapi.json`.
+/// The OpenAPI document as JSON: every path, request, response and error, served at
+/// `/openapi.json`. It's utoipa's document with every integer schema carrying its Rust type's
+/// exact bounds ([`bound_integers`]), which utoipa can't express, so the schema refuses what
+/// serde refuses.
+///
+/// # Panics
+/// If an integer schema is of a kind [`bound_integers`] doesn't know: a new integer type needs
+/// its bounds added there, and the tests call this.
 #[must_use]
-pub fn openapi() -> utoipa::openapi::OpenApi {
-    Doc::openapi()
+pub fn openapi() -> serde_json::Value {
+    let mut doc = serde_json::to_value(Doc::openapi()).expect("the OpenAPI document serializes");
+    bound_integers(&mut doc);
+    doc
+}
+
+/// Sets every integer schema's `minimum` and `maximum` to its Rust type's exact range, as JSON
+/// integers. utoipa marks the type only through `format` and a `minimum` of 0 for unsigned
+/// types: `int64` is `i64`, `int64` from 0 is `u64` (the entity IDs, D-045's full domain), and
+/// `int32` from 0 is `u32`.
+fn bound_integers(value: &mut serde_json::Value) {
+    use serde_json::{Value, json};
+    match value {
+        Value::Object(object) => {
+            let integer = match object.get("type") {
+                Some(Value::String(t)) => t == "integer",
+                Some(Value::Array(ts)) => ts.iter().any(|t| t == "integer"),
+                _ => false,
+            };
+            if integer {
+                let format = object.get("format").and_then(Value::as_str);
+                let unsigned = object.get("minimum").and_then(Value::as_u64) == Some(0);
+                let (min, max) = match (format, unsigned) {
+                    (Some("int64"), false) => (json!(i64::MIN), json!(i64::MAX)),
+                    (Some("int64"), true) => (json!(0), json!(u64::MAX)),
+                    (Some("int32"), true) => (json!(0), json!(u32::MAX)),
+                    other => panic!("an integer schema of an unknown kind: {other:?}"),
+                };
+                object.insert("minimum".to_owned(), min);
+                object.insert("maximum".to_owned(), max);
+            }
+            object.values_mut().for_each(bound_integers);
+        }
+        Value::Array(items) => items.iter_mut().for_each(bound_integers),
+        _ => {}
+    }
 }
 
 /// [`openapi`] as the pretty JSON checked in beside this crate, with a final newline.
 ///
 /// # Panics
-/// Never in practice: the document is plain data, which serde_json always serializes.
+/// As [`openapi`].
 #[must_use]
 pub fn openapi_json() -> String {
-    let mut text = openapi()
-        .to_pretty_json()
-        .expect("the OpenAPI document serializes");
+    let mut text =
+        serde_json::to_string_pretty(&openapi()).expect("the OpenAPI document serializes");
     text.push('\n');
     text
 }

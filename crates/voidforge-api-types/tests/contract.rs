@@ -1,13 +1,13 @@
 //! The public contract (Technical Plan P3.1; decision log D-045). Every command, response, view,
 //! event and error has an example that validates against its schema in the generated OpenAPI
-//! document (draft 2020-12, formats asserted), deserializes, and serializes back to the same
+//! document (draft 2020-12, formats asserted, jsonschema), deserializes, and serializes back to the same
 //! JSON. Every tag the document declares (command types, events, states, error codes) has one.
 //! Invalid payloads are refused by the schema and by serde alike.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-use boon::{Compiler, Draft, SchemaIndex, Schemas};
+use jsonschema::{Draft, Validator};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -19,49 +19,58 @@ use voidforge_api_types::view::{FleetsView, Leaderboard, PlanetView, PlanetsNear
 use voidforge_api_types::wire::{PlanetId, ShipId};
 use voidforge_api_types::{openapi, openapi_json};
 
-const BASE: &str = "http://voidforge.invalid/openapi.json";
 const ALICE: &str = "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f";
 const BOB: &str = "01928c5e-7a3b-7c2d-9e4f-000000000b0b";
 
-/// Every component schema of the generated document, compiled.
+/// Every component schema of the generated document, compiled as draft 2020-12 with format
+/// assertions. jsonschema compares integers exactly (not through f64), which the bounds at 2^63
+/// and 2^64 need.
 struct Contract {
     doc: Value,
-    schemas: Schemas,
-    index: BTreeMap<String, SchemaIndex>,
+    validators: BTreeMap<String, Validator>,
+}
+
+/// A validator for `schema` against the document's components.
+fn compile(doc: &Value, schema: Value) -> Validator {
+    let root = json!({"allOf": [schema], "components": doc["components"]});
+    jsonschema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .build(&root)
+        .unwrap_or_else(|e| panic!("the schema compiles: {e}"))
 }
 
 impl Contract {
     fn new() -> Self {
         let doc: Value = serde_json::from_str(&openapi_json()).expect("the document is JSON");
-        let mut compiler = Compiler::new();
-        compiler.set_default_draft(Draft::V2020_12);
-        compiler.enable_format_assertions();
-        compiler.add_resource(BASE, doc.clone()).unwrap();
-        let mut schemas = Schemas::new();
-        let index = doc["components"]["schemas"]
+        let validators = doc["components"]["schemas"]
             .as_object()
             .expect("component schemas")
             .keys()
             .map(|name| {
-                let loc = format!("{BASE}#/components/schemas/{name}");
-                let idx = compiler
-                    .compile(&loc, &mut schemas)
-                    .unwrap_or_else(|e| panic!("{name} compiles: {e}"));
-                (name.clone(), idx)
+                let schema = json!({"$ref": format!("#/components/schemas/{name}")});
+                (name.clone(), compile(&doc, schema))
             })
             .collect();
-        Self {
-            doc,
-            schemas,
-            index,
-        }
+        Self { doc, validators }
     }
 
     fn check(&self, schema: &str, value: &Value) -> Result<(), String> {
-        let idx = self.index[schema];
-        self.schemas
-            .validate(value, idx)
-            .map_err(|e| format!("{e:#}"))
+        self.validators[schema]
+            .validate(value)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The schema of a path's parameter, compiled the same way.
+    fn parameter(&self, path: &str, method: &str, name: &str) -> Validator {
+        let schema = self.doc["paths"][path][method]["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("{method} {path} has {name}"))["schema"]
+            .clone();
+        compile(&self.doc, schema)
     }
 
     /// The example validates, deserializes to `T`, and serializes back to itself.
@@ -266,10 +275,7 @@ fn every_view_example_validates_and_round_trips() {
     );
     // Every state and status the document declares has an example.
     let buildings = planet["buildings"].as_array().unwrap();
-    assert_eq!(
-        tags_of(buildings, "state"),
-        c.tags("BuildingState", "state")
-    );
+    assert_eq!(tags_of(buildings, "state"), c.tags("BuildingView", "state"));
     let statuses: BTreeSet<String> = buildings
         .iter()
         .filter_map(|b| b["status"].as_str().map(str::to_owned))
@@ -278,7 +284,7 @@ fn every_view_example_validates_and_round_trips() {
     let builds = planet["ship_builds"].as_array().unwrap();
     assert_eq!(tags_of(builds, "state"), c.enum_values("ShipBuildState"));
     let fleets = fleets["fleets"].as_array().unwrap();
-    assert_eq!(tags_of(fleets, "state"), c.tags("FleetState", "state"));
+    assert_eq!(tags_of(fleets, "state"), c.tags("FleetView", "state"));
 }
 
 #[test]
@@ -458,7 +464,7 @@ fn the_idempotency_key_is_one_to_128_printable_ascii_bytes() {
 /// The six endpoints of the Architectural Design, each with its method, and the security scheme.
 #[test]
 fn the_document_has_every_endpoint() {
-    let doc = serde_json::to_value(openapi()).unwrap();
+    let doc = openapi();
     let paths: BTreeSet<(String, String)> = doc["paths"]
         .as_object()
         .unwrap()
@@ -495,4 +501,227 @@ fn the_document_has_every_endpoint() {
         ),
         (Some("Idempotency-Key"), Some("header"), Some(true))
     );
+}
+
+/// The schema's verdict, serde's verdict, and the expected one, for one value of `T`.
+fn agree<T: DeserializeOwned>(c: &Contract, schema: &str, value: &Value, valid: bool) {
+    let by_schema = c.check(schema, value).is_ok();
+    let by_serde = serde_json::from_value::<T>(value.clone()).is_ok();
+    assert_eq!(
+        (by_schema, by_serde),
+        (valid, valid),
+        "{schema} on {value}: (schema, serde) should both be {valid}"
+    );
+}
+
+/// `value` with the JSON pointer `at` set to `to`.
+fn with(value: &Value, at: &str, to: Value) -> Value {
+    let mut v = value.clone();
+    *v.pointer_mut(at)
+        .unwrap_or_else(|| panic!("{at} in {value}")) = to;
+    v
+}
+
+/// `value` with an object field added, or removed when `to` is None.
+fn field(value: &Value, name: &str, to: Option<Value>) -> Value {
+    let mut v = value.clone();
+    let object = v.as_object_mut().unwrap();
+    match to {
+        Some(x) => object.insert(name.to_owned(), x),
+        None => object.remove(name),
+    };
+    v
+}
+
+/// Repair round 1, F1: a view composed from a flattened state (a building, a fleet) refuses a
+/// misspelled field and another state's field, in the schema (`unevaluatedProperties: false`)
+/// and in serde (the state unions deny unknown fields), and every legitimate state still
+/// validates.
+#[test]
+fn composed_views_refuse_typos_and_other_states_fields() {
+    use voidforge_api_types::view::{BuildingView, FleetView};
+    let c = Contract::new();
+    let planet = planet_view();
+    let buildings = planet["buildings"].as_array().unwrap();
+    for b in buildings {
+        agree::<BuildingView>(&c, "BuildingView", b, true);
+    }
+    let operational = &buildings[0];
+    let constructing = &buildings[1];
+    let demolishing = &buildings[2];
+    for bad in [
+        field(operational, "stauts", Some(json!("running"))),
+        field(operational, "delivered_g", Some(json!(1))),
+        field(demolishing, "eta", Some(t("13:00:00"))),
+        field(constructing, "demolition_ends_at", Some(t("13:00:00"))),
+        field(constructing, "cost", Some(json!(1))),
+    ] {
+        agree::<BuildingView>(&c, "BuildingView", &bad, false);
+    }
+    let fleets = fleets_view();
+    let fleets = fleets["fleets"].as_array().unwrap();
+    for f in fleets {
+        agree::<FleetView>(&c, "FleetView", f, true);
+    }
+    let (stationed, in_transit, returning) = (&fleets[0], &fleets[1], &fleets[2]);
+    for bad in [
+        field(stationed, "capcity_g", Some(json!(0))),
+        field(stationed, "arrives_at", Some(t("13:00:00"))),
+        field(returning, "target_planet_id", Some(json!(1077))),
+        field(in_transit, "at_planet_id", Some(json!(1042))),
+    ] {
+        agree::<FleetView>(&c, "FleetView", &bad, false);
+    }
+    // In a whole view too.
+    let mut planet = planet_view();
+    planet["buildings"][0]["delivered_g"] = json!(1);
+    agree::<PlanetView>(&c, "PlanetView", &planet, false);
+}
+
+/// Repair round 1, L1: every integer kind at its valid edge and one past it, in the schema and in
+/// serde alike: i64, u32 and u64 (D-045 keeps the IDs' full u64 domain), also through a path and
+/// a query parameter. JSON integers past i64's minimum or u64's maximum parse as floats (no
+/// arbitrary precision), so below i64::MIN the first value past is the nearest float,
+/// -2^63 - 2048; -2^63 - 1 would round to -2^63 itself.
+#[test]
+fn integers_are_bounded_by_their_rust_type() {
+    let c = Contract::new();
+    let i64_past_min: Value = serde_json::from_str("-9223372036854777856").unwrap();
+    let u64_past_max: Value = serde_json::from_str("18446744073709551616").unwrap();
+    let planet = planet_view();
+    // i64: a stock's amount.
+    for (value, valid) in [
+        (json!(i64::MAX), true),
+        (json!(1_u64 << 63), false),
+        (json!(i64::MIN), true),
+        (i64_past_min.clone(), false),
+    ] {
+        let v = with(&planet, "/stocks/iron_ore/amount_g", value);
+        agree::<PlanetView>(&c, "PlanetView", &v, valid);
+    }
+    // u32: slots.
+    for (value, valid) in [
+        (json!(u32::MAX), true),
+        (json!(u64::from(u32::MAX) + 1), false),
+        (json!(0), true),
+        (json!(-1), false),
+    ] {
+        agree::<PlanetView>(&c, "PlanetView", &with(&planet, "/slots", value), valid);
+    }
+    // u64: an ID, referenced.
+    for (value, valid) in [
+        (json!(u64::MAX), true),
+        (u64_past_max.clone(), false),
+        (json!(0), true),
+        (json!(-1), false),
+    ] {
+        agree::<PlanetView>(&c, "PlanetView", &with(&planet, "/planet_id", value), valid);
+    }
+    // Through the parameters: the planet's path ID (u64) and the radius (i64).
+    let id = c.parameter("/planets/{id}", "get", "id");
+    assert!(id.is_valid(&json!(u64::MAX)));
+    assert!(!id.is_valid(&u64_past_max));
+    assert!(!id.is_valid(&json!(-1)));
+    let radius = c.parameter("/planets", "get", "radius");
+    assert!(radius.is_valid(&json!(i64::MAX)));
+    assert!(!radius.is_valid(&json!(1_u64 << 63)));
+    assert!(radius.is_valid(&json!(i64::MIN)));
+    assert!(!radius.is_valid(&i64_past_min));
+}
+
+/// The recurring class behind F1 and L1: anywhere the schema and serde could disagree, they give
+/// the same verdict. The one deliberate exception is a duplicate ship ID, which serde reads into
+/// a list so `check_unique_ships` can answer 400 `duplicate_ship_ids` (covered above).
+#[test]
+fn the_schema_and_serde_agree() {
+    let c = Contract::new();
+    let player = json!({"player_id": ALICE, "homeworld_id": 1042, "planet_ids": [1042],
+        "score": 1, "as_of": t("12:00:00"), "valid_until": null});
+    agree::<PlayerView>(&c, "PlayerView", &player, true);
+    for (id, valid) in [
+        (ALICE.to_owned(), true),
+        (ALICE.to_uppercase(), false),
+        (ALICE.replace('-', ""), false),
+        (format!("{ALICE}0"), false),
+        (ALICE.replacen('5', "g", 1), false),
+    ] {
+        agree::<PlayerView>(
+            &c,
+            "PlayerView",
+            &with(&player, "/player_id", json!(id)),
+            valid,
+        );
+    }
+    for (time, valid) in [
+        ("2026-10-01T12:00:00.000Z", true),
+        ("2028-02-29T23:59:59.999Z", true),
+        ("2025-02-29T12:00:00.000Z", false),
+        ("2026-04-31T12:00:00.000Z", false),
+        ("2026-13-01T12:00:00.000Z", false),
+        ("2026-10-01T24:00:00.000Z", false),
+        ("2026-10-01T12:60:00.000Z", false),
+        ("2026-12-31T23:59:60.000Z", false),
+        ("2026-10-01T12:00:00Z", false),
+        ("2026-10-01T12:00:00.000+00:00", false),
+        ("2026-10-01 12:00:00.000Z", false),
+    ] {
+        agree::<PlayerView>(
+            &c,
+            "PlayerView",
+            &with(&player, "/as_of", json!(time)),
+            valid,
+        );
+    }
+    // A nullable field that's always sent: null is fine, missing isn't, in both.
+    agree::<PlayerView>(
+        &c,
+        "PlayerView",
+        &field(&player, "valid_until", None),
+        false,
+    );
+    let planet = planet_view();
+    agree::<PlanetView>(&c, "PlanetView", &field(&planet, "owner", None), false);
+    let builds = with(&planet, "/ship_builds/1/eta", json!(null));
+    agree::<PlanetView>(&c, "PlanetView", &builds, true);
+    let mut no_eta = planet.clone();
+    no_eta["buildings"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("eta");
+    agree::<PlanetView>(&c, "PlanetView", &no_eta, false);
+    // An optional field: absent and null are both fine in both.
+    let mut statusless = planet.clone();
+    statusless["buildings"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("status");
+    agree::<PlanetView>(&c, "PlanetView", &statusless, true);
+    // Header and query forms the schema states and the parsers apply.
+    let key = c.parameter("/commands", "post", "Idempotency-Key");
+    for (k, valid) in [
+        ("k".to_owned(), true),
+        ("a1-B2_c3.~!".to_owned(), true),
+        ("k".repeat(128), true),
+        ("k".repeat(129), false),
+        (String::new(), false),
+        ("has space".to_owned(), false),
+        ("naïve".to_owned(), false),
+    ] {
+        assert_eq!(key.is_valid(&json!(k)), valid, "schema on {k:?}");
+        assert_eq!(
+            IdempotencyKey::parse(Some(&k)).is_ok(),
+            valid,
+            "parse on {k:?}"
+        );
+    }
+    let near = c.parameter("/planets", "get", "near");
+    for (n, valid) in [
+        ("120000,-45500,3000", true),
+        ("0,0,0", true),
+        ("1,2", false),
+        ("1, 2, 3", false),
+        ("x,y,z", false),
+    ] {
+        assert_eq!(near.is_valid(&json!(n)), valid, "near {n:?}");
+    }
 }

@@ -13,7 +13,7 @@ serde_json.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
-boon.workspace = true
+jsonschema.workspace = true
 
 [lints]
 workspace = true

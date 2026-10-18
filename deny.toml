@@ -20,7 +20,7 @@ yanked = "deny"
 [licenses]
 version = 2
 # Each license is added with the first dependency that needs it (decision log D-017).
-# MIT-0 (borrow-or-share, through boon; P3.1, decision log D-045) is MIT without the
+# MIT-0 (borrow-or-share, through jsonschema; P3.1, decision log D-045) is MIT without the
 # attribution clause: OSI-approved and more permissive.
 allow = ["Apache-2.0", "MIT", "MIT-0", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.93
@@ -246,18 +246,42 @@ allow = [
     # and the bots through voidforge-api-types.
     { crate = "utoipa" },
     { crate = "utoipa-gen" },
-    # boon, a dev-dependency of voidforge-api-types that validates examples against the OpenAPI
-    # schemas (P3.1, decision log D-045), with what it pulls in. Tests only, never shipped.
+    # jsonschema, a dev-dependency of voidforge-api-types that validates examples against the OpenAPI
+    # schemas (P3.1, decision log D-045; boon until repair round 1, which needed exact integer
+    # bounds), with what it pulls in. Tests only, never shipped.
     { crate = "ahash" },
     { crate = "aho-corasick" },
-    { crate = "appendlist" },
-    { crate = "boon" },
+    { crate = "bit-set" },
+    { crate = "bit-vec" },
     { crate = "borrow-or-share" },
+    { crate = "bytecount" },
+    { crate = "data-encoding" },
+    { crate = "email_address" },
+    { crate = "fancy-regex" },
     { crate = "fluent-uri" },
+    { crate = "fraction" },
+    { crate = "jsonschema" },
+    { crate = "jsonschema-regex" },
+    { crate = "jsonschema-value" },
+    { crate = "micromap" },
+    { crate = "num" },
+    { crate = "num-bigint" },
+    { crate = "num-cmp" },
+    { crate = "num-complex" },
+    { crate = "num-integer" },
+    { crate = "num-iter" },
+    { crate = "num-rational" },
+    { crate = "outref" },
     { crate = "ref-cast" },
     { crate = "ref-cast-impl" },
+    { crate = "referencing" },
     { crate = "regex" },
     { crate = "regex-automata" },
+    { crate = "strum" },
+    { crate = "strum_macros" },
+    { crate = "unicode-general-category" },
+    { crate = "uuid-simd" },
+    { crate = "vsimd" },
 ]
 # Duplicates allowed by name and version, each with its reason (decision log D-017).
 skip = [
