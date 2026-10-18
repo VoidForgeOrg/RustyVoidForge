@@ -237,9 +237,9 @@ Together, P1.6 and P1.7 need a named test for each solver case in the architectu
 P1.12 starts from these world generation defaults, stored as rules data so they can change later:
 
 - 20 planets per expected player: 2,000 planets for 100 players.
-- Integer coordinates spread uniformly through a 1,000-unit cube, at least 10 units apart, so neighbors sit about 45 units, or 4 to 5 hours by Colony Ship, from each other.
+- Integer coordinates in a fixed 1,000-unit cube, every pair at least 10 units apart, built in three steps: the homeworld candidates first, spread uniformly at least 150 units apart; then, around each candidate, enough planets within 100 units to give it at least 5; then the rest spread uniformly. At 100 players, neighbors sit about 45 units, or 4 to 5 hours by Colony Ship, from each other; neighborhoods cluster a little around homeworlds, most visibly in small universes.
 - Every planet gets the Rules v0 slots and storage caps.
-- One homeworld candidate per expected player, each at least 150 units from the others and with at least 5 planets within 100 units, ordered by a seeded shuffle; Join game takes the next free one.
+- One homeworld candidate per expected player, each at least 150 units from the others and with at least 5 planets within 100 units by construction, ordered by a seeded shuffle; Join game takes the next free one. Any player count up to the cube's limit generates (about 240, where random placement runs out of room for candidates).
 - The universe seed is a 64-bit number recorded in the first snapshot.
 
 Until P1.12 lands, P1.9 tests Join game against homeworld candidates built with testkit.

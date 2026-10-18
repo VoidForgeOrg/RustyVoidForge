@@ -492,20 +492,21 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-031: World generation
 
-- Date and package: 2026-10-18, P1.12. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 18, `ruling-lead-overnight.md`.) **The placement option is PROVISIONAL, pending Tom (game intent).**
+- Date and package: 2026-10-18, P1.12. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 18, `ruling-lead-overnight.md`.) **Placement: Tom chose option A on 2026-10-18** (slice 25), replacing the provisional option B.
 - Decision:
   - **Entry point**: `voidforge_worldgen::generate(seed, players, &Rules) -> Result<World, WorldgenError>`.
     - It produces the universe's first `World`: at time 0 (the host sets the epoch in P2.9), under the rules' version, with the seed recorded.
     - It holds `players × planets_per_expected_player` unowned planets with the rules' slots and caps and empty stocks, plus `players` homeworld candidates.
     - Every planet is solved (D-025), and the links hold.
-  - **Placement, option B (PROVISIONAL, pending Tom)**:
-    - Planets are uniform in the cube on whole world units (D-021), each at least `min_planet_spacing_du` from every other.
-    - Candidates are chosen among the planets with at least `homeworld_min_neighbors` others within `homeworld_neighbor_radius_du` (inclusive). The qualifying planets are taken in a seeded shuffle, each kept if it is at least `homeworld_min_spacing_du` from those already kept, until `players` are kept. That order is the candidate order.
-    - This is the Technical Plan's literal "spread uniformly". It works at the 100-player default (cube packing about 0.12).
-    - Under the default rules small worlds fail: `Infeasible("too few planets qualify as homeworld candidates")`, because a fixed 1,000-unit cube at 20 planets per player has density proportional to players, and at 1 player essentially no planet has 5 neighbors within 100 units. Small worlds are tested under denser rules (the cube scaled to keep the 100-player density).
-    - **Alternatives awaiting Tom**:
-      - **A**: build each candidate's neighborhood (sites pairwise apart, `homeworld_min_neighbors` planets uniform within the radius of each), then fill the rest uniformly. Feasible at every size, but clustered.
-      - **C**: scale the cube with the player count (side ∝ players^⅓), uniform and always feasible, but "a 1,000-unit cube" becomes the 100-player size.
+  - **Placement, option A** (Tom's decision, 2026-10-18; the brief is `missions/voidforge-mvp/tom-decision-worldgen.md`):
+    1. `players` homeworld candidates, uniform in the cube on whole world units (D-021), pairwise at least `homeworld_min_spacing_du`.
+    2. Around each candidate in turn, planets uniform within `homeworld_neighbor_radius_du` (inclusive, the bounding box clipped to the cube, points outside the ball rejected) until it has `homeworld_min_neighbors`, counting planets already there.
+    3. The rest uniform in the cube, up to `players × planets_per_expected_player`. Every planet is at least `min_planet_spacing_du` from every other.
+    4. The candidate order is a seeded Fisher–Yates shuffle.
+    - Planet IDs are allocated in coordinate order, so an ID doesn't reveal which planets are candidates.
+    - **The player limit** in the default cube is where random placement runs out of room for candidates: 241 to 254 players over seeds 0 to 11 (the packing bound allows 901). Past it, generation stops with `Exhausted { what: "homeworld candidate", .. }`.
+    - **Why A:** Tom: "I don't want to grow the cube with players, as worldgen will definitely be rewritten at some point. You may increase the size of the cube or fix the generation." So option C (scaling the cube with players) is out. A bigger fixed cube only makes small worlds sparser. A guarantees every homeworld its neighborhood by construction, at any player count. It's deliberately minimal, since worldgen is temporary.
+    - **Superseded, option B** (P1.12, provisional): planets uniform in the cube, candidates chosen among the planets that happened to have enough neighbors. Under the default rules it refused small worlds (`Infeasible("too few planets qualify as homeworld candidates")`, below roughly 31 to 40 players), so it is removed, along with the denser test rules that worked around it.
   - **Randomness**: `ChaCha8Rng::seed_from_u64(seed)` is the only source, from `rand_chacha =0.9.0` (default features off).
     - That version is already in the tree through opentelemetry_sdk's rand 0.9, so the graph gains no crate or duplicate. The guardrail fixture's 0.10.0 is a lint control only.
     - A unit test pins the first outputs for seed 42, so an upgrade that changed the stream fails before it changes worlds.
@@ -513,9 +514,9 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Integer-exact sampling**:
     - `below(n)` by rejection of the top partial range: unbiased, with expected draws under 2.
     - Spacing is checked on exact squared distances in i128 against a `BTreeMap` grid (cell = spacing, 27 cells per check).
-    - Neighbor counts use a grid with cell = radius.
+    - A candidate's neighbors are counted with the same inclusive `within` the neighborhood placement uses, by a scan of the planets placed so far.
     - The shuffle is Fisher–Yates with `below`.
-    - Termination: each planet tries at most `MAX_ATTEMPTS` (10,000) draws, then `Exhausted { placed }`, never a loop.
+    - Termination: each candidate and each planet tries at most `MAX_ATTEMPTS` (10,000) draws, then `Exhausted { what, placed }`, never a loop.
   - **Feasibility** (the P1.2 QA LOW carry; repaired after review-r2's M1 and M2 on 1325f22):
     - **`Rules::validate`** (independent of player count):
       - every worldgen distance is at most `MAX_WORLDGEN_DU` (10^12 distance units, a billion world units), the supported range that keeps every feasibility product exact in i128;
@@ -527,7 +528,6 @@ Each entry records its date, the package that made it, the decision, the reasons
     - **`generate`** (count-dependent):
       - `NoPlayers`;
       - the packing bounds `n × s³ ≤ 2 × (L + s)³` for the planets and for the candidates (`Infeasible`). Balls of radius s/2 around points pairwise s apart are disjoint inside the cube widened by s/2, so n × (π/6) × s³ ≤ (L + s)³, and with π > 3 the stated bound is still necessary and integer-only. The first version used `n × s³ ≤ (L + s)³`, which is not necessary: separation does not imply disjoint s-cubes. review-r2's lattice of 4,000 points in a 160-unit cube at spacing 11 refutes it;
-      - too few qualifying candidates (`Infeasible`);
       - anything subtler is caught by `Exhausted`, an honest result even for feasible but dense parameters.
     - Every left-hand product is checked, and an overflow counts as larger than the exact right side, so decisions are the same in debug and release.
   - **Determinism**:
@@ -561,7 +561,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **P2.5** (snapshots and restore): restore must not rely on `World::check_links` for gameplay fields. It is a structural check only (D-022: "not a gameplay validator"; P1.3 LOW).
   - **P2.9** (the universe bootstrap):
     - It caps the total world size an operator can ask for (players × planets per player; P1.12 QA LOW).
-    - Under D-031 option B (provisional), the default rules refuse worlds below roughly 31 to 40 expected players, because too few planets qualify as homeworld candidates. The bootstrap, and P3.6's end-to-end setup, must use at least about 40 players or denser rules, until Tom rules on D-031.
+    - **Superseded on 2026-10-18** by D-031 option A (Tom's decision): any player count up to about 240 generates under the default rules, so the bootstrap and P3.6 need no minimum player count or denser rules. (It read: under option B, worlds below roughly 31 to 40 expected players were refused, so P2.9 and P3.6 had to use at least about 40 players or denser rules.)
   - **P3.6** (the end-to-end scenario): dex configuration parity between local and CI becomes a mechanical check (a Phase 0 carry).
 
 ### D-034: Schema and migrations, sqlx, and the Database tests stage
