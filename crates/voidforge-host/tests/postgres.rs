@@ -133,10 +133,12 @@ async fn extreme_values_round_trip_through_postgres_exactly(pool: PgPool) {
 async fn appends_are_all_or_none(pool: PgPool) {
     let mut log = PgLog::new(pool);
     log.append(&[record(1, PlayerId(7))]).await.unwrap();
-    // A batch whose second record repeats seq 1: the whole batch is refused.
-    let err = log
-        .append(&[record(2, PlayerId(7)), record(1, PlayerId(8))])
-        .await;
+    // A batch whose first record is valid and whose second repeats seq 1: the first must not
+    // stay behind. (The first has its own key, so only the second can fail.)
+    let mut valid = record(2, PlayerId(7));
+    valid.idempotency_key = Some("k2".to_owned());
+    let batch = [valid, record(1, PlayerId(8))];
+    let err = log.append(&batch).await;
     assert!(matches!(err, Err(LogError::Database(_))), "{err:?}");
     assert_eq!(
         log.records().await.unwrap().len(),
@@ -146,12 +148,7 @@ async fn appends_are_all_or_none(pool: PgPool) {
     // The in-memory store refuses the same way.
     let mut memory = MemoryLog::new();
     memory.append(&[record(1, PlayerId(7))]).await.unwrap();
-    assert!(
-        memory
-            .append(&[record(2, PlayerId(7)), record(1, PlayerId(8))])
-            .await
-            .is_err()
-    );
+    assert!(memory.append(&batch).await.is_err());
     assert_eq!(memory.snapshot().len(), 1);
 }
 

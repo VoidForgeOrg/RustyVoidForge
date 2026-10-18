@@ -141,6 +141,51 @@ async fn a_command_is_applied_logged_durably_then_acknowledged() {
 }
 
 #[tokio::test]
+async fn a_waiting_command_goes_before_a_due_timer() {
+    // When a command is waiting and an entry is due at the same time, the command takes the
+    // turn (the select is biased to the inbox), and its apply runs the due events. Repeated, so
+    // an unbiased select (a coin flip each time) cannot pass by luck.
+    for _ in 0..12 {
+        let (world, home) = solved();
+        let gated = GatedLog::closed(MemoryLog::new());
+        let clock = clock_at(0);
+        let (handle, task) = voidforge_host::spawn(
+            world,
+            v0_rules(),
+            {
+                let gated = gated.clone();
+                move || gated
+            },
+            clock.clone(),
+            config(),
+        )
+        .unwrap();
+        let first = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.submit(join(ALICE)).await }
+        });
+        gated.entered(1).await;
+        clock.set(EPOCH + 2 * H);
+        let second = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.submit(build_drill(home)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        gated.release(2);
+        timeout(first).await.unwrap().unwrap();
+        assert_eq!(timeout(second).await.unwrap().unwrap().seq, 2);
+        let kinds: Vec<RecordKind> = gated.inner.snapshot().iter().map(|r| r.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![RecordKind::Command, RecordKind::Command],
+            "no advance record first"
+        );
+        drop(handle);
+        task.join().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn a_rejected_command_is_logged_with_its_reason() {
     let (world, _) = alice();
     let log = MemoryLog::new();
