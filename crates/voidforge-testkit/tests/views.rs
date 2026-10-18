@@ -6,6 +6,7 @@
 
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngSeed};
+use voidforge_core::command::{Action, Command};
 use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::{GRAMS_PER_TON, Rules};
 use voidforge_core::solver::FlowLabel;
@@ -516,11 +517,11 @@ fn score_counts_ships_in_transit_and_cargo_aboard_moving_fleets() {
 }
 
 #[test]
-fn score_provisional_a_building_being_demolished_counts_until_demolition_ends() {
-    // PROVISIONAL (D-030, parked for Tom): "cancelled or demolished buildings do not count" is
-    // read as "once demolition has ended". Flip here if Tom rules it stops counting at the start.
-    // The same homeworld with and without a Shipyard being demolished (ending at 2 h); its
-    // Drill and Refinery produce the same in both.
+fn score_a_building_being_demolished_counts_nothing() {
+    // D-039 (Tom, 2026-10-18): a building counts from the moment it is operational until its
+    // demolition begins. The same homeworld with and without a Shipyard being demolished (ending
+    // at 2 h); its Drill and Refinery produce the same in both, so the scores are equal
+    // throughout the demolition and after it.
     let world = |demolishing: bool| {
         let mut b = WorldBuilder::new();
         let home = b.player(ALICE);
@@ -533,15 +534,48 @@ fn score_provisional_a_building_being_demolished_counts_until_demolition_ends() 
         w
     };
     let (mut with, mut without) = (world(true), world(false));
-    assert_eq!(score(&with, ALICE, 0), score(&without, ALICE, 0) + 500);
+    assert_eq!(score(&with, ALICE, 0), score(&without, ALICE, 0));
     assert_eq!(
         score(&with, ALICE, 2 * H - 1),
-        score(&without, ALICE, 2 * H - 1) + 500
+        score(&without, ALICE, 2 * H - 1)
     );
     for w in [&mut with, &mut without] {
         w.advance_to(2 * H, &v0_rules()).unwrap();
     }
     assert_eq!(score(&with, ALICE, 2 * H), score(&without, ALICE, 2 * H));
+}
+
+#[test]
+fn score_drops_at_the_instant_demolition_begins() {
+    // D-039: an operational Shipyard (500 points) counts at every t before the Demolish command,
+    // and its points leave the score at the very t the command is applied, through `apply`.
+    let mut b = WorldBuilder::new();
+    let home = b.player(ALICE);
+    b.stocks(home, Quantity::new(0, 0, 0), Quantity::new(0, 0, 0));
+    let yard = b.building(home, BuildingKind::Shipyard, BuildingState::Operational);
+    let mut w = b.build();
+    let rules = v0_rules();
+    w.solve_planet(home, &rules).unwrap();
+    let before = w.clone();
+    let t = H;
+    let applied = w
+        .apply(
+            &Command {
+                player: ALICE,
+                action: Action::DemolishBuilding { building: yard },
+            },
+            t,
+            &rules,
+        )
+        .unwrap();
+    assert!(applied.outcome.is_ok(), "Demolish was rejected");
+    assert!(matches!(
+        w.buildings[&yard].state,
+        BuildingState::Demolishing { .. }
+    ));
+    // One millisecond before, it still counts; at t it counts nothing, and nothing else moved.
+    assert_eq!(score(&w, ALICE, t), score(&before, ALICE, t) - 500);
+    assert_eq!(score(&before, ALICE, t - 1), score(&before, ALICE, t));
 }
 
 // --- Fleets ---

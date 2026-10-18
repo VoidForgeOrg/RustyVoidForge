@@ -333,7 +333,7 @@ Reads never go through the command path. The host publishes an immutable read mo
 - Every continuous value comes with `rate_g_per_h`, `as_of` and `valid_until` (the entity's next event), and stocks with `cap_g`. Clients animate counters locally and know when to refetch.
 - Completion estimates (`eta`) are exact under current rates and carry the same `valid_until`.
 - Game times leave the API as ISO 8601 UTC timestamps (universe epoch + game time); amounts leave as integer grams.
-- Score is computed per request from `ScoringSpecs`: planets, finished buildings, each finished ship once (roster or fleet), builds in progress at points × delivered ÷ cost (rounded down), and resources in storage or cargo.
+- Score is computed per request from `ScoringSpecs`: planets, finished buildings (operational ones; a building stops counting when its demolition begins), each finished ship once (roster or fleet), builds in progress at points × delivered ÷ cost (rounded down), and resources in storage or cargo.
 - The leaderboard is rebuilt every 60 seconds from the read model and served with its `as_of`. It is the only fixed-interval computation besides snapshots.
 - Post-MVP: Domain events stream to each player over SSE or WebSocket, with the log `seq` as the resume token. Until then clients poll the read API, using valid\_until to know when a view next changes; a domain-event feed is post-MVP too.
 - Planet data is public to all players; fleets are visible only to their owner.

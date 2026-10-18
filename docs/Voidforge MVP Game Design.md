@@ -152,7 +152,7 @@ Each player's score counts everything they own, including partial credit for shi
 | Counts | Including |
 | --- | --- |
 | Planets | Every colonized planet |
-| Buildings | By number and type; a building under construction counts in proportion to the ingots delivered so far; cancelled or demolished buildings do not count |
+| Buildings | By number and type; a building counts from the moment it is operational until demolition begins; a building under construction counts in proportion to the ingots delivered so far; cancelled buildings and buildings being demolished or demolished do not count |
 | Ships | On rosters and in fleets, stationed or moving, each counted once; a ship under construction counts in proportion to the ingots delivered so far |
 | Resources | In planetary storage and aboard fleets, stationed or moving |
 

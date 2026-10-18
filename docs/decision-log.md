@@ -460,7 +460,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-030: Views and score
 
-- Date and package: 2026-10-18, P1.11. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 17, `ruling-lead-overnight.md`.) **Q4 is PROVISIONAL, parked for Tom as game intent.**
+- Date and package: 2026-10-18, P1.11. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 17, `ruling-lead-overnight.md`.) Q4 was provisional; **Tom resolved it on 2026-10-18 ([D-039](#d-039-a-building-being-demolished-stops-scoring-when-demolition-begins)).**
 - Decision:
   - **Entry point**: `World::view(&self, &Query, t, &Rules) -> Result<View, ViewError>`.
     - It takes `&World`, so "Pure reads" holds by type, and the determinism suite also checks the bytes are unchanged.
@@ -486,11 +486,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - buildings under construction and ship builds (active or waiting) at points × delivered ÷ cost, rounded down per build;
     - each ship the player owns counted once, by ID, wherever it is;
     - ore and ingots in the player's storage and aboard their fleets (stationed or moving): grams summed per resource, then `floor(total × points ÷ per_g)` once. That keeps score unchanged when cargo moves between storage and fleets.
-  - **PROVISIONAL (Q4, parked for Tom):** a building being demolished counts in full until its demolition ends.
-    - The source: "cancelled or demolished buildings do not count" (Game Design, Scoring).
-    - Reading A, implemented: "demolished" means done, so it counts while it still exists and holds its slot.
-    - Reading B: it stops counting when demolition begins, as it stops working.
-    - The switch is one match arm in `World::score`. The test name contains "provisional".
+  - **Q4, resolved by Tom on 2026-10-18 (reading B; [D-039](#d-039-a-building-being-demolished-stops-scoring-when-demolition-begins)):** a building being demolished does not count. It was provisional here as reading A (counting until demolition ended).
   - **Visibility**: planets, `PlanetsNear` and players are public. Fleets are visible only to their owner: the query names the viewer, and no query returns another player's fleets. **Phase 3 obligation**: the host takes the viewer from the auth token, never from the request body.
   - **Determinism**: every observation in the invariance runs takes every view and checks the bytes are unchanged. The done-when (a view at any t before `valid_until` equals the same view after `advance_to(t)`, field for field, and is `Stale` at `valid_until`) is a named test and a property over `Economy` worlds with fleets and commands.
 
@@ -771,3 +767,13 @@ Each entry records its date, the package that made it, the decision, the reasons
   - `crates/voidforge-host/tests/recovery.rs`: the crash table, byte identity (a named test and a property test), the carries, the snapshot choice, a tampered tail, another build's record, and the shared function;
   - `postgres.rs` (recovery through Postgres);
   - `determinism.rs` (a run through snapshot, restore and continue, in two processes).
+
+### D-039: A building being demolished stops scoring when demolition begins
+
+- Date and package: 2026-10-18, a follow-up after P2.5 (slice 24). **Tom's decision** (game intent), resolving D-030's provisional Q4; the brief is `missions/voidforge-mvp/tom-decision-score-demolition.md`.
+- Decision:
+  - A building counts in the score from the moment it is operational until its demolition begins. Buildings being demolished, demolished or cancelled count nothing; a building under construction still counts in proportion to the ingots delivered.
+  - So a building's points leave the score at the exact instant `DemolishBuilding` is applied, not when the demolition ends.
+- Why: demolition can't be cancelled, the building stops working at once, and nothing is refunded, so it is already lost to the player. D-030's reading A (counting until the demolition ended) kept points for a building that does no work.
+- The [Game Design's Scoring table](Voidforge%20MVP%20Game%20Design.md#scoring) and the Architectural Design's score bullet now say this explicitly.
+- Where it's enforced: `World::score` in `crates/voidforge-core/src/view.rs` (one match arm); `crates/voidforge-testkit/tests/views.rs` (`score_a_building_being_demolished_counts_nothing` and `score_drops_at_the_instant_demolition_begins`).
