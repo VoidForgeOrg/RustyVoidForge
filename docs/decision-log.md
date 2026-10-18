@@ -593,7 +593,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - Gap-free `seq` is the single writer's job (P2.3); there's no trigger.
   - **No foreign keys.** The log must replay into a database without accounts (P2.6 golden logs, P2.7 replay). A bootstrap snapshot has no record, and old records may be pruned.
   - **Migrations only add**:
-    - in CI, `.github/scripts/check-migrations-only-add.sh` fails if a migration on the base revision is modified, renamed or deleted, or if a new one doesn't sort after the base's highest version. It has 15 regression cases;
+    - in CI, `.github/scripts/check-migrations-only-add.sh` fails if a migration on the base revision is modified, renamed or deleted, or if a new one doesn't sort after the base's highest version. It has 15 regression cases, five of which also check the reason it gives;
     - at run time, sqlx refuses an applied migration whose checksum changed (a named test).
     - A destructive statement in a new migration is a review matter: no regex can judge SQL soundly.
   - **sqlx `=0.9.0`**, with no default features plus `postgres`, `runtime-tokio`, `macros` and `migrate`. It's a normal dependency of voidforge-store only.

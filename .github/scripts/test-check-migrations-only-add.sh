@@ -31,6 +31,15 @@ expect() { # expect <code> <name> <command...>
         failures=$((failures + 1))
     fi
 }
+# expect_reason <text>: the last case's output names the reason, not just the exit code.
+expect_reason() {
+    if grep -qF -- "$1" "$work/out"; then
+        echo "pass:   ...and it says \"$1\""
+    else
+        echo "FAIL:   ...expected the output to say \"$1\""; sed 's/^/    /' "$work/out"
+        failures=$((failures + 1))
+    fi
+}
 
 new_repo "$work/same"
 expect 0 "no change" "$checker" base "$work/same"
@@ -49,25 +58,30 @@ new_repo "$work/modified"
 printf 'CREATE TABLE a (x bigint);\n' > "$work/modified/$dir/0001_a.sql"
 commit "$work/modified" modify
 expect 1 "a committed edit to an existing migration" "$checker" base "$work/modified"
+expect_reason "an existing migration must never change or disappear"
 
 new_repo "$work/dirty"
 printf -- '-- comment\n' >> "$work/dirty/$dir/0002_b.sql"
 expect 1 "an uncommitted edit to an existing migration" "$checker" base "$work/dirty"
+expect_reason "an existing migration must never change or disappear"
 
 new_repo "$work/deleted"
 git -C "$work/deleted" rm -q "$dir/0002_b.sql"
 commit "$work/deleted" delete
 expect 1 "a deleted migration" "$checker" base "$work/deleted"
+expect_reason "an existing migration must never change or disappear"
 
 new_repo "$work/renamed"
 git -C "$work/renamed" mv "$dir/0002_b.sql" "$dir/0003_b.sql"
 commit "$work/renamed" rename
 expect 1 "a renamed migration" "$checker" base "$work/renamed"
+expect_reason "an existing migration must never change or disappear"
 
 new_repo "$work/early"
 printf 'CREATE TABLE c (x int);\n' > "$work/early/$dir/0002_c.sql"
 commit "$work/early" early
 expect 1 "a new migration that does not sort last" "$checker" base "$work/early"
+expect_reason "does not sort after the base's highest"
 
 new_repo "$work/unnumbered"
 printf 'CREATE TABLE c (x int);\n' > "$work/unnumbered/$dir/c.sql"
