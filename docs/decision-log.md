@@ -557,3 +557,13 @@ Each entry records its date, the package that made it, the decision, the reasons
     The harness covers 133 cases.
   - **Release overflow checks**: `overflow-checks = true` in the workspace's `[profile.release]`, so code outside the ban (the host and the binaries from Phase 2) panics on overflow instead of wrapping.
   - **New code** in these crates writes `checked_*` or `strict_*`; the lint enforces it. A strict site needs its bound argued in the review.
+
+### D-033: Carried obligations from Phase 1
+
+- Date and package: 2026-10-18, the Phase 1 gate repair (review-r1's gate verdict). These obligations lived only in mission files; they are recorded here with their target packages.
+- Decision:
+  - **P2.5** (snapshots and restore): restore must not rely on `World::check_links` for gameplay fields. It is a structural check only (D-022: "not a gameplay validator"; P1.3 LOW).
+  - **P2.9** (the universe bootstrap):
+    - It caps the total world size an operator can ask for (players × planets per player; P1.12 QA LOW).
+    - Under D-031 option B (provisional), the default rules refuse worlds below roughly 31 to 40 expected players, because too few planets qualify as homeworld candidates. The bootstrap, and P3.6's end-to-end setup, must use at least about 40 players or denser rules, until Tom rules on D-031.
+  - **P3.6** (the end-to-end scenario): dex configuration parity between local and CI becomes a mechanical check (a Phase 0 carry).
