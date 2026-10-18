@@ -4,7 +4,7 @@
 
 use voidforge_core::command::{Action, Command};
 use voidforge_core::quantity::MS_PER_HOUR;
-use voidforge_core::rules::{DISTANCE_UNITS_PER_WORLD_UNIT, Rules};
+use voidforge_core::rules::Rules;
 use voidforge_core::state::World;
 use voidforge_testkit::determinism::{CAROL, canonical_bytes};
 use voidforge_testkit::{ALICE, BOB, v0_rules};

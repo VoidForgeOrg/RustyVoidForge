@@ -7,7 +7,7 @@
 use voidforge_core::command::{Action, Command};
 use voidforge_core::rules::{DISTANCE_UNITS_PER_WORLD_UNIT, Rules};
 use voidforge_core::state::{PlanetId, World};
-use voidforge_testkit::determinism::canonical_bytes;
+use voidforge_testkit::determinism::{canonical_bytes, mix};
 use voidforge_testkit::{ALICE, v0_rules};
 use voidforge_worldgen::{WorldgenError, generate};
 
@@ -303,6 +303,26 @@ fn a_fixed_seed_gives_the_recorded_world() {
 
 const GOLDEN_FIRST: [(i64, i64, i64); 3] = [(7, 227, 327), (13, 947, 274), (28, 21, 660)];
 const GOLDEN_CANDIDATES: [u64; 7] = [91, 84, 126, 118, 80, 58, 61];
+
+/// A golden at 100 players, where neighborhoods overlap: a fingerprint of every planet's
+/// position (in ID order) and the candidate order. It pins what the guarantees alone can't see,
+/// such as step 2 counting planets already near a candidate before adding more (the mutation
+/// that skips the count keeps every guarantee). Refresh only on a deliberate change (D-031).
+#[test]
+fn a_fixed_seed_gives_the_recorded_100_player_world() {
+    let w = generate(8, 100, &v0_rules()).unwrap();
+    let positions = w.planets.values().fold(0u64, |acc, p| {
+        let (x, y, z) = (p.position.x / U, p.position.y / U, p.position.z / U);
+        mix(acc ^ (x as u64) ^ ((y as u64) << 20) ^ ((z as u64) << 40))
+    });
+    let candidates = w
+        .homeworld_candidates
+        .iter()
+        .fold(0u64, |acc, p| mix(acc ^ p.0));
+    assert_eq!((positions, candidates), GOLDEN_100);
+}
+
+const GOLDEN_100: (u64, u64) = (12_890_825_601_051_078_430, 18_307_943_236_284_880_597);
 
 /// review-r2's M2 witness: a cube of 160 units, spacing 11, and 4,000 planets for one player.
 /// The lattice (8x, 8y, 8z), x, y, z in 0..20 with x + y + z even, holds 4,000 points pairwise
