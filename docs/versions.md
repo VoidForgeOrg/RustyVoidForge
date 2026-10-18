@@ -62,7 +62,7 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 
 ## Crate dependencies
 
-The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, axum, tower-http, reqwest, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
+The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, axum, tower-http, reqwest, uuid, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
@@ -82,3 +82,4 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | sqlx | =0.9.0 (postgres, runtime-tokio, macros, migrate; default features off) | store | P2.1 | D-034 |
 | toml | =1.1.8 (std, parse, serde) | rules | P1.2 | D-020 |
 | tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest | P2.3 | D-036 |
+| clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line | P2.7 | D-041 |

@@ -807,3 +807,40 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `whole-loop`: the Phase 1 gate's hand-derived loop. Its recorded score, 3,239, is asserted against QA's hand derivation.
     - A coverage guard (exhaustive matches) fails unless the goldens accept every command, produce every event, and hold a rejection and an advance.
 - Where it's enforced: `crates/voidforge-testkit/src/golden.rs`; `crates/voidforge-host/tests/{golden.rs, common/golden.rs, postgres.rs}`; `crates/voidforge-store/src/log.rs` (`to_line`, `from_line`) and `tests/line.rs`; `tests/golden/`; `justfile` (`bless`); `.github/scripts/determinism.sh`.
+
+### D-041: The replay CLI: one verification path, the build pin and exit codes
+
+- Date and package: 2026-10-18, P2.7. Proposed by dev-build (`slices/27-p2-7-replay-cli/proposal-replay-cli.md`). **Lead ruling; advisor review pending** (`ruling-lead.md`). None of it is game intent.
+- Decision:
+  - **One verification path, in store.**
+    - `voidforge_store::golden` now holds the golden format and `verify_golden`, moved from the host's tests. This amends D-040: the host's tests still record, and they verify through store.
+    - `voidforge_store::verify` holds `verify_log`. It works over any `LogStore`: the start snapshot is decoded strictly and cross-checked against its row, every later record goes through `replay::replay_record`, and the state hash is checked at every later snapshot row. A Postgres log carries no per-record hashes, so its snapshots are its checkpoints.
+    - Both report a `VerifyError`: `Diverged`, `Refused` (another build or rules version) or `Input`.
+    - `ReplayError::Diverged` now carries what the record holds and what replay produced, in the log's JSON form.
+    - `LogStore` gains `snapshot_index` (snapshot rows without payloads) and `snapshot_at`. `PgLog` gains `lazy_url`.
+  - **The command line** (`voidforge-replay`, clap):
+    - `golden <PATH>...`: goldens under the fixture build, with `rules/v<N>.toml` from the nearest ancestor or `--rules`;
+    - `postgres --rules <FILE> [--database-url] [--from] [--to] [--build]`;
+    - `inspect golden|postgres`: metadata through `decode_any`, labeled unverified in text and JSON (D-035's caveat);
+    - `--json` on all of them.
+    - There's no interactive mode, and the database URL is never printed.
+  - **The build pin.** The expected build is the binary's own `ENGINE_BUILD`. `--build <ID>` asserts another, such as a test build or an earlier deploy's. **A pass under `--build` means this binary's code reproduces that log, not that the named build's code was verified.** A production incident log is verified by its own build's binary. `--help`, the crate guide and the output say so, and the output names the build and whether the flag gave it. Goldens always use the fixture build (D-040).
+  - **Exit codes (a stable contract):**
+    - 0: verified;
+    - 1: diverged;
+    - 2: usage (clap);
+    - 3: refused (build or rules pin);
+    - 4: input error;
+    - 5: telemetry failed to start, or failed to shut down after a pass (a failing verification keeps its own code; D-016).
+
+    With several sources, the exit code is the first failing source's.
+  - **Output.** Text by default, or one JSON document with `--json`. The first divergence gives its `seq`, `what`, `expected` and `found`. For a gap (a removed or reordered record) the seq is the one expected there; otherwise it's the record's own. Stdout holds no times, so the same input gives byte-identical output, and the trace ID goes to stderr.
+  - **Dependencies:**
+    - **clap `=4.6.7`**, with std, derive, help, usage, error-context and env, and default features off (so no color crates). New crates: clap, clap_builder, clap_derive, clap_lex and anstyle. The license is MIT OR Apache-2.0; there's no new license and no duplicate.
+    - anyhow, also named in the Tech stack, isn't added: the errors are typed and nothing needs it.
+    - The replay crate's normal dependencies are core, rules, store, telemetry, tracing, tokio, serde, serde_json and clap.
+  - **Where it runs:**
+    - `tests/cli.rs` (the binary as a process, on every golden and on tampered copies) runs in `test` and in `determinism.sh`;
+    - `tests/postgres.rs` runs in the database stage.
+    - `just replay` runs the tool.
+- Where it's enforced: `crates/voidforge-store/src/{golden.rs, verify.rs, replay.rs, log.rs}`, `crates/voidforge-replay/`, `crates/voidforge-host/tests/{golden.rs, common/golden.rs}`, `.sqlx/`, `deny.toml`, the [version table](versions.md), `justfile`, `.github/scripts/determinism.sh`.
