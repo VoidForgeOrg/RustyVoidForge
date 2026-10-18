@@ -8,8 +8,19 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+voidforge-core.workspace = true
+blake3.workspace = true
+postcard.workspace = true
+serde.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Harness worlds for the codec and determinism tests (D-035): testkit is dev-only, and worldgen gives
+# generated worlds. Neither reaches the library.
+voidforge-testkit.workspace = true
+voidforge-worldgen.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

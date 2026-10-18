@@ -75,4 +75,5 @@ echo "--- sqlx offline metadata check"
 DATABASE_URL="$cli_url" cargo sqlx prepare --workspace --check -- --all-targets
 
 echo "--- store tests against Postgres"
-SQLX_OFFLINE=true cargo nextest run -p voidforge-store --run-ignored only --no-fail-fast --locked
+# Only the Postgres binary: the store's other ignored test is the determinism two-process run.
+SQLX_OFFLINE=true cargo nextest run -p voidforge-store --test database --run-ignored only --no-fail-fast --locked

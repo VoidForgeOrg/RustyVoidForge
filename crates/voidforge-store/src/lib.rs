@@ -1,7 +1,11 @@
 //! Postgres access, migrations and the snapshot codec.
 //!
 //! P2.1 adds the schema: `log_records`, `snapshots` and `accounts`, created by the sqlx migrations
-//! in `migrations/` (decision log D-034). Migrations only ever add.
+//! in `migrations/` (decision log D-034). Migrations only ever add. P2.2 adds the snapshot codec
+//! ([`snapshot`]) and the canonical encoding it hashes ([`canonical`]; D-024, D-035).
+
+pub mod canonical;
+pub mod snapshot;
 
 use sqlx::PgPool;
 use sqlx::migrate::{MigrateError, Migrator};

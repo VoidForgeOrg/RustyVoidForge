@@ -22,6 +22,7 @@ voidforge-worldgen = { path = "crates/voidforge-worldgen", version = "0.1.0" }
 
 # External crates: exact pins (Technical Plan, Tech stack); each has a decision-log entry and a
 # version-table row, and passes the deny.toml allowlist.
+blake3 = { version = "=1.8.7", default-features = false, features = ["pure"] }
 opentelemetry = { version = "=0.33.1", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 opentelemetry_sdk = { version = "=0.33.1", default-features = false, features = ["trace"] }
