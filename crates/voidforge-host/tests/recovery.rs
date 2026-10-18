@@ -697,3 +697,47 @@ fn the_host_changes_the_world_only_through_the_shared_function() {
     assert!(source.contains("replay::step(&mut self.world, &Step::Command("));
     assert!(source.contains("replay::step(&mut self.world, &Step::Advance,"));
 }
+
+#[tokio::test]
+async fn a_gap_in_the_tail_is_refused() {
+    let (log, _) = ran(4, 1_000).await;
+    // The bootstrap snapshot and records 1, 3 and 4: record 2 is missing.
+    let mut store = MemoryLog::new();
+    for r in log.snapshot().into_iter().filter(|r| r.seq != 2) {
+        store.append(&[r]).await.unwrap();
+    }
+    store.write_snapshot(&log.snapshot_rows()[0]).await.unwrap();
+    assert!(matches!(
+        recover(&store, &v0_rules()).await,
+        Err(RecoverError::Replay(ReplayError::Gap {
+            expected: 2,
+            found: 3
+        }))
+    ));
+}
+
+#[tokio::test]
+async fn a_tail_record_with_other_events_is_a_divergence() {
+    let (log, _) = ran(3, 1_000).await;
+    let mut store = MemoryLog::new();
+    for r in log.snapshot() {
+        store.append(&[r]).await.unwrap();
+    }
+    store.write_snapshot(&log.snapshot_rows()[0]).await.unwrap();
+    let mut tampered = store.snapshot()[1].clone();
+    tampered
+        .events
+        .push(voidforge_core::state::DomainEvent::BuildingCompleted {
+            planet: voidforge_core::state::PlanetId(1),
+            building: voidforge_core::state::BuildingId(1),
+            kind: BuildingKind::Drill,
+        });
+    store.tamper(tampered);
+    assert!(matches!(
+        recover(&store, &v0_rules()).await,
+        Err(RecoverError::Replay(ReplayError::Diverged {
+            seq: 2,
+            what: "events"
+        }))
+    ));
+}
