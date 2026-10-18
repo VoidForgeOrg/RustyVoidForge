@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO accounts (player_id, issuer, subject) VALUES ($1::text::uuid, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "54f6dd035dd6aca6c7525ac7e3d02c04ab1cc4658fd8fcb2de00df1080daaa08"
+}

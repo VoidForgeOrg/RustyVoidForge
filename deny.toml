@@ -20,7 +20,7 @@ yanked = "deny"
 [licenses]
 version = 2
 # Each license is added with the first dependency that needs it (decision log D-017).
-allow = ["Apache-2.0", "MIT", "Unicode-3.0"]
+allow = ["Apache-2.0", "MIT", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.93
 
 [licenses.private]
@@ -174,10 +174,71 @@ allow = [
     { crate = "rand_xorshift" },
     { crate = "regex-syntax" },
     { crate = "unarray" },
+    # voidforge-store (P2.1, decision log D-034): sqlx with postgres, runtime-tokio, macros and
+    # migrate, and what it pulls in on the targets above.
+    { crate = "sqlx" },
+    { crate = "sqlx-core" },
+    { crate = "sqlx-macros" },
+    { crate = "sqlx-macros-core" },
+    { crate = "sqlx-postgres" },
+    { crate = "allocator-api2" },
+    { crate = "atoi" },
+    { crate = "block-buffer" },
+    { crate = "byteorder" },
+    { crate = "cmov" },
+    { crate = "crc" },
+    { crate = "crc-catalog" },
+    { crate = "crossbeam-queue" },
+    { crate = "crossbeam-utils" },
+    { crate = "crypto-common" },
+    { crate = "ctutils" },
+    { crate = "digest" },
+    { crate = "dotenvy" },
+    { crate = "equivalent" },
+    { crate = "event-listener" },
+    { crate = "foldhash" },
+    { crate = "futures-intrusive" },
+    { crate = "generic-array" },
+    { crate = "hashbrown" },
+    { crate = "hashlink" },
+    { crate = "heck" },
+    { crate = "hex" },
+    { crate = "hkdf" },
+    { crate = "hmac" },
+    { crate = "hybrid-array" },
+    { crate = "indexmap" },
+    { crate = "lock_api" },
+    { crate = "md-5" },
+    { crate = "parking" },
+    { crate = "parking_lot" },
+    { crate = "parking_lot_core" },
+    { crate = "scopeguard" },
+    { crate = "sha2" },
+    { crate = "stringprep" },
+    { crate = "tinyvec" },
+    { crate = "tokio-stream" },
+    { crate = "typenum" },
+    { crate = "unicode-bidi" },
+    { crate = "unicode-normalization" },
+    { crate = "unicode-properties" },
+    { crate = "version_check" },
+    { crate = "whoami" },
 ]
 # Duplicates allowed by name and version, each with its reason (decision log D-017).
 skip = [
     { crate = "syn@2.0.119", reason = "proc-macro crates are mid-way from syn 2 to syn 3: prost-derive and tracing-attributes still use 2, async-trait and displaydoc use 3; compile-time only" },
+    # sqlx (P2.1, decision log D-034). sqlx-core is still on the RustCrypto 0.10 generation while
+    # sqlx-postgres moved to 0.11; both versions are reached only through sqlx, from voidforge-store.
+    { crate = "sha2@0.10.9", reason = "sqlx-core uses sha2 0.10, sqlx-postgres sha2 0.11; voidforge-store only" },
+    { crate = "digest@0.10.7", reason = "RustCrypto 0.10 generation under sqlx-core's sha2 0.10; voidforge-store only" },
+    { crate = "block-buffer@0.10.4", reason = "RustCrypto 0.10 generation under sqlx-core's sha2 0.10; voidforge-store only" },
+    { crate = "crypto-common@0.1.6", reason = "RustCrypto 0.10 generation under sqlx-core's sha2 0.10; voidforge-store only" },
+    { crate = "cpufeatures@0.2.17", reason = "used by sqlx-core's sha2 0.10; sqlx-postgres's sha2 0.11 uses 0.3; voidforge-store only" },
+    { crate = "base64@0.22.1", reason = "sqlx-core and sqlx-postgres use base64 0.22; the telemetry stack uses 0.23" },
+    { crate = "hashbrown@0.16.1", reason = "sqlx-core's hashlink uses hashbrown 0.16; indexmap uses 0.17; voidforge-store only" },
+    { crate = "rand@0.10.3", reason = "sqlx-postgres (SCRAM nonces) uses rand 0.10, opentelemetry_sdk 0.9; normal edges reach 0.10 only from voidforge-store" },
+    { crate = "rand_core@0.10.1", reason = "under sqlx-postgres's rand 0.10; normal edges reach it only from voidforge-store" },
+    { crate = "getrandom@0.4.3", reason = "under sqlx-postgres's rand 0.10; normal edges reach it only from voidforge-store" },
 ]
 
 [sources]

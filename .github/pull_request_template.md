@@ -21,6 +21,7 @@ CI runs these as the required `lint`, `supply-chain` and `test` checks; they als
 - [ ] `cargo deny check`
 - [ ] `cargo nextest run --workspace --locked`
 - [ ] `just up` passes, if `deploy/` or the `justfile` changed
+- [ ] `just db-test` (the `database` job), if `voidforge-store`, its migrations or `.sqlx/` changed
 
 ## Specs and decisions
 

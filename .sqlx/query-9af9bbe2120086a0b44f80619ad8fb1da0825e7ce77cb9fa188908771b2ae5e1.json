@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO log_records\n               (seq, kind, game_time, player_id, idempotency_key, payload, outcome, events,\n                rules_version, engine_build)\n           VALUES ($1, $2, 0, $3::text::uuid, $4, 'null', 'null', $5::text::jsonb, $6, 'test')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9af9bbe2120086a0b44f80619ad8fb1da0825e7ce77cb9fa188908771b2ae5e1"
+}

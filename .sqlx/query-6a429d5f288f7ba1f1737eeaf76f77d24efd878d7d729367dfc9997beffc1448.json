@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT wall_time FROM log_records) IS NOT NULL\n              AND (SELECT created_at FROM snapshots) IS NOT NULL\n              AND (SELECT created_at FROM accounts) IS NOT NULL AS \"stamped!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stamped!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6a429d5f288f7ba1f1737eeaf76f77d24efd878d7d729367dfc9997beffc1448"
+}

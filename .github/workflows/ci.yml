@@ -1,4 +1,5 @@
-# CI baseline (Technical Plan P0.3). Each job is a required check on main.
+# CI baseline (Technical Plan P0.3), plus the database job (P2.1, D-034). Each job is a required
+# check on main once the ruleset names it; database waits on the owner (D-034).
 # Every command here also runs locally from the repository root; see AGENTS.md, Commands.
 # Action and tool versions are pinned; see docs/versions.md and decision log D-007.
 name: CI
@@ -83,3 +84,45 @@ jobs:
           tool: cargo-nextest@0.9.148
       - name: Determinism suite and two-process double run
         run: .github/scripts/determinism.sh
+
+  # The Database tests stage (Technical Plan, CI/CD; decision log D-034): the migrations-only-add
+  # guardrail, then .github/scripts/database.sh against a fresh Postgres service (the same image
+  # digest as deploy/compose.yaml). `just db-test` runs the same steps against the local stack.
+  database:
+    name: database
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: voidforge
+          POSTGRES_PASSWORD: voidforge-local-test-password
+          POSTGRES_DB: voidforge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --host=127.0.0.1 --username=voidforge --dbname=voidforge_test"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_URL: postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the migrations guardrail compares against the base commit
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Install sqlx-cli (no install-action manifest; a locked build, kept by rust-cache)
+        run: cargo install sqlx-cli@0.9.0 --locked --no-default-features --features postgres
+      - name: Migrations only add
+        run: .github/scripts/check-migrations-only-add.sh "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}"
+      - name: Migrations guardrail regression cases
+        run: .github/scripts/test-check-migrations-only-add.sh
+      - name: Migrations on an empty database twice, the sqlx metadata check, store tests
+        run: .github/scripts/database.sh
+        env:
+          # The job context (the service container's ID) is available to steps, not to job-level env.
+          PSQL: docker exec -i ${{ job.services.postgres.id }} psql -U voidforge

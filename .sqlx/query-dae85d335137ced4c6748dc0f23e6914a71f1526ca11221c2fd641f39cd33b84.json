@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tablename::text AS \"name!\" FROM pg_tables\n           WHERE schemaname = 'public' ORDER BY tablename",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "dae85d335137ced4c6748dc0f23e6914a71f1526ca11221c2fd641f39cd33b84"
+}
