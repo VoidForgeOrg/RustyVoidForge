@@ -186,7 +186,7 @@ fn a_tampered_event_is_pinpointed_at_its_record() {
 }
 
 #[test]
-fn a_tampered_hash_a_dropped_record_and_a_wrong_score_are_caught() {
+fn tampered_hashes_checkpoints_records_and_scores_are_caught() {
     let rules = v0_rules();
     let (name, files, at) = a_golden_with_events();
     let seq = files.records()[at].seq;
@@ -212,6 +212,37 @@ fn a_tampered_hash_a_dropped_record_and_a_wrong_score_are_caught() {
         "{name}: {failure:?}"
     );
     assert_eq!(failure.seq(), Some(dropped.seq + 1));
+    // The end hash edited.
+    let mut m = files.manifest();
+    m.end_hash = "00".repeat(32);
+    let tampered = Files {
+        manifest: serde_json::to_vec_pretty(&m).unwrap(),
+        ..files.clone()
+    };
+    assert!(matches!(verify(&tampered, &rules), Err(Failure::EndHash)));
+    // A checkpoint's time edited, and a checkpoint added: the manifest no longer matches the
+    // records one to one.
+    let mut m = files.manifest();
+    m.records[at].game_time += 1;
+    let tampered = Files {
+        manifest: serde_json::to_vec_pretty(&m).unwrap(),
+        ..files.clone()
+    };
+    assert!(matches!(
+        verify(&tampered, &rules),
+        Err(Failure::Checkpoints)
+    ));
+    let mut m = files.manifest();
+    let extra = m.records.last().unwrap().clone();
+    m.records.push(extra);
+    let tampered = Files {
+        manifest: serde_json::to_vec_pretty(&m).unwrap(),
+        ..files.clone()
+    };
+    assert!(matches!(
+        verify(&tampered, &rules),
+        Err(Failure::Checkpoints)
+    ));
     // A score edited.
     let mut m = files.manifest();
     m.scores[0].score += 1;
