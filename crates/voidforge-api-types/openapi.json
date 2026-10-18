@@ -1,0 +1,2088 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Voidforge",
+    "description": "The Voidforge game API (decision log D-045). Game times are RFC 3339 UTC with milliseconds; amounts are integer grams.",
+    "license": {
+      "name": ""
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/commands": {
+      "post": {
+        "tags": [
+          "paths"
+        ],
+        "summary": "Submit a command. Every write goes through here, one command per log record.",
+        "operationId": "post_commands",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 128 bytes of printable ASCII without spaces, unique per player. A repeat returns the first response for the key, whatever its age.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted, with the command's own events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "malformed_body, missing_idempotency_key, invalid_idempotency_key, duplicate_ship_ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_token, invalid_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A game rule's reason code, or idempotency_key_conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "busy (with Retry-After) or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/leaderboard": {
+      "get": {
+        "tags": [
+          "paths"
+        ],
+        "summary": "Every player ranked by score, rebuilt every 60 seconds.",
+        "operationId": "get_leaderboard",
+        "responses": {
+          "200": {
+            "description": "The leaderboard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Leaderboard"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_token, invalid_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/planets": {
+      "get": {
+        "tags": [
+          "paths"
+        ],
+        "summary": "The planets within a radius of a point, summarized.",
+        "operationId": "get_planets_near",
+        "parameters": [
+          {
+            "name": "near",
+            "in": "query",
+            "description": "The point, as x,y,z in distance units",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "radius",
+            "in": "query",
+            "description": "The radius, in distance units",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The planets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanetsNearView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_token, invalid_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/planets/{id}": {
+      "get": {
+        "tags": [
+          "paths"
+        ],
+        "summary": "One planet, projected to now. Planets are public.",
+        "operationId": "get_planet",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The planet",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The planet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanetView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_token, invalid_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown_planet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/players/me": {
+      "get": {
+        "tags": [
+          "paths"
+        ],
+        "summary": "The player: homeworld, planets and score.",
+        "operationId": "get_player",
+        "responses": {
+          "200": {
+            "description": "The player",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_token, invalid_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/players/me/fleets": {
+      "get": {
+        "tags": [
+          "paths"
+        ],
+        "summary": "The player's own fleets; no one sees another player's.",
+        "operationId": "get_fleets",
+        "responses": {
+          "200": {
+            "description": "The fleets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_token, invalid_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AssembleFleet": {
+        "type": "object",
+        "description": "The `assemble_fleet` payload.",
+        "required": [
+          "planet_id",
+          "ship_ids",
+          "cargo"
+        ],
+        "properties": {
+          "cargo": {
+            "$ref": "#/components/schemas/Cargo",
+            "description": "Grams of each resource to load; zero for none. A negative amount reaches the core, which\nanswers 422 `invalid_cargo`."
+          },
+          "planet_id": {
+            "$ref": "#/components/schemas/PlanetId",
+            "description": "The planet whose roster the ships are on."
+          },
+          "ship_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShipId"
+            },
+            "description": "The ships, each once",
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BuildBuilding": {
+        "type": "object",
+        "description": "The `build_building` payload.",
+        "required": [
+          "planet_id",
+          "building_type"
+        ],
+        "properties": {
+          "building_type": {
+            "$ref": "#/components/schemas/BuildingType",
+            "description": "What to build."
+          },
+          "planet_id": {
+            "$ref": "#/components/schemas/PlanetId",
+            "description": "The planet."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BuildingId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "A building.\n\nA JSON integer. Entity IDs come from one engine counter, so leaving JavaScript's safe\nrange (2^53) would take about 9×10^15 entities (D-045).",
+        "minimum": 0
+      },
+      "BuildingRef": {
+        "type": "object",
+        "description": "A payload naming one building.",
+        "required": [
+          "building_id"
+        ],
+        "properties": {
+          "building_id": {
+            "$ref": "#/components/schemas/BuildingId",
+            "description": "The building."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BuildingState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Receiving ingots until it reaches its cost.",
+            "required": [
+              "delivered_g",
+              "cost_g",
+              "rate_g_per_h",
+              "eta",
+              "state"
+            ],
+            "properties": {
+              "cost_g": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Grams it costs."
+              },
+              "delivered_g": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Grams of ingots delivered at `as_of`."
+              },
+              "eta": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Timestamp",
+                    "description": "When it completes at the current rate, exactly; null while nothing flows."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rate_g_per_h": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Grams per hour being delivered until `valid_until`."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "under_construction"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Working.",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "operational"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Stopped and being demolished; the slot frees at `demolition_ends_at`.",
+            "required": [
+              "demolition_ends_at",
+              "state"
+            ],
+            "properties": {
+              "demolition_ends_at": {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When demolition ends."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "demolishing"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A building's state, tagged by `state`."
+      },
+      "BuildingType": {
+        "type": "string",
+        "description": "What a building is.",
+        "enum": [
+          "drill",
+          "refinery",
+          "shipyard"
+        ]
+      },
+      "BuildingView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BuildingState",
+            "description": "Its state, with the fields that state has."
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/BuildingId",
+                "description": "The building."
+              },
+              "status": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/FlowStatus",
+                    "description": "How its flow is doing; absent when it has none."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "$ref": "#/components/schemas/BuildingType",
+                "description": "What it is."
+              }
+            }
+          }
+        ],
+        "description": "A building on a planet."
+      },
+      "CancelShipBuild": {
+        "type": "object",
+        "description": "The `cancel_ship_build` payload.",
+        "required": [
+          "ship_build_id"
+        ],
+        "properties": {
+          "ship_build_id": {
+            "$ref": "#/components/schemas/ShipBuildId",
+            "description": "The build."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Cargo": {
+        "type": "object",
+        "description": "Grams of each resource, loaded or carried.",
+        "required": [
+          "iron_ore_g",
+          "iron_ingot_g"
+        ],
+        "properties": {
+          "iron_ingot_g": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Grams of iron ingots."
+          },
+          "iron_ore_g": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Grams of iron ore."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CommandAccepted": {
+        "type": "object",
+        "description": "An accepted command (200). A repeated `Idempotency-Key` returns the first response for that\nkey, whatever its age (D-037).",
+        "required": [
+          "seq",
+          "game_time",
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "description": "**The command's own events only**, never the events of advancing time to it: those can\nbe other players' owner-only information (D-030), so returning them would leak it. A\nprivacy requirement (D-045); the log's `own_events` count rebuilds the same list for a\nrepeated key."
+          },
+          "game_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "The game time the command was applied at."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The command's log sequence number."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CommandRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Start a building on one of the player's planets.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/BuildBuilding",
+                "description": "Start a building on one of the player's planets."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "build_building"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Remove a building under construction; delivered ingots are lost.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/BuildingRef",
+                "description": "Remove a building under construction; delivered ingots are lost."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "cancel_construction"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Start demolishing an operational building.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/BuildingRef",
+                "description": "Start demolishing an operational building."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "demolish_building"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Queue a ship at an operational Shipyard.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/QueueShip",
+                "description": "Queue a ship at an operational Shipyard."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "queue_ship"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Remove an active or waiting ship build; nothing is refunded.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/CancelShipBuild",
+                "description": "Remove an active or waiting ship build; nothing is refunded."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "cancel_ship_build"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Form a fleet from ships on one planet's roster, optionally loading cargo.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/AssembleFleet",
+                "description": "Form a fleet from ships on one planet's roster, optionally loading cargo."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "assemble_fleet"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Send a stationed fleet on a mission.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/SendFleet",
+                "description": "Send a stationed fleet on a mission."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "send_fleet"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Turn a fleet in transit around, once.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/FleetRef",
+                "description": "Turn a fleet in transit around, once."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "recall_fleet"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Return a stationed, empty fleet's ships to the planet's roster.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/FleetRef",
+                "description": "Return a stationed, empty fleet's ships to the planet's roster."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "disband_fleet"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Unload a stationed fleet's cargo into its planet's storage, up to free storage.",
+            "required": [
+              "payload",
+              "type"
+            ],
+            "properties": {
+              "payload": {
+                "$ref": "#/components/schemas/FleetRef",
+                "description": "Unload a stationed fleet's cargo into its planet's storage, up to free storage."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "trigger_unload"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "description": "A command: one of the ten player actions, as `{\"type\": ..., \"payload\": {...}}`. It never\nnames the player, who comes from the auth token. Join game isn't here: the server issues it\non a player's first call (Decision 9), so `\"type\": \"join_game\"` is a 400 `malformed_body`."
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "Every error: `{\"code\": \"no_free_slot\", \"message\": \"...\"}`. `code` is the contract; `message`\nis for people and may change.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode",
+            "description": "The stable code."
+          },
+          "message": {
+            "type": "string",
+            "description": "A human-readable explanation; not part of the contract."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErrorCode": {
+        "type": "string",
+        "description": "Every error code the API returns, with its status ([`ErrorCode::status`]). The 31 game codes\n([`ErrorCode::is_game_rule`]) are the core's reason codes verbatim (D-028, D-029), and the\nserver's tests check the two lists are equal.",
+        "enum": [
+          "malformed_body",
+          "missing_idempotency_key",
+          "invalid_idempotency_key",
+          "duplicate_ship_ids",
+          "invalid_query",
+          "missing_token",
+          "invalid_token",
+          "not_found",
+          "already_joined",
+          "no_free_homeworld",
+          "not_joined",
+          "unknown_planet",
+          "unknown_building",
+          "unknown_ship_build",
+          "not_owner",
+          "no_free_slot",
+          "not_under_construction",
+          "not_operational",
+          "shipyard_has_builds",
+          "not_a_shipyard",
+          "shipyard_not_operational",
+          "unknown_fleet",
+          "unknown_ship",
+          "no_ships",
+          "invalid_cargo",
+          "ship_not_on_roster",
+          "insufficient_stock",
+          "insufficient_capacity",
+          "fleet_not_stationed",
+          "fleet_not_in_transit",
+          "already_recalled",
+          "same_planet",
+          "no_colony_ship",
+          "target_owned",
+          "no_cargo_vessel",
+          "target_not_owned",
+          "unreachable_target",
+          "cargo_aboard",
+          "planet_not_owned",
+          "idempotency_key_conflict",
+          "rate_limited",
+          "internal",
+          "busy",
+          "unavailable"
+        ]
+      },
+      "Event": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A construction reached its cost and is operational.",
+            "required": [
+              "planet_id",
+              "building_id",
+              "building_type",
+              "type"
+            ],
+            "properties": {
+              "building_id": {
+                "$ref": "#/components/schemas/BuildingId",
+                "description": "The building."
+              },
+              "building_type": {
+                "$ref": "#/components/schemas/BuildingType",
+                "description": "What it is."
+              },
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "building_completed"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A ship build reached its cost; the ship joined the planet's roster.",
+            "required": [
+              "planet_id",
+              "shipyard_id",
+              "ship_id",
+              "ship_type",
+              "type"
+            ],
+            "properties": {
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where."
+              },
+              "ship_id": {
+                "$ref": "#/components/schemas/ShipId",
+                "description": "The ship."
+              },
+              "ship_type": {
+                "$ref": "#/components/schemas/ShipType",
+                "description": "What it is."
+              },
+              "shipyard_id": {
+                "$ref": "#/components/schemas/BuildingId",
+                "description": "The Shipyard that built it."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ship_completed"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A demolition ended; the building is gone and its slot free.",
+            "required": [
+              "planet_id",
+              "building_id",
+              "building_type",
+              "type"
+            ],
+            "properties": {
+              "building_id": {
+                "$ref": "#/components/schemas/BuildingId",
+                "description": "The building, now gone."
+              },
+              "building_type": {
+                "$ref": "#/components/schemas/BuildingType",
+                "description": "What it was."
+              },
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "demolition_completed"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A fleet reached its target and is stationed there; first of an arrival's events.",
+            "required": [
+              "fleet_id",
+              "planet_id",
+              "mission",
+              "type"
+            ],
+            "properties": {
+              "fleet_id": {
+                "$ref": "#/components/schemas/FleetId",
+                "description": "The fleet."
+              },
+              "mission": {
+                "$ref": "#/components/schemas/Mission",
+                "description": "Its mission."
+              },
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "fleet_arrived"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A Colony Ship was consumed and the planet is the fleet owner's.",
+            "required": [
+              "planet_id",
+              "owner",
+              "fleet_id",
+              "ship_id",
+              "type"
+            ],
+            "properties": {
+              "fleet_id": {
+                "$ref": "#/components/schemas/FleetId",
+                "description": "The fleet that carried the Colony Ship."
+              },
+              "owner": {
+                "$ref": "#/components/schemas/PlayerId",
+                "description": "Its new owner."
+              },
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "The planet."
+              },
+              "ship_id": {
+                "$ref": "#/components/schemas/ShipId",
+                "description": "The Colony Ship, used up."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "planet_colonized"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A colony fleet found its target owned: nothing consumed, cargo still aboard.",
+            "required": [
+              "planet_id",
+              "fleet_id",
+              "type"
+            ],
+            "properties": {
+              "fleet_id": {
+                "$ref": "#/components/schemas/FleetId",
+                "description": "The fleet."
+              },
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "The planet."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "colonization_failed"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Cargo went into the planet's storage, up to free storage; only when something did.",
+            "required": [
+              "planet_id",
+              "fleet_id",
+              "cargo",
+              "type"
+            ],
+            "properties": {
+              "cargo": {
+                "$ref": "#/components/schemas/Cargo",
+                "description": "What was unloaded."
+              },
+              "fleet_id": {
+                "$ref": "#/components/schemas/FleetId",
+                "description": "The fleet."
+              },
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "The planet."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "cargo_unloaded"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Colonizing used the fleet's last ship, so the fleet is gone.",
+            "required": [
+              "fleet_id",
+              "planet_id",
+              "type"
+            ],
+            "properties": {
+              "fleet_id": {
+                "$ref": "#/components/schemas/FleetId",
+                "description": "The fleet."
+              },
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "fleet_removed"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A recalled fleet is back, stationed at its origin.",
+            "required": [
+              "fleet_id",
+              "planet_id",
+              "type"
+            ],
+            "properties": {
+              "fleet_id": {
+                "$ref": "#/components/schemas/FleetId",
+                "description": "The fleet."
+              },
+              "planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "fleet_returned"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "description": "Something that happened, as `{\"type\": \"building_completed\", ...}`."
+      },
+      "FleetId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "A fleet.\n\nA JSON integer. Entity IDs come from one engine counter, so leaving JavaScript's safe\nrange (2^53) would take about 9×10^15 entities (D-045).",
+        "minimum": 0
+      },
+      "FleetRef": {
+        "type": "object",
+        "description": "A payload naming one fleet.",
+        "required": [
+          "fleet_id"
+        ],
+        "properties": {
+          "fleet_id": {
+            "$ref": "#/components/schemas/FleetId",
+            "description": "The fleet."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FleetShip": {
+        "type": "object",
+        "description": "A ship in a fleet.",
+        "required": [
+          "ship_id",
+          "ship_type"
+        ],
+        "properties": {
+          "ship_id": {
+            "$ref": "#/components/schemas/ShipId",
+            "description": "The ship."
+          },
+          "ship_type": {
+            "$ref": "#/components/schemas/ShipType",
+            "description": "What it is."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FleetState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "At a planet.",
+            "required": [
+              "at_planet_id",
+              "state"
+            ],
+            "properties": {
+              "at_planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "The planet."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "stationed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Flying a mission.",
+            "required": [
+              "origin_planet_id",
+              "target_planet_id",
+              "mission",
+              "departed_at",
+              "arrives_at",
+              "state"
+            ],
+            "properties": {
+              "arrives_at": {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When it arrives."
+              },
+              "departed_at": {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When it left."
+              },
+              "mission": {
+                "$ref": "#/components/schemas/Mission",
+                "description": "What it will do there."
+              },
+              "origin_planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where it left from."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "in_transit"
+                ]
+              },
+              "target_planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where it goes."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Recalled, flying back.",
+            "required": [
+              "origin_planet_id",
+              "arrives_at",
+              "state"
+            ],
+            "properties": {
+              "arrives_at": {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When it gets back."
+              },
+              "origin_planet_id": {
+                "$ref": "#/components/schemas/PlanetId",
+                "description": "Where it returns to."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "returning"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A fleet's state, tagged by `state`."
+      },
+      "FleetView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FleetState",
+            "description": "Where it is, with the fields that state has."
+          },
+          {
+            "type": "object",
+            "required": [
+              "fleet_id",
+              "ships",
+              "cargo",
+              "capacity_g",
+              "speed_du_per_h"
+            ],
+            "properties": {
+              "capacity_g": {
+                "type": "integer",
+                "format": "int64",
+                "description": "How many grams it can carry."
+              },
+              "cargo": {
+                "$ref": "#/components/schemas/Cargo",
+                "description": "What it carries."
+              },
+              "fleet_id": {
+                "$ref": "#/components/schemas/FleetId",
+                "description": "The fleet."
+              },
+              "ships": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FleetShip"
+                },
+                "description": "Its ships."
+              },
+              "speed_du_per_h": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Its speed, in distance units per hour."
+              }
+            }
+          }
+        ],
+        "description": "One of the player's fleets."
+      },
+      "FleetsView": {
+        "type": "object",
+        "description": "`GET /players/me/fleets`: the player's own fleets. Fleets are visible only to their owner\n(D-030); the server takes the viewer from the token.",
+        "required": [
+          "as_of",
+          "valid_until",
+          "fleets"
+        ],
+        "properties": {
+          "as_of": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the view is computed for."
+          },
+          "fleets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetView"
+            },
+            "description": "The fleets."
+          },
+          "valid_until": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When it next changes; null when nothing is scheduled."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "FlowStatus": {
+        "type": "string",
+        "description": "How a working building or a build is doing: running at its rated speed, throttled by its\nsupply, or halted.",
+        "enum": [
+          "running",
+          "throttled",
+          "halted"
+        ]
+      },
+      "Leaderboard": {
+        "type": "object",
+        "description": "`GET /leaderboard`: every player ranked by score, rebuilt every 60 seconds (P3.5).",
+        "required": [
+          "as_of",
+          "entries"
+        ],
+        "properties": {
+          "as_of": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it was rebuilt."
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeaderboardEntry"
+            },
+            "description": "The rows, by score descending, then player ID ascending."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LeaderboardEntry": {
+        "type": "object",
+        "description": "A leaderboard row.",
+        "required": [
+          "rank",
+          "player_id",
+          "score"
+        ],
+        "properties": {
+          "player_id": {
+            "$ref": "#/components/schemas/PlayerId",
+            "description": "The player."
+          },
+          "rank": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Competition ranking: 1 plus the number of players with a strictly higher score, so ties\nshare a rank.",
+            "minimum": 0
+          },
+          "score": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The score at the leaderboard's `as_of`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Mission": {
+        "type": "string",
+        "description": "What a fleet does at its target.",
+        "enum": [
+          "colonize",
+          "transport",
+          "move"
+        ]
+      },
+      "PlanetId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "A planet.\n\nA JSON integer. Entity IDs come from one engine counter, so leaving JavaScript's safe\nrange (2^53) would take about 9×10^15 entities (D-045).",
+        "minimum": 0
+      },
+      "PlanetSummary": {
+        "type": "object",
+        "description": "A planet in a `GET /planets?near=` result.",
+        "required": [
+          "planet_id",
+          "position",
+          "owner",
+          "distance"
+        ],
+        "properties": {
+          "distance": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its distance from the query's point, in distance units."
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlayerId",
+                "description": "Its owner; null while unowned."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planet_id": {
+            "$ref": "#/components/schemas/PlanetId",
+            "description": "The planet."
+          },
+          "position": {
+            "$ref": "#/components/schemas/Position",
+            "description": "Where it is."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlanetView": {
+        "type": "object",
+        "description": "`GET /planets/{id}`: one planet, public to every player, projected to now.",
+        "required": [
+          "planet_id",
+          "owner",
+          "as_of",
+          "valid_until",
+          "stocks",
+          "buildings",
+          "position",
+          "slots",
+          "ship_builds",
+          "roster"
+        ],
+        "properties": {
+          "as_of": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the view is computed for."
+          },
+          "buildings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BuildingView"
+            },
+            "description": "Its buildings."
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlayerId",
+                "description": "Its owner; null while unowned."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planet_id": {
+            "$ref": "#/components/schemas/PlanetId",
+            "description": "The planet."
+          },
+          "position": {
+            "$ref": "#/components/schemas/Position",
+            "description": "Where it is."
+          },
+          "roster": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RosterShip"
+            },
+            "description": "The ships stationed on its roster."
+          },
+          "ship_builds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShipBuildView"
+            },
+            "description": "Its Shipyards' builds."
+          },
+          "slots": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many buildings it can hold.",
+            "minimum": 0
+          },
+          "stocks": {
+            "$ref": "#/components/schemas/Stocks",
+            "description": "Its storage."
+          },
+          "valid_until": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When it next changes (the planet's next event); null when nothing is scheduled."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlanetsNearView": {
+        "type": "object",
+        "description": "`GET /planets?near=x,y,z&radius=r`: the planets within a radius of a point.",
+        "required": [
+          "as_of",
+          "valid_until",
+          "planets"
+        ],
+        "properties": {
+          "as_of": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the view is computed for."
+          },
+          "planets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanetSummary"
+            },
+            "description": "The planets."
+          },
+          "valid_until": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When it next changes; null when nothing is scheduled."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlayerId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A player: the UUIDv7 the accounts table assigns (Decision 9), hyphenated lowercase. The\nserver converts it; this crate only carries the text.",
+        "example": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "PlayerView": {
+        "type": "object",
+        "description": "`GET /players/me`: the player's homeworld, planets and score.",
+        "required": [
+          "player_id",
+          "homeworld_id",
+          "planet_ids",
+          "score",
+          "as_of",
+          "valid_until"
+        ],
+        "properties": {
+          "as_of": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the view is computed for."
+          },
+          "homeworld_id": {
+            "$ref": "#/components/schemas/PlanetId",
+            "description": "The planet the player started on."
+          },
+          "planet_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanetId"
+            },
+            "description": "Every planet the player owns."
+          },
+          "player_id": {
+            "$ref": "#/components/schemas/PlayerId",
+            "description": "The player."
+          },
+          "score": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The score at `as_of`."
+          },
+          "valid_until": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When it next changes; null when nothing is scheduled."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Position": {
+        "type": "object",
+        "description": "A point in the universe, in distance units (D-021: 1,000 per world unit).",
+        "required": [
+          "x",
+          "y",
+          "z"
+        ],
+        "properties": {
+          "x": {
+            "type": "integer",
+            "format": "int64",
+            "description": "X, in distance units."
+          },
+          "y": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Y, in distance units."
+          },
+          "z": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Z, in distance units."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QueueShip": {
+        "type": "object",
+        "description": "The `queue_ship` payload.",
+        "required": [
+          "shipyard_id",
+          "ship_type"
+        ],
+        "properties": {
+          "ship_type": {
+            "$ref": "#/components/schemas/ShipType",
+            "description": "What to build."
+          },
+          "shipyard_id": {
+            "$ref": "#/components/schemas/BuildingId",
+            "description": "The Shipyard."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RosterShip": {
+        "type": "object",
+        "description": "A ship on a planet's roster.",
+        "required": [
+          "ship_id",
+          "ship_type",
+          "owner"
+        ],
+        "properties": {
+          "owner": {
+            "$ref": "#/components/schemas/PlayerId",
+            "description": "Whose it is."
+          },
+          "ship_id": {
+            "$ref": "#/components/schemas/ShipId",
+            "description": "The ship."
+          },
+          "ship_type": {
+            "$ref": "#/components/schemas/ShipType",
+            "description": "What it is."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SendFleet": {
+        "type": "object",
+        "description": "The `send_fleet` payload.",
+        "required": [
+          "fleet_id",
+          "target_planet_id",
+          "mission"
+        ],
+        "properties": {
+          "fleet_id": {
+            "$ref": "#/components/schemas/FleetId",
+            "description": "The fleet."
+          },
+          "mission": {
+            "$ref": "#/components/schemas/Mission",
+            "description": "What to do there."
+          },
+          "target_planet_id": {
+            "$ref": "#/components/schemas/PlanetId",
+            "description": "Where to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ShipBuildId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "A ship build in a Shipyard.\n\nA JSON integer. Entity IDs come from one engine counter, so leaving JavaScript's safe\nrange (2^53) would take about 9×10^15 entities (D-045).",
+        "minimum": 0
+      },
+      "ShipBuildState": {
+        "type": "string",
+        "description": "Whether a ship build is being built or waiting its turn.",
+        "enum": [
+          "active",
+          "waiting"
+        ]
+      },
+      "ShipBuildView": {
+        "type": "object",
+        "description": "A ship build in one of the planet's Shipyards.",
+        "required": [
+          "id",
+          "shipyard_id",
+          "ship_type",
+          "state",
+          "delivered_g",
+          "cost_g",
+          "rate_g_per_h",
+          "eta"
+        ],
+        "properties": {
+          "cost_g": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Grams it costs."
+          },
+          "delivered_g": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Grams of ingots delivered at `as_of`."
+          },
+          "eta": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When it completes at the current rate, exactly; null while nothing flows."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/ShipBuildId",
+            "description": "The build."
+          },
+          "rate_g_per_h": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Grams per hour being delivered until `valid_until`."
+          },
+          "ship_type": {
+            "$ref": "#/components/schemas/ShipType",
+            "description": "What it builds."
+          },
+          "shipyard_id": {
+            "$ref": "#/components/schemas/BuildingId",
+            "description": "The Shipyard."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ShipBuildState",
+            "description": "Active or waiting."
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FlowStatus",
+                "description": "How its flow is doing; absent when it has none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ShipId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "A ship.\n\nA JSON integer. Entity IDs come from one engine counter, so leaving JavaScript's safe\nrange (2^53) would take about 9×10^15 entities (D-045).",
+        "minimum": 0
+      },
+      "ShipType": {
+        "type": "string",
+        "description": "What a ship is.",
+        "enum": [
+          "colony_ship",
+          "cargo_vessel"
+        ]
+      },
+      "Stock": {
+        "type": "object",
+        "description": "One resource in a planet's storage, valid from `as_of` until `valid_until`.",
+        "required": [
+          "amount_g",
+          "rate_g_per_h",
+          "cap_g"
+        ],
+        "properties": {
+          "amount_g": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Grams in storage at `as_of`."
+          },
+          "cap_g": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The storage cap, in grams."
+          },
+          "rate_g_per_h": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its rate until `valid_until`, in grams per hour; negative while it falls."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Stocks": {
+        "type": "object",
+        "description": "A planet's storage, per resource.",
+        "required": [
+          "iron_ore",
+          "iron_ingot"
+        ],
+        "properties": {
+          "iron_ingot": {
+            "$ref": "#/components/schemas/Stock",
+            "description": "Iron ingots."
+          },
+          "iron_ore": {
+            "$ref": "#/components/schemas/Stock",
+            "description": "Iron ore."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "A game time: the universe epoch plus game time, as RFC 3339 UTC with milliseconds, always\n(`2026-10-01T21:00:00.000Z`). Game time is in milliseconds, so a time cut to seconds would be\noff by up to 999 ms. The server formats it (P3.4, with D-044's stable epoch).",
+        "example": "2026-10-01T21:00:00.000Z",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}

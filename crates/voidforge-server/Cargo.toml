@@ -20,10 +20,12 @@ voidforge-telemetry.workspace = true
 voidforge-worldgen.workspace = true
 
 [dev-dependencies]
-# The database-stage tests boot the host on a seeded database (P2.9, D-043).
+# The database-stage tests boot the host on a seeded database (P2.9, D-043); api_codes checks the
+# API's game codes against the core's (P3.1, D-045).
 serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+voidforge-api-types.workspace = true
 voidforge-core.workspace = true
 voidforge-host.workspace = true
 voidforge-testkit.workspace = true

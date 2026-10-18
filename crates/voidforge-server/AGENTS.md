@@ -8,7 +8,7 @@ Binary. P2.9 added its first subcommand, `seed`, the universe bootstrap ([D-043]
 
 - Workspace: `voidforge-host`, `voidforge-store`, `voidforge-rules`, `voidforge-worldgen`, `voidforge-api-types`, `voidforge-telemetry`.
 - External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): The API stack from the Tech stack: tokio, axum, tower-http, jsonwebtoken, uuid (v7), utoipa, tower_governor, clap and anyhow.
-- Never: voidforge-core directly. Engine state changes only through the host. (Its database-stage tests take core as a dev-dependency only, to build a Join game command for the host.)
+- Never: voidforge-core directly. Engine state changes only through the host. (Its tests take core as a dev-dependency only: the database-stage tests build a Join game command for the host, and `tests/api_codes.rs` checks the API's game codes against the core's reason codes, D-045.)
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
 ## Invariants

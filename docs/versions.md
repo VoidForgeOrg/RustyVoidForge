@@ -62,7 +62,7 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 
 ## Crate dependencies
 
-The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, axum, tower-http, reqwest, uuid, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
+The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, axum, tower-http, reqwest, uuid, jsonwebtoken, openidconnect, maud, tower-sessions, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
@@ -77,9 +77,11 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | postcard | =1.1.3 (alloc, default features off) | testkit (dev-only crate), for canonical bytes; store from P2.2, a runtime dependency (the snapshot codec) | P1.5 | D-024, D-035 |
 | blake3 | =1.8.7 (pure, default features off) | store, the state hash | P2.2 | D-035 |
 | rand_chacha | =0.9.0 (default features off) | worldgen, the only randomness source, seeded from the universe seed; already in the tree through opentelemetry_sdk's rand 0.9, so no new crate or duplicate | P1.12 | D-031 |
-| serde | =1.0.229 (std, derive) | rules; core from P1.3 | P1.2 | D-020, D-022 |
-| serde_json | =1.0.154 (std) | core and testkit, dev-dependency only; store from P2.3, the log's JSON columns | P1.3 | D-022, D-036 |
+| serde | =1.0.229 (std, derive) | rules; core from P1.3; api-types from P3.1 | P1.2 | D-020, D-022, D-045 |
+| serde_json | =1.0.154 (std) | core and testkit, dev-dependency only; store from P2.3, the log's JSON columns; api-types from P3.1 | P1.3 | D-022, D-036, D-045 |
 | sqlx | =0.9.0 (postgres, runtime-tokio, macros, migrate; default features off) | store | P2.1 | D-034 |
 | toml | =1.1.8 (std, parse, serde) | rules | P1.2 | D-020 |
 | tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest | P2.3 | D-036 |
 | clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line | P2.7 | D-041 |
+| utoipa | =6.0.0 (macros; default features off) | api-types, the OpenAPI document | P3.1 | D-045 |
+| boon | =0.6.1 (default features off) | api-types, dev-dependency only: validates examples against the OpenAPI schemas (draft 2020-12) | P3.1 | D-045 |

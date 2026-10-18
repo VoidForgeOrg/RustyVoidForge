@@ -950,3 +950,51 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **D-043's wording**: the default cube's limits are `Exhausted` from about 241 to 256 players (seed-dependent) and `Infeasible` from 902 to 5,000, below the 5,000-player cap.
 - Carried: `crash_nightly` shares the per-PR `file-{seed}` scratch prefix; it gets its own before P5.3 schedules it (review-r1 INFO).
 - Where it's enforced: `crates/voidforge-store/src/{golden.rs, verify.rs}`, `crates/voidforge-replay/src/main.rs`, `crates/voidforge-store/tests/verify.rs`, `crates/voidforge-host/tests/{golden.rs, common/mod.rs}`, `crates/voidforge-replay/tests/{cli.rs, postgres.rs}`, `.github/scripts/{database.sh, database-lock.sh, test-database-lock.sh}`, `.github/workflows/ci.yml`, `justfile`.
+
+### D-045: The public API wire contract
+
+- Date and package: 2026-10-18, P3.1. Proposed by dev-build (`slices/31-p3-1-api-types/proposal-api-types.md`). Lead ruling, with an addendum on the dependency audit and the 401 codes (`ruling-lead.md`). None of it is game intent; all of it is API contract. The advisor may review it, and any amendment lands as a follow-up before Phase 4 consumes the contract.
+- Decision:
+  - **`voidforge-api-types` holds the contract** as plain serde types with no workspace dependency (`command`, `event`, `view`, `error`, `wire`), plus `openapi()` for the OpenAPI 3.1 document. The server maps between them and the core (P3.4).
+  - **Wire values:**
+    - entity IDs are JSON integers (`u64`). They come from one engine counter, so leaving JavaScript's safe range (2^53) would take about 9×10^15 entities;
+    - player IDs are lowercase hyphenated UUID strings (`format uuid`, with a pattern);
+    - game times are RFC 3339 UTC with milliseconds, always (`2026-10-01T21:00:00.000Z`, with a pattern): game time is in milliseconds, and an `eta` cut to seconds would be off by up to 999 ms;
+    - amounts are integer grams (`_g`), rates grams per hour (`_g_per_h`), positions and distances distance units (D-021);
+    - enums are snake_case strings, and the resources are `iron_ore` and `iron_ingot`, in stocks and in cargo (`iron_ore_g`, `iron_ingot_g`).
+  - **Commands:**
+    - The body is `{"type", "payload"}` with one of the **ten player actions**. **Join game isn't public**: the server issues it on a player's first call (Decision 9, P3.3), so `join_game` is 400 `malformed_body`. The Architectural Design's "eleven command types" sentence is amended.
+    - Unknown fields are refused, at the envelope and in each payload, by serde and by the schema.
+    - `assemble_fleet.ship_ids` is a list with `uniqueItems`. The API refuses a duplicate at its edge with 400 `duplicate_ship_ids` (`AssembleFleet::check_unique_ships`), which closes D-029 Q1's obligation for P3.4. An empty list and negative cargo are well-formed, so they reach the core's 422 `no_ships` and `invalid_cargo`.
+    - `IdempotencyKey::parse` carries D-037's rule: missing is 400 `missing_idempotency_key`, invalid is 400 `invalid_idempotency_key`.
+    - 200 is `{"seq", "game_time", "events"}`. A repeated key returns the first response, at any age (D-037).
+  - **The response's events are the command's own events only. This is a privacy requirement, not tidiness.** The log record also holds the events of advancing to the command's time, and those can be other players' owner-only information (a fleet arrival, D-030). P3.4 must never add them back. The record's `own_events` count (D-037) rebuilds the same list for a repeated key.
+  - **Events** are internally tagged by `type`: `building_completed`, `ship_completed`, `demolition_completed`, `fleet_arrived`, `planet_colonized`, `colonization_failed`, `cargo_unloaded`, `fleet_removed` and `fleet_returned`, with `_id` and `_type` names.
+  - **Views:** every view has `as_of` and `valid_until` (always present, null when nothing is scheduled). Every continuous value has its `rate_g_per_h`, every stock its `cap_g`, and every progress its exact `eta` (null while nothing flows).
+    - The planet view is the architecture's example, extended:
+      - `rate_g_per_h` on progress, which the every-continuous-value invariant requires;
+      - `position`, `slots`, `ship_builds` and `roster`;
+      - buildings tagged by `state` (`under_construction`, `operational`, `demolishing` with `demolition_ends_at`), with an optional flow `status` (`running`, `throttled`, `halted`).
+    - The architecture's example is updated to the contract (milliseconds, the rate) and marked abridged.
+    - Planets near, the player (`player_id`, `homeworld_id`, `planet_ids`, `score`) and the player's fleets (tagged by `state`: `stationed`, `in_transit`, `returning`).
+    - **There's no display name**: the accounts table has none. Adding an optional one later is backward compatible.
+    - The leaderboard (P3.5) is `{as_of, entries: [{rank, player_id, score}]}`, ordered by score descending, then player ID. `rank` is competition ranking, so ties share a rank.
+  - **Errors:** one body for every non-2xx status, `{"code", "message"}`. `code` is a closed enum (`ErrorCode`, with `status()`); `message` is for people.
+
+    | Status | Codes |
+    | --- | --- |
+    | 400 | `malformed_body`, `missing_idempotency_key`, `invalid_idempotency_key`, `duplicate_ship_ids`, `invalid_query` |
+    | 401 | `missing_token` (no Authorization header; it reveals nothing); `invalid_token` for **every** verification failure (expired, foreign issuer or audience, bad signature), so the API never says which check failed |
+    | 404 | `not_found`; `GET /planets/{id}` answers `unknown_planet` with 404 |
+    | 422 | the core's **31 reason codes verbatim** (D-028, D-029), plus `idempotency_key_conflict` (D-037) |
+    | 429 | `rate_limited` (P3.8) |
+    | 500 | `internal` |
+    | 503 | `busy` (a full inbox, with Retry-After), `unavailable` |
+
+    The 422 codes are kept verbatim mechanically: `crates/voidforge-server/tests/api_codes.rs` (the server's tests may use the core, D-043) maps every `Rejection` to its `ErrorCode` in an exhaustive match. So a new core reason code fails to compile until the API names it, and every API game code must deserialize as a `Rejection` with the same `code()`. The API's codes and the command-line tools' exit codes (D-041) are separate contracts.
+  - **`openapi.json` is checked in** beside the crate. A freshness test fails on any byte of difference from `openapi()`, and `just openapi` rewrites it, as `just bless` does for goldens (D-040). **A reviewer checks every change to it.** The document has the six paths (described in api-types on doc-only functions, so P3.4's handlers must match), the bearer scheme (P3.2) and the required `Idempotency-Key` header. A modifier closes each variant of the command and event unions, because utoipa leaves a tagged variant's object open while serde refuses unknown fields there.
+  - **Dependencies:**
+    - **utoipa `=6.0.0`** (macros only, default features off) adds 2 crates (utoipa, utoipa-gen), with no new license and no duplicate. It reaches the web client and the bots through api-types.
+    - **boon `=0.6.1`** (dev-only) validates against draft 2020-12, the dialect of OpenAPI 3.1. It adds 10 crates and no duplicate; jsonschema `=0.59.0` would have added 33. jsonschema stays the stated fallback, unused, because boon resolves utoipa's `$ref`s.
+    - boon pulls in borrow-or-share, licensed **MIT-0** (MIT without the attribution clause, OSI-approved), which joins `deny.toml`'s license allow list (D-008).
+- Where it's enforced: `crates/voidforge-api-types/` (`src/`, `openapi.json`, `tests/contract.rs`, `tests/openapi_file.rs`), `crates/voidforge-server/tests/api_codes.rs`, `justfile` (`openapi`), `deny.toml`, the [version table](versions.md), the Architectural Design's Read side and API.

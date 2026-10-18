@@ -332,27 +332,27 @@ Reads never go through the command path. The host publishes an immutable read mo
 - `view(query, now)` is valid until each entity's next event; the host keeps the read model fresh by processing due events promptly.
 - Every continuous value comes with `rate_g_per_h`, `as_of` and `valid_until` (the entity's next event), and stocks with `cap_g`. Clients animate counters locally and know when to refetch.
 - Completion estimates (`eta`) are exact under current rates and carry the same `valid_until`.
-- Game times leave the API as ISO 8601 UTC timestamps (universe epoch + game time); amounts leave as integer grams.
+- Game times leave the API as ISO 8601 UTC timestamps (universe epoch + game time), in RFC 3339 form with milliseconds, always (D-045); amounts leave as integer grams.
 - Score is computed per request from `ScoringSpecs`: planets, finished buildings (operational ones; a building stops counting when its demolition begins), each finished ship once (roster or fleet), builds in progress at points × delivered ÷ cost (rounded down), and resources in storage or cargo.
 - The leaderboard is rebuilt every 60 seconds from the read model and served with its `as_of`. It is the only fixed-interval computation besides snapshots.
 - Post-MVP: Domain events stream to each player over SSE or WebSocket, with the log `seq` as the resume token. Until then clients poll the read API, using valid\_until to know when a view next changes; a domain-event feed is post-MVP too.
 - Planet data is public to all players; fleets are visible only to their owner.
 
-Example planet view, with illustrative values:
+Example planet view, with illustrative values. It's abridged: the full view also has `position`, `slots`, `ship_builds` and `roster`, and `crates/voidforge-api-types/openapi.json` is the contract (D-045).
 
 ```json
 {
   "planet_id": 1042,
   "owner": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
-  "as_of": "2026-10-01T12:00:00Z",
-  "valid_until": "2026-10-01T21:00:00Z",
+  "as_of": "2026-10-01T12:00:00.000Z",
+  "valid_until": "2026-10-01T21:00:00.000Z",
   "stocks": {
     "iron_ore": { "amount_g": 8400000000, "rate_g_per_h": -100000000, "cap_g": 10000000000 },
     "iron_ingot": { "amount_g": 1200000000, "rate_g_per_h": 40000000, "cap_g": 5000000000 }
   },
   "buildings": [
     { "id": 5001, "type": "drill", "state": "operational", "status": "running" },
-    { "id": 5007, "type": "refinery", "state": "under_construction", "delivered_g": 300000000, "cost_g": 900000000, "eta": "2026-10-01T21:00:00Z" }
+    { "id": 5007, "type": "refinery", "state": "under_construction", "delivered_g": 360000000, "cost_g": 900000000, "rate_g_per_h": 60000000, "eta": "2026-10-01T21:00:00.000Z" }
   ]
 }
 ```
@@ -366,7 +366,7 @@ Example planet view, with illustrative values:
 | `GET /players/me/fleets` | The player's fleets |
 | `GET /leaderboard` | Ranked scores with `as_of` |
 
-All writes go through the single `POST /commands` endpoint. Its body names one of the eleven command types from Commands, so every write maps one-to-one onto a log record; the player comes from the auth token, never from the body.
+All writes go through the single `POST /commands` endpoint. Its body names one of the ten player actions from Commands, so every write maps one-to-one onto a log record; the player comes from the auth token, never from the body. Join game isn't in the public body: the server issues it on a player's first call (D-045).
 
 ```json
 {
