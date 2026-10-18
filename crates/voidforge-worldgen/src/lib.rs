@@ -13,6 +13,9 @@
 
 // Determinism guardrails (Technical Plan P0.4). Forbidden, so no item can opt out; the banned
 // paths are in this crate's clippy.toml.
+// Every integer operation in the library is checked or strict (D-032), so nothing wraps
+// silently in release; unit tests are exempt.
+#![cfg_attr(not(test), forbid(clippy::arithmetic_side_effects))]
 #![forbid(
     clippy::disallowed_methods,
     clippy::disallowed_types,
@@ -80,7 +83,8 @@ pub fn generate(seed: u64, players: u32, rules: &Rules) -> Result<World, Worldge
     let spacing = g.min_planet_spacing_du / unit;
     let home_spacing = g.homeworld_min_spacing_du / unit;
     let radius = g.homeworld_neighbor_radius_du / unit;
-    let total = u64::from(players) * u64::from(g.planets_per_expected_player);
+    // Two u32 values in u64 (D-032).
+    let total = u64::from(players).strict_mul(u64::from(g.planets_per_expected_player));
 
     // Necessary packing bounds. Balls of radius s/2 around n points pairwise s apart are
     // disjoint and lie in the cube widened by s/2 on each side, so n × (π/6) × s³ ≤ (L + s)³.
@@ -91,7 +95,7 @@ pub fn generate(seed: u64, players: u32, rules: &Rules) -> Result<World, Worldge
     let packs = |n: u64, s: i64| {
         i128::from(n)
             .checked_mul(cube(s))
-            .is_some_and(|need| need <= 2 * cube(side + s))
+            .is_some_and(|need| need <= cube(side.strict_add(s)).strict_mul(2))
     };
     if !packs(total, spacing) {
         return Err(WorldgenError::Infeasible(
@@ -118,7 +122,7 @@ pub fn generate(seed: u64, players: u32, rules: &Rules) -> Result<World, Worldge
         .filter(|&i| counts[i] >= min_neighbors)
         .collect();
     for i in (1..eligible.len()).rev() {
-        let j = below(&mut rng, i as u64 + 1) as usize;
+        let j = below(&mut rng, (i as u64).strict_add(1)) as usize;
         eligible.swap(i, j);
     }
     let mut chosen: Vec<usize> = Vec::new();
@@ -149,9 +153,11 @@ pub fn generate(seed: u64, players: u32, rules: &Rules) -> Result<World, Worldge
             Planet {
                 id,
                 position: Position {
-                    x: p[0] * unit,
-                    y: p[1] * unit,
-                    z: p[2] * unit,
+                    // A coordinate below the side, times 1,000, is below the cube_size_du it came
+                    // from (D-032).
+                    x: p[0].strict_mul(unit),
+                    y: p[1].strict_mul(unit),
+                    z: p[2].strict_mul(unit),
                 },
                 owner: None,
                 slots: rules.planet.slots,
@@ -194,7 +200,7 @@ impl Placed {
 
     fn cell(&self, p: [i64; 3]) -> [i64; 3] {
         let c = self.spacing.max(1);
-        [p[0] / c, p[1] / c, p[2] / c]
+        [p[0].strict_div(c), p[1].strict_div(c), p[2].strict_div(c)]
     }
 
     /// Whether `p` keeps at least the spacing from every placed point.
@@ -226,7 +232,15 @@ fn adjacent(
     c: [i64; 3],
 ) -> impl Iterator<Item = usize> + '_ {
     (0..27)
-        .filter_map(move |k| grid.get(&[c[0] + k / 9 - 1, c[1] + k / 3 % 3 - 1, c[2] + k % 3 - 1]))
+        // Cells are coordinates divided by a positive size, so ±1 cannot overflow (D-032).
+        .filter_map(move |k: i64| {
+            let d = [
+                k.strict_div(9),
+                k.strict_div(3).strict_rem(3),
+                k.strict_rem(3),
+            ];
+            grid.get(&[0, 1, 2].map(|i| c[i].strict_add(d[i]).strict_sub(1)))
+        })
         .flatten()
         .copied()
 }
@@ -235,7 +249,7 @@ fn adjacent(
 /// size `radius` so only the 27 surrounding cells are searched.
 fn neighbor_counts(points: &[[i64; 3]], radius: i64) -> Vec<usize> {
     let c = radius.max(1);
-    let cell = |p: [i64; 3]| [p[0] / c, p[1] / c, p[2] / c];
+    let cell = |p: [i64; 3]| [p[0].strict_div(c), p[1].strict_div(c), p[2].strict_div(c)];
     let mut grid: BTreeMap<[i64; 3], Vec<usize>> = BTreeMap::new();
     for (i, &p) in points.iter().enumerate() {
         grid.entry(cell(p)).or_default().push(i);
@@ -256,11 +270,12 @@ fn neighbor_counts(points: &[[i64; 3]], radius: i64) -> Vec<usize> {
 /// number of draws is below 2 and k rejections in a row have probability below 2^-k.
 fn below(rng: &mut ChaCha8Rng, n: u64) -> u64 {
     let n = u128::from(n.max(1));
-    let accept = (1u128 << 64) / n * n;
+    // n ≥ 1, and ⌊2^64 / n⌋ × n ≤ 2^64 (D-032).
+    let accept = (1u128 << 64).strict_div(n).strict_mul(n);
     loop {
         let v = u128::from(rng.next_u64());
         if v < accept {
-            return (v % n) as u64;
+            return v.strict_rem(n) as u64;
         }
     }
 }
@@ -272,15 +287,21 @@ fn uniform(rng: &mut ChaCha8Rng, side: i64) -> [i64; 3] {
 }
 
 fn dist2(a: [i64; 3], b: [i64; 3]) -> i128 {
-    (0..3).map(|i| sq(a[i] - b[i])).sum()
+    // Coordinates are below 10^9 units (the validated range), so differences, squares and the
+    // sum of three fit easily (D-032).
+    (0..3)
+        .map(|i| sq(a[i].strict_sub(b[i])))
+        .fold(0, i128::strict_add)
 }
 
 fn sq(x: i64) -> i128 {
-    i128::from(x) * i128::from(x)
+    i128::from(x).strict_mul(i128::from(x))
 }
 
 fn cube(x: i64) -> i128 {
-    i128::from(x) * i128::from(x) * i128::from(x)
+    i128::from(x)
+        .strict_mul(i128::from(x))
+        .strict_mul(i128::from(x))
 }
 
 #[cfg(test)]

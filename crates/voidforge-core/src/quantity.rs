@@ -142,13 +142,15 @@ impl Quantity {
     /// The value at `time_ms`, without changing the quantity.
     pub fn value_at(&self, time_ms: i64) -> Result<i64, QuantityError> {
         let (whole, _) = self.progress(time_ms)?;
-        i64::try_from(i128::from(self.value_g) + whole).map_err(|_| QuantityError::ValueOutOfRange)
+        // |whole| < 2^127 / H < 2^106 and |value| < 2^63: the sum fits (D-032).
+        i64::try_from(i128::from(self.value_g).strict_add(whole))
+            .map_err(|_| QuantityError::ValueOutOfRange)
     }
 
     /// The same quantity checkpointed at `time_ms`: value brought forward, remainder carried.
     pub fn advanced_to(&self, time_ms: i64) -> Result<Self, QuantityError> {
         let (whole, remainder) = self.progress(time_ms)?;
-        let value_g = i64::try_from(i128::from(self.value_g) + whole)
+        let value_g = i64::try_from(i128::from(self.value_g).strict_add(whole))
             .map_err(|_| QuantityError::ValueOutOfRange)?;
         let remainder = i64::try_from(remainder).map_err(|_| QuantityError::ValueOutOfRange)?;
         Ok(Self {
@@ -177,8 +179,12 @@ impl Quantity {
             return Ok(None);
         }
         // Smallest dt with rate*dt + remainder >= (boundary - value) * H.
-        let needed =
-            (i128::from(boundary_g) - i128::from(self.value_g)) * H - i128::from(self.remainder);
+        // Operands are i64 values widened: |boundary − value| < 2^64, times H < 2^22, gives
+        // < 2^86, minus a remainder < 2^22: all within i128 (D-032).
+        let needed = i128::from(boundary_g)
+            .strict_sub(i128::from(self.value_g))
+            .strict_mul(H)
+            .strict_sub(i128::from(self.remainder));
         let dt = ceil_div(needed, i128::from(self.rate_g_per_h));
         self.time_after(dt).map(Some)
     }
@@ -196,10 +202,14 @@ impl Quantity {
         // speed = -rate the answer is the smallest dt with speed*dt > (value - boundary - 1) * H
         // + remainder. Not the mirror of the rising formula: flooring makes a falling quantity
         // lose its next whole gram as soon as the remainder would go negative.
-        let speed = -i128::from(self.rate_g_per_h);
-        let below = (i128::from(self.value_g) - i128::from(boundary_g) - 1) * H
-            + i128::from(self.remainder);
-        let dt = below.div_euclid(speed) + 1;
+        // As in the rising case, every operand is an i64 widened: < 2^86 in magnitude (D-032).
+        let speed = i128::from(self.rate_g_per_h).strict_neg();
+        let below = i128::from(self.value_g)
+            .strict_sub(i128::from(boundary_g))
+            .strict_sub(1)
+            .strict_mul(H)
+            .strict_add(i128::from(self.remainder));
+        let dt = below.div_euclid(speed).strict_add(1);
         self.time_after(dt).map(Some)
     }
 
@@ -233,11 +243,13 @@ impl Quantity {
                 checkpoint_ms: self.checkpoint_ms,
             });
         }
-        Ok(i128::from(time_ms) - i128::from(self.checkpoint_ms))
+        // Two i64 values widened: the difference fits (D-032).
+        Ok(i128::from(time_ms).strict_sub(i128::from(self.checkpoint_ms)))
     }
 
     fn time_after(&self, dt: i128) -> Result<i64, QuantityError> {
-        i64::try_from(i128::from(self.checkpoint_ms) + dt)
+        // dt is a quotient of values < 2^86, so the sum fits in i128 (D-032).
+        i64::try_from(i128::from(self.checkpoint_ms).strict_add(dt))
             .map_err(|_| QuantityError::TimeOutOfRange)
     }
 }
@@ -245,7 +257,8 @@ impl Quantity {
 /// `ceil(numerator / denominator)` for a positive denominator, rounding toward positive infinity
 /// for either sign of the numerator.
 fn ceil_div(numerator: i128, denominator: i128) -> i128 {
-    -((-numerator).div_euclid(denominator))
+    // The callers' numerators are below 2^86 in magnitude, so negation cannot overflow (D-032).
+    numerator.strict_neg().div_euclid(denominator).strict_neg()
 }
 
 #[cfg(test)]

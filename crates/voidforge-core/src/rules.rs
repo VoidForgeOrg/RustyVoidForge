@@ -79,12 +79,14 @@ impl BuildCost {
         if self.build_time_ms <= 0 {
             return None;
         }
-        let scaled = i128::from(self.cost_g) * i128::from(MS_PER_HOUR);
+        // An i64 times MS_PER_HOUR (< 2^22) is below 2^85 (D-032).
+        let scaled = i128::from(self.cost_g).strict_mul(i128::from(MS_PER_HOUR));
         let time = i128::from(self.build_time_ms);
-        if scaled % time != 0 {
+        // time is positive, checked above (D-032).
+        if scaled.strict_rem(time) != 0 {
             return None;
         }
-        i64::try_from(scaled / time).ok()
+        i64::try_from(scaled.strict_div(time)).ok()
     }
 }
 
@@ -229,7 +231,8 @@ impl Rules {
         positive("planet.ingot_cap_g", planet.ingot_cap_g)?;
 
         let home = &self.homeworld;
-        let buildings = i64::from(home.drills) + i64::from(home.refineries);
+        // Two u32 values in i64 (D-032).
+        let buildings = i64::from(home.drills).strict_add(i64::from(home.refineries));
         if buildings > i64::from(planet.slots) {
             return Err(problem(
                 "homeworld",
@@ -276,7 +279,9 @@ impl Rules {
         )?;
         positive("buildings.refinery.intake_g_per_h", refinery.intake_g_per_h)?;
         positive("buildings.refinery.ingots_per_ore", refinery.ingots_per_ore)?;
-        let expected = i128::from(refinery.intake_g_per_h) * i128::from(refinery.ingots_per_ore);
+        // Two i64 values in i128: below 2^126 (D-032).
+        let expected =
+            i128::from(refinery.intake_g_per_h).strict_mul(i128::from(refinery.ingots_per_ore));
         if i128::from(refinery.output_g_per_h) != expected {
             return Err(problem(
                 "buildings.refinery.output_g_per_h",
@@ -339,7 +344,8 @@ impl Rules {
             ("ships.cargo_vessel.cost_g", cargo.build),
         ] {
             let rate = build.rate_g_per_h().unwrap_or_default();
-            if rate % refinery.ingots_per_ore != 0 {
+            // ingots_per_ore is positive, checked above (D-032).
+            if rate.strict_rem(refinery.ingots_per_ore) != 0 {
                 return Err(problem(
                     field,
                     format!(
@@ -434,7 +440,7 @@ impl Rules {
             ));
         }
         // Every value is at most MAX_WORLDGEN_DU, so these products are exact.
-        if home * home > 3 * side * side {
+        if home.strict_mul(home) > side.strict_mul(side).strict_mul(3) {
             return Err(problem(
                 "worldgen.homeworld_min_spacing_du",
                 format!("must not exceed the cube's diagonal (side {side})"),
@@ -454,10 +460,12 @@ impl Rules {
             // neighbors are disjoint and lie in the ball of radius r + s/2, so
             // (n + 1) × s³ ≤ (2r + s)³. The right side is exact (r, s ≤ MAX_WORLDGEN_DU); a
             // left side beyond i128 is larger still.
-            let reach = 2 * radius + spacing;
-            let fits = (neighbors + 1)
-                .checked_mul(spacing * spacing * spacing)
-                .is_some_and(|need| need <= reach * reach * reach);
+            // r, s ≤ MAX_WORLDGEN_DU (10^12): 2r + s < 2^42 and its cube < 2^126 (D-032).
+            let reach = radius.strict_mul(2).strict_add(spacing);
+            let fits = neighbors
+                .strict_add(1)
+                .checked_mul(spacing.strict_mul(spacing).strict_mul(spacing))
+                .is_some_and(|need| need <= reach.strict_mul(reach).strict_mul(reach));
             if !fits {
                 return Err(problem(
                     "worldgen.homeworld_min_neighbors",
@@ -467,12 +475,12 @@ impl Rules {
                 ));
             }
         }
-        if i128::from(world.planets_per_expected_player) < 1 + neighbors {
+        if i128::from(world.planets_per_expected_player) < neighbors.strict_add(1) {
             return Err(problem(
                 "worldgen.planets_per_expected_player",
                 format!(
                     "must be at least 1 + homeworld_min_neighbors ({})",
-                    1 + neighbors
+                    neighbors.strict_add(1)
                 ),
             ));
         }
@@ -603,12 +611,13 @@ fn build_cost(
 ) -> Result<(), RulesError> {
     positive(cost_field, build.cost_g)?;
     positive(time_field, build.build_time_ms)?;
-    let scaled = i128::from(build.cost_g) * i128::from(MS_PER_HOUR);
+    // Positive i64 values: the product is below 2^85 and time is positive (D-032).
+    let scaled = i128::from(build.cost_g).strict_mul(i128::from(MS_PER_HOUR));
     let time = i128::from(build.build_time_ms);
     if build.rate_g_per_h().is_some() {
         return Ok(());
     }
-    if scaled % time != 0 {
+    if scaled.strict_rem(time) != 0 {
         return Err(problem(
             cost_field,
             format!(

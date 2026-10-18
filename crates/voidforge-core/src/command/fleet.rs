@@ -128,7 +128,11 @@ impl World {
                 // of time it may not be, and a player's command must never poison (D-029).
                 FleetState::InTransit { departed_at_ms, .. } => {
                     let now = self.time_ms;
-                    match (now - departed_at_ms).checked_add(now) {
+                    // Checked: a departure far in the past can make either step overflow (D-032).
+                    match now
+                        .checked_sub(departed_at_ms)
+                        .and_then(|traveled| traveled.checked_add(now))
+                    {
                         Some(_) => Ok(()),
                         None => Err(Rejection::UnreachableTarget),
                     }

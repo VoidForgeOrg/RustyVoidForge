@@ -100,7 +100,8 @@ pub fn even_split(supply: i64, demands: &[(u64, i64)]) -> Vec<i64> {
     let mut left = supply.max(0);
     while !open.is_empty() && left > 0 {
         let n = open.len() as i64;
-        let share = left / n;
+        // n ≥ 1 while consumers remain; left ≥ 0 (D-032).
+        let share = left.strict_div(n);
         let (met, short): (Vec<usize>, Vec<usize>) =
             open.iter().partition(|&&i| demands[i].1 <= share);
         if met.is_empty() {
@@ -108,15 +109,18 @@ pub fn even_split(supply: i64, demands: &[(u64, i64)]) -> Vec<i64> {
             for &i in &open {
                 given[i] = share;
             }
-            left -= share * n;
+            // share × n ≤ left by the division above (D-032).
+            left = left.strict_sub(share.strict_mul(n));
             for &i in open.iter().take(left as usize) {
-                given[i] += 1;
+                // given[i] = share < demand here, so one more fits (D-032).
+                given[i] = given[i].strict_add(1);
             }
             break;
         }
         for &i in &met {
             given[i] = demands[i].1;
-            left -= demands[i].1;
+            // A met demand is at most the share, which is at most left (D-032).
+            left = left.strict_sub(demands[i].1);
         }
         open = short;
     }
@@ -212,7 +216,8 @@ fn flows_with(
         a = a.min(e);
     }
     if ingots_full {
-        a = a.min(demand / ratio);
+        // ingots_per_ore is positive by validation (D-032).
+        a = a.min(demand.strict_div(ratio));
     }
     let o = ratio.checked_mul(a).ok_or(EngineError::RateOutOfRange {
         planet,
@@ -267,8 +272,8 @@ fn flows_with(
         ingot_demand: demand,
         ingots_delivered,
         drill_actual,
-        ore_net: drill_actual - a,
-        ingot_net: o - ingots_delivered,
+        ore_net: drill_actual.strict_sub(a),
+        ingot_net: o.strict_sub(ingots_delivered),
         buildings,
         ship_builds,
     })
@@ -397,7 +402,8 @@ impl World {
             .values()
             .filter(|b| p.buildings.contains(&b.shipyard))
             .count();
-        p.buildings.len() + builds
+        // Two counts of entities held in memory (D-032).
+        p.buildings.len().strict_add(builds)
     }
 
     fn solve(
@@ -488,13 +494,14 @@ impl World {
     ) -> Result<Vec<DomainEvent>, EngineError> {
         let now = self.time_ms;
         let mut events = Vec::new();
-        let mut rounds = 0;
+        let mut rounds: usize = 0;
         loop {
             let due = self.due_transitions(planet, now);
             if due.is_empty() {
                 return Ok(events);
             }
-            rounds += 1;
+            // At most bound + 1 before the guard returns (D-032).
+            rounds = rounds.strict_add(1);
             if rounds > bound {
                 return Err(EngineError::TransitionLoop { planet, rounds });
             }

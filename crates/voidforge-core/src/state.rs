@@ -564,7 +564,8 @@ impl World {
         if id == u64::MAX {
             return Err(StateError::IdsExhausted(id));
         }
-        self.next_id = id + 1;
+        // id < u64::MAX, checked above (D-032).
+        self.next_id = id.strict_add(1);
         Ok(id)
     }
 
