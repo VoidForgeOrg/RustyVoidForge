@@ -428,6 +428,22 @@ where
         "A's snapshot, B's tail"
     );
     assert_eq!(again.world, b_world);
+    // The replay tool's verification agrees with recovery (phase 2 gate, R1 LOW): from A's
+    // snapshot, B's records verify under B's pin, and A's pin refuses B's first record.
+    let verified =
+        voidforge_store::verify::verify_log(&mut inspect, &rules, &upgraded(), Some(2), None)
+            .await
+            .unwrap();
+    assert_eq!((verified.start_seq, verified.last_seq), (2, 4));
+    assert_eq!(verified.world, b_world);
+    let refused =
+        voidforge_store::verify::verify_log(&mut inspect, &rules, &build(), Some(2), None)
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(&refused, voidforge_store::verify::VerifyError::Refused(f) if (f.seq, f.what) == (Some(3), "build")),
+        "{refused:?}"
+    );
     // Rollback after B wrote records without a snapshot: A would have to replay B's records,
     // refused.
     assert!(matches!(
