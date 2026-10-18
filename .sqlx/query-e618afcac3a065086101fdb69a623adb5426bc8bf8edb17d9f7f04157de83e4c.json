@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM snapshots WHERE seq = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e618afcac3a065086101fdb69a623adb5426bc8bf8edb17d9f7f04157de83e4c"
+}

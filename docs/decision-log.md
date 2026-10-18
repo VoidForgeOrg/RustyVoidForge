@@ -726,3 +726,48 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **`own_events` amends D-036's outcome form.** An accepted command's outcome is `{"result":"accepted","own_events":n}`: the record's last n events are the command's own, and the ones before them came due in the apply's advance. A receipt rebuilt from the log (after a restart, or past the window) is then exact. Replay is unaffected; it still compares the flattened list.
   - **`MemoryLog` refuses a duplicate (player, key)** as the table does, so a duplicate reaching the append stops the host on the memory store too, and the tests see it.
 - Where it's enforced: `crates/voidforge-host/src/lib.rs` (the lookup and cache in each turn); `crates/voidforge-store/src/log.rs` (`IdempotencyKey`, `find_keys`, `keyed_since`, `Outcome::Accepted { own_events }`); `crates/voidforge-host/tests/idempotency.rs` and `postgres.rs`; and the shared test driver, which retries every third command in the round trip and the determinism runs.
+
+### D-038: Snapshots, recovery and the shared record→core function
+
+- Date and package: 2026-10-18, P2.5. Proposed by dev-design, acting as builder (`slices/23-p2-5-snapshots-recovery/proposal-recovery.md`). **Lead ruling; advisor review pending.** None of it is game intent.
+- Decision:
+  - **The shared function lives in `voidforge_store::replay`.** Store is a crate both host and replay may depend on (Project layering), and it defines the record; core can't hold it, because it's pure and the record isn't a core type.
+    - `step(world, Step::Command | Step::Advance, t, rules)` returns the flattened events, the record's outcome and the receipt's result.
+    - `replay_record` runs `step` on a logged record and compares its events and outcome (`Diverged`). It refuses another build's record (`CrossBuildRecord`), an unsupported kind, and a malformed record.
+    - `replay` runs a gap-free tail (`Gap`).
+    - **The host's live path builds every record from `step`.** It never calls `apply` or `advance_to` itself, and a source-level test enforces that. So recovery and replay can't drift from the live path.
+  - **Snapshots** are taken between turns, never mid-turn:
+    - after a durable turn once `snapshot_every_records` (default 1,000) records were appended since the last one;
+    - and at clean shutdown, unless the newest snapshot is already at the head.
+    - The row follows D-035's mapping, with seq = the last record included. A snapshot after an eventless advance includes it.
+    - **The read model names the log head from the start** (carry e, from dev-qa): a host spawned on a non-empty log publishes `seq` = the head, not 0.
+    - **A failed write isn't fatal but is loud:** an error event and `HostStats::snapshot_failures`, and the next schedule point retries.
+  - **Recovery** (`voidforge_host::recover`):
+    1. **the newest snapshot, of any build, and the whole tail after it must be the running build's records** (replay refuses another build's record: `CrossBuildRecord`). This single rule covers:
+       - a normal restart;
+       - an engine upgrade (the old build's shutdown snapshot at the head);
+       - a crash after an upgrade (the old build's snapshot plus the new build's tail);
+       - a rollback from a clean shutdown (the newer build's snapshot at the head).
+
+       It refuses any replay across builds, and a snapshot format this build can't read is a typed error. **Carry (f), from dev-qa.** Two earlier rules were rejected:
+       - "a matching build first, else another build only at the log head" can't recover a crash after an upgrade;
+       - "a matching build first" fails a rollback after a clean shutdown and can never do better than the newest of any build.
+
+       No snapshot at all is `NoSnapshot`
+    2. a strict `decode` (rules version in force, the row's build), with the row's columns cross-checked against the header (`ColumnMismatch`);
+    3. the later records replayed with verification;
+    4. `spawn`. The host catches up to now on its first wake and rebuilds the idempotency keys from the log (D-037).
+  - **Verification is event replay plus the state hash** (D-033): every replayed record must reproduce its events and outcome, and byte identity is checked by canonical bytes and the state hash. `check_links`, which runs inside decoding, is structural only and doesn't validate gameplay fields.
+  - **Unlogged eventless advances** (D-036's obligation) are reproduced implicitly: the next replayed step advances through the same instant to the same state (observation invariance, D-024). A snapshot taken after one includes it.
+  - **The P2.2 review's LOWs:** the header must be its own canonical encoding (`NonCanonicalHeader`); `decode_any` is documented as inspection only, with build metadata unverified, and recovery never uses it.
+- **Bounded repair 1** (dev-qa's findings, confirmed by review-r1):
+  - **M1:** `recover` refuses a snapshot whose seq is past the log head (`SnapshotPastHead { snapshot_seq, head }`). Recovering from one would make the next acknowledged commands vanish at the following recovery. Tested through both stores.
+  - **L1:** `replay_record` refuses a record whose `rules_version` isn't the supplied rules' (`RulesMismatch`), per Determinism rules.
+  - **L2:** it refuses a command record whose `player` column isn't the command's player (`Malformed`).
+  - **L3:** QA's two cases are in the suite: a record whose events were emptied diverges, and another build's *advance* record is refused.
+- Where it's enforced:
+  - `crates/voidforge-store/src/{replay.rs, log.rs, snapshot.rs}`;
+  - `crates/voidforge-host/src/lib.rs` (`recover`, the schedule, the shutdown snapshot);
+  - `crates/voidforge-host/tests/recovery.rs`: the crash table, byte identity (a named test and a property test), the carries, the snapshot choice, a tampered tail, another build's record, and the shared function;
+  - `postgres.rs` (recovery through Postgres);
+  - `determinism.rs` (a run through snapshot, restore and continue, in two processes).

@@ -11,7 +11,7 @@ use voidforge_core::rules::Rules;
 use voidforge_core::state::PlayerId;
 use voidforge_core::state::World;
 use voidforge_host::{HostConfig, HostHandle, ManualClock, Receipt};
-use voidforge_store::log::{IdempotencyKey, LogError, LogRecord, LogStore, MemoryLog};
+use voidforge_store::log::{IdempotencyKey, LogError, LogRecord, LogStore, MemoryLog, SnapshotRow};
 use voidforge_store::snapshot::EngineBuild;
 use voidforge_testkit::determinism::Economy;
 
@@ -96,6 +96,20 @@ impl LogStore for GatedLog {
     async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
         self.inner.keyed_since(since).await
     }
+    async fn records_after(&mut self, seq: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.inner.records_after(seq).await
+    }
+
+    async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        self.inner.write_snapshot(row).await
+    }
+
+    async fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> Result<Option<SnapshotRow>, LogError> {
+        self.inner.latest_snapshot(build).await
+    }
 }
 
 /// Waits until nothing in the published World is due at the clock's time: every due entry has
@@ -174,4 +188,324 @@ pub fn economy(seed: u64) -> Economy {
 /// The economy's starting World.
 pub fn start(e: &Economy, rules: &Rules) -> World {
     e.world(rules)
+}
+
+/// A store that makes each append durable and then reports it failed: the crash table's "after
+/// the append, before the reply" (the host stops; the record is in the log).
+#[derive(Clone)]
+pub struct AppendThenFail(pub MemoryLog);
+
+impl LogStore for AppendThenFail {
+    async fn last(&mut self) -> Result<Option<(i64, i64)>, LogError> {
+        self.0.last().await
+    }
+    async fn append(&mut self, records: &[LogRecord]) -> Result<(), LogError> {
+        self.0.append(records).await?;
+        Err(LogError::Memory("crashed after the append".to_owned()))
+    }
+    async fn records(&mut self) -> Result<Vec<LogRecord>, LogError> {
+        self.0.records().await
+    }
+    async fn find_keys(
+        &mut self,
+        keys: &[(PlayerId, IdempotencyKey)],
+    ) -> Result<Vec<LogRecord>, LogError> {
+        self.0.find_keys(keys).await
+    }
+    async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.0.keyed_since(since).await
+    }
+    async fn records_after(&mut self, seq: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.0.records_after(seq).await
+    }
+    async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        self.0.write_snapshot(row).await
+    }
+    async fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> Result<Option<SnapshotRow>, LogError> {
+        self.0.latest_snapshot(build).await
+    }
+}
+
+/// A store that lets `n` appends through and then refuses every later one, without writing it:
+/// a crash before the append, on any store (Postgres included), with no shutdown snapshot.
+#[derive(Clone)]
+pub struct FailAfter<T> {
+    pub inner: T,
+    pub left: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl<T: LogStore + Clone> FailAfter<T> {
+    pub fn new(inner: T, n: u64) -> Self {
+        Self {
+            inner,
+            left: Arc::new(std::sync::atomic::AtomicU64::new(n)),
+        }
+    }
+}
+
+impl<T: LogStore + Clone + Sync> LogStore for FailAfter<T> {
+    async fn last(&mut self) -> Result<Option<(i64, i64)>, LogError> {
+        self.inner.last().await
+    }
+    async fn append(&mut self, records: &[LogRecord]) -> Result<(), LogError> {
+        use std::sync::atomic::Ordering;
+        if self.left.load(Ordering::Relaxed) == 0 {
+            return Err(LogError::Memory("crashed before the append".to_owned()));
+        }
+        self.left.fetch_sub(1, Ordering::Relaxed);
+        self.inner.append(records).await
+    }
+    async fn records(&mut self) -> Result<Vec<LogRecord>, LogError> {
+        self.inner.records().await
+    }
+    async fn find_keys(
+        &mut self,
+        keys: &[(PlayerId, IdempotencyKey)],
+    ) -> Result<Vec<LogRecord>, LogError> {
+        self.inner.find_keys(keys).await
+    }
+    async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.inner.keyed_since(since).await
+    }
+    async fn records_after(&mut self, seq: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.inner.records_after(seq).await
+    }
+    async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        self.inner.write_snapshot(row).await
+    }
+    async fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> Result<Option<SnapshotRow>, LogError> {
+        self.inner.latest_snapshot(build).await
+    }
+}
+
+/// The upgraded build in the upgrade scenarios.
+pub fn upgraded() -> EngineBuild {
+    EngineBuild::new("0.2.0+upgrade").unwrap()
+}
+
+fn joins(n: usize, tag: &str) -> Vec<(voidforge_core::command::Command, IdempotencyKey)> {
+    (0..n)
+        .map(|i| {
+            (
+                voidforge_core::command::Command {
+                    player: voidforge_testkit::ALICE,
+                    action: voidforge_core::command::Action::JoinGame,
+                },
+                IdempotencyKey::new(format!("{tag}{i}")).unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// Runs a host of `build` on `store` (built on the host's thread by `make`) from a recovered
+/// World, submits `commands` and stops, cleanly or by `crash_after` appends. Returns the
+/// published World before the stop.
+pub async fn run_build<S, M>(
+    world: World,
+    make: M,
+    build: &EngineBuild,
+    commands: Vec<(voidforge_core::command::Command, IdempotencyKey)>,
+    crash_after: Option<u64>,
+) -> World
+where
+    S: LogStore + Clone + Sync,
+    M: FnOnce() -> S + Send + 'static,
+{
+    let mut cfg = config();
+    cfg.engine_build = build.clone();
+    cfg.snapshot_every_records = 1_000;
+    let left = crash_after.unwrap_or(u64::MAX);
+    let (handle, task) = voidforge_host::spawn(
+        world,
+        voidforge_testkit::v0_rules(),
+        move || FailAfter::new(make(), left),
+        clock_at(3_600_000),
+        cfg,
+    )
+    .unwrap();
+    for (c, k) in commands {
+        if handle.submit_with_key(c, k).await.is_err() {
+            break;
+        }
+    }
+    let w = handle.read().world.as_ref().clone();
+    drop(handle);
+    let joined = task.join();
+    assert_eq!(
+        joined.is_err(),
+        crash_after.is_some(),
+        "a crash stops the host, a clean stop does not"
+    );
+    w
+}
+
+/// Carry (f), on one store (`inspect` reads it; `make` builds the host's): an upgrade start, a
+/// crash after the upgrade, rollback before and after the new build wrote records, rollback
+/// from a clean shutdown, and a newer format (D-038).
+pub async fn upgrade_cases<S, M>(mut inspect: S, make: M)
+where
+    S: LogStore + Clone + Sync,
+    M: Fn() -> S + Clone + Send + 'static,
+{
+    use voidforge_host::{RecoverError, recover};
+    use voidforge_store::replay::ReplayError;
+    let rules = voidforge_testkit::v0_rules();
+    let mut b = voidforge_testkit::WorldBuilder::new();
+    b.player(voidforge_testkit::ALICE);
+    let world = b.build();
+    let snap = voidforge_store::snapshot::encode(&world, &build()).unwrap();
+    inspect
+        .write_snapshot(&SnapshotRow::new(0, &snap))
+        .await
+        .unwrap();
+    // Build A runs two records and stops cleanly: its snapshot is at the head (seq 2).
+    let a = recover(&mut inspect, &rules, &build()).await.unwrap();
+    let a_world = run_build(a.world, make.clone(), &build(), joins(2, "a"), None).await;
+    // 1. Upgrade start: B begins from A's head snapshot with an empty tail.
+    let up = recover(&mut inspect, &rules, &upgraded()).await.unwrap();
+    assert_eq!((up.snapshot_seq, up.last_seq), (2, 2));
+    assert_eq!(up.world, a_world);
+    // Rollback before B writes anything: A recovers from its own snapshot.
+    assert_eq!(
+        recover(&mut inspect, &rules, &build())
+            .await
+            .unwrap()
+            .last_seq,
+        2
+    );
+    // 2. B appends two records and crashes before any snapshot of its own.
+    let b_world = run_build(up.world, make.clone(), &upgraded(), joins(3, "b"), Some(2)).await;
+    assert!(
+        inspect
+            .latest_snapshot(Some(upgraded().as_str()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let again = recover(&mut inspect, &rules, &upgraded()).await.unwrap();
+    assert_eq!(
+        (again.snapshot_seq, again.last_seq),
+        (2, 4),
+        "A's snapshot, B's tail"
+    );
+    assert_eq!(again.world, b_world);
+    // Rollback after B wrote records without a snapshot: A would have to replay B's records,
+    // refused.
+    assert!(matches!(
+        recover(&mut inspect, &rules, &build()).await,
+        Err(RecoverError::Replay(ReplayError::CrossBuildRecord {
+            seq: 3,
+            ..
+        }))
+    ));
+    // B, recovered, runs two more records and stops cleanly: its snapshot is the newest, at the
+    // head (seq 6). 5. Rollback from that clean shutdown: A starts from B's snapshot, empty tail.
+    let b_clean = run_build(again.world, make.clone(), &upgraded(), joins(2, "c"), None).await;
+    let back = recover(&mut inspect, &rules, &build()).await.unwrap();
+    assert_eq!((back.snapshot_seq, back.last_seq), (6, 6));
+    assert_eq!(back.world, b_clean);
+    // 6. A newer format at the head (a build this one cannot read): a typed error. B appends one
+    // more record and crashes, and the newer build's snapshot is planted at that head (seq 7):
+    // a snapshot past the head would be refused first (review M1).
+    let world6 = recover(&mut inspect, &rules, &upgraded())
+        .await
+        .unwrap()
+        .world;
+    run_build(world6, make.clone(), &upgraded(), joins(2, "d"), Some(1)).await;
+    let mut newer = inspect.latest_snapshot(None).await.unwrap().unwrap();
+    let decoded = voidforge_store::snapshot::decode_any(&newer.payload).unwrap();
+    let mut header = decoded.header;
+    header.format = 2;
+    let payload_start = newer.payload.len()
+        - voidforge_store::canonical::to_bytes(&decoded.world)
+            .unwrap()
+            .len();
+    let mut bytes = voidforge_store::snapshot::MAGIC.to_vec();
+    bytes.extend(voidforge_store::canonical::to_bytes(&header).unwrap());
+    bytes.extend_from_slice(&newer.payload[payload_start..]);
+    newer.payload = bytes;
+    newer.seq = inspect.last().await.unwrap().unwrap().0;
+    assert_eq!(newer.seq, 7);
+    inspect.write_snapshot(&newer).await.unwrap();
+    assert!(matches!(
+        recover(&mut inspect, &rules, &upgraded()).await,
+        Err(RecoverError::Snapshot {
+            error: voidforge_store::snapshot::SnapshotError::UnknownFormat(2),
+            ..
+        })
+    ));
+}
+
+/// Carry (f), the refused case: A's records after A's newest snapshot (A crashed), then B
+/// starts: B would have to replay A's records, refused; A recovers.
+pub async fn upgrade_over_another_builds_tail_is_refused<S, M>(mut inspect: S, make: M)
+where
+    S: LogStore + Clone + Sync,
+    M: Fn() -> S + Clone + Send + 'static,
+{
+    use voidforge_host::{RecoverError, recover};
+    use voidforge_store::replay::ReplayError;
+    let rules = voidforge_testkit::v0_rules();
+    let mut b = voidforge_testkit::WorldBuilder::new();
+    b.player(voidforge_testkit::ALICE);
+    let world = b.build();
+    let snap = voidforge_store::snapshot::encode(&world, &build()).unwrap();
+    inspect
+        .write_snapshot(&SnapshotRow::new(0, &snap))
+        .await
+        .unwrap();
+    let a = recover(&mut inspect, &rules, &build()).await.unwrap();
+    run_build(a.world, make.clone(), &build(), joins(3, "a"), Some(2)).await;
+    assert!(matches!(
+        recover(&mut inspect, &rules, &upgraded()).await,
+        Err(RecoverError::Replay(ReplayError::CrossBuildRecord {
+            seq: 1,
+            ..
+        }))
+    ));
+    assert_eq!(
+        recover(&mut inspect, &rules, &build())
+            .await
+            .unwrap()
+            .last_seq,
+        2
+    );
+}
+
+/// Review M1, on one store: a snapshot past the log head (it claims records the log does not
+/// hold) is refused with both numbers, never recovered from (D-038).
+pub async fn snapshot_past_head_is_refused<S, M>(mut inspect: S, make: M)
+where
+    S: LogStore + Clone + Sync,
+    M: Fn() -> S + Clone + Send + 'static,
+{
+    use voidforge_host::{RecoverError, recover};
+    let rules = voidforge_testkit::v0_rules();
+    let mut b = voidforge_testkit::WorldBuilder::new();
+    b.player(voidforge_testkit::ALICE);
+    let world = b.build();
+    let snap = voidforge_store::snapshot::encode(&world, &build()).unwrap();
+    inspect
+        .write_snapshot(&SnapshotRow::new(0, &snap))
+        .await
+        .unwrap();
+    let a = recover(&mut inspect, &rules, &build()).await.unwrap();
+    run_build(a.world, make, &build(), joins(3, "p"), Some(2)).await;
+    // Records 1 and 2, no snapshot after the bootstrap; then a planted snapshot claiming seq 7.
+    let mut planted = inspect.latest_snapshot(None).await.unwrap().unwrap();
+    planted.seq = 7;
+    inspect.write_snapshot(&planted).await.unwrap();
+    assert!(matches!(
+        recover(&mut inspect, &rules, &build()).await,
+        Err(RecoverError::SnapshotPastHead {
+            snapshot_seq: 7,
+            head: 2
+        })
+    ));
 }

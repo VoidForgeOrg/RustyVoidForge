@@ -12,7 +12,7 @@ use voidforge_core::quantity::MS_PER_HOUR;
 use voidforge_core::state::{BuildingKind, PlanetId, PlayerId, World};
 use voidforge_host::{Fatal, HostError, HostHandle, HostTask, ManualClock};
 use voidforge_store::log::{
-    IdempotencyKey, InvalidKey, LogError, LogRecord, LogStore, MemoryLog, RecordKind,
+    IdempotencyKey, InvalidKey, LogError, LogRecord, LogStore, MemoryLog, RecordKind, SnapshotRow,
 };
 use voidforge_testkit::{ALICE, BOB, WorldBuilder, v0_rules};
 
@@ -404,6 +404,20 @@ impl LogStore for BlindLog {
     }
     async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
         self.0.keyed_since(since).await
+    }
+    async fn records_after(&mut self, seq: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.0.records_after(seq).await
+    }
+
+    async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        self.0.write_snapshot(row).await
+    }
+
+    async fn latest_snapshot(
+        &mut self,
+        build: Option<&str>,
+    ) -> Result<Option<SnapshotRow>, LogError> {
+        self.0.latest_snapshot(build).await
     }
 }
 

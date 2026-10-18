@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{EPOCH, build, clock_at, config, drive, economy, start};
+use common::{EPOCH, build, clock_at, config, drive, economy, key_for, start};
 use sqlx::PgPool;
 use voidforge_core::command::{Action, Command, Rejection};
 use voidforge_core::state::{DomainEvent, PlanetId, PlayerId};
@@ -353,4 +353,170 @@ async fn find_keys_and_keyed_since_match_the_memory_store(pool: PgPool) {
             memory.keyed_since(since).await.unwrap()
         );
     }
+}
+
+/// P2.5 through Postgres (D-038): the bootstrap snapshot, a host that runs half the script and
+/// stops (cleanly, then by a crash after a durable append), recovery from the `snapshots` table and
+/// the log, and the rest of the script: byte-identical to the memory run that never stopped, and
+/// every retried key gets its logged outcome.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn recovery_through_postgres_is_byte_identical(pool: PgPool) {
+    use voidforge_host::{Clock, ManualClock};
+    use voidforge_store::log::SnapshotRow;
+    use voidforge_store::snapshot;
+    let e = economy(0x2_5101);
+    let rules = v0_rules();
+    let script = e.script();
+    // The reference: memory, never stopped.
+    let memory = MemoryLog::new();
+    let clock = clock_at(0);
+    let (mut handle, task) = voidforge_host::spawn(
+        start(&e, &rules),
+        rules.clone(),
+        {
+            let m = memory.clone();
+            move || m
+        },
+        clock.clone(),
+        config(),
+    )
+    .unwrap();
+    drive(&mut handle, &clock, &e, END_MS).await;
+    let reference = handle.read().world.as_ref().clone();
+    drop(handle);
+    task.join().unwrap();
+
+    let options = (*pool.connect_options()).clone();
+    let host = |world, clock: ManualClock, every: u64| {
+        let options = options.clone();
+        let mut cfg = config();
+        cfg.snapshot_every_records = every;
+        voidforge_host::spawn(world, v0_rules(), move || PgLog::lazy(options), clock, cfg).unwrap()
+    };
+    let mut pg = PgLog::new(pool.clone());
+    pg.write_snapshot(&SnapshotRow::new(
+        0,
+        &snapshot::encode(&start(&e, &rules), &build()).unwrap(),
+    ))
+    .await
+    .unwrap();
+    let run =
+        |handle: voidforge_host::HostHandle, clock: ManualClock, range: std::ops::Range<usize>| {
+            let script = script.clone();
+            async move {
+                let mut handle = handle;
+                for &(at, k) in &script[range] {
+                    clock.set((EPOCH + at).max(clock.now_unix_ms()));
+                    common::settle(&mut handle, &clock).await;
+                    let command = e.command(k, &handle.read().world);
+                    handle.submit_with_key(command, key_for(k)).await.unwrap();
+                }
+                handle
+            }
+        };
+    // First third, then a clean stop.
+    let clock = clock_at(0);
+    let back = voidforge_host::recover(&mut pg, &rules, &build())
+        .await
+        .unwrap();
+    let (handle, task) = host(back.world, clock.clone(), 7);
+    let handle = run(handle, clock.clone(), 0..20).await;
+    drop(handle);
+    task.join().unwrap();
+    // Second third, recovered from Postgres.
+    let back = voidforge_host::recover(&mut pg, &rules, &build())
+        .await
+        .unwrap();
+    assert_eq!(
+        back.last_seq,
+        pg.last().await.unwrap().unwrap().0,
+        "the shutdown snapshot is at the head"
+    );
+    let (handle, task) = host(back.world, clock.clone(), 7);
+    let handle = run(handle, clock.clone(), 20..40).await;
+    // Then a stop whose shutdown snapshot is removed afterwards, as if it crashed before
+    // writing it: recovery uses the last periodic snapshot and replays the tail from Postgres.
+    // (The memory tests crash the host itself, at each crash-table row.)
+    drop(handle);
+    task.join().unwrap();
+    let head = pg.last().await.unwrap().unwrap().0;
+    sqlx::query!("DELETE FROM snapshots WHERE seq = $1", head)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let back = voidforge_host::recover(&mut pg, &rules, &build())
+        .await
+        .unwrap();
+    assert!(
+        back.snapshot_seq < back.last_seq,
+        "a tail was replayed from Postgres"
+    );
+    // Every key of the first two thirds, retried, gets its logged outcome.
+    let (handle, task) = host(back.world, clock.clone(), 7);
+    let before = pg.records().await.unwrap().len();
+    for record in pg
+        .records()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.idempotency_key.is_some())
+    {
+        let Payload::Command(c) = record.payload else {
+            panic!()
+        };
+        let r = handle
+            .submit_with_key(c, record.idempotency_key.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(r.seq, record.seq);
+    }
+    assert_eq!(
+        pg.records().await.unwrap().len(),
+        before,
+        "no retry appended"
+    );
+    let mut handle = run(handle, clock.clone(), 40..script.len()).await;
+    clock.set(EPOCH + END_MS);
+    common::settle(&mut handle, &clock).await;
+    let recovered = handle.read().world.as_ref().clone();
+    drop(handle);
+    task.join().unwrap();
+    assert_eq!(
+        snapshot::state_hash(&recovered).unwrap(),
+        snapshot::state_hash(&reference).unwrap()
+    );
+    assert_eq!(recovered, reference);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn upgrades_recover_through_postgres(pool: PgPool) {
+    // Carry (f) through Postgres: the same cases as the memory store.
+    let options = (*pool.connect_options()).clone();
+    common::upgrade_cases(PgLog::new(pool.clone()), move || {
+        PgLog::lazy(options.clone())
+    })
+    .await;
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn an_upgrade_over_another_builds_tail_is_refused_through_postgres(pool: PgPool) {
+    let options = (*pool.connect_options()).clone();
+    common::upgrade_over_another_builds_tail_is_refused(PgLog::new(pool.clone()), move || {
+        PgLog::lazy(options.clone())
+    })
+    .await;
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_snapshot_past_the_log_head_is_refused_through_postgres(pool: PgPool) {
+    // Review M1 through Postgres.
+    let options = (*pool.connect_options()).clone();
+    common::snapshot_past_head_is_refused(PgLog::new(pool.clone()), move || {
+        PgLog::lazy(options.clone())
+    })
+    .await;
 }

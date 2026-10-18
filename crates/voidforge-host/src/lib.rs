@@ -39,10 +39,12 @@ use tracing::Instrument;
 use voidforge_core::command::{Command, Rejection};
 use voidforge_core::rules::Rules;
 use voidforge_core::state::{DomainEvent, EngineError, PlayerId, World};
+use voidforge_store::log::SnapshotRow;
 use voidforge_store::log::{
     IdempotencyKey, LogError, LogRecord, LogStore, Outcome, Payload, RecordKind,
 };
-use voidforge_store::snapshot::EngineBuild;
+use voidforge_store::replay::{self, ReplayError, Step};
+use voidforge_store::snapshot::{self, EngineBuild, Expected, SnapshotError};
 
 pub use clock::{Clock, ManualClock, SystemClock};
 
@@ -61,13 +63,17 @@ pub struct HostConfig {
     /// How much game time of idempotency keys stays cached in memory. Older keys are still known,
     /// through the log (D-037); the window only bounds the cache.
     pub key_window_ms: i64,
+    /// Snapshot after a turn once this many records were appended since the last one (and at
+    /// clean shutdown).
+    pub snapshot_every_records: u64,
 }
 
 /// A day of game time: the default key cache window.
 pub const DEFAULT_KEY_WINDOW_MS: i64 = 24 * 3_600_000;
 
 impl HostConfig {
-    /// The defaults: an inbox of 1,024, turns of up to 64 commands, and a day of cached keys.
+    /// The defaults: an inbox of 1,024, turns of up to 64 commands, a day of cached keys, and a
+    /// snapshot every 1,000 records.
     #[must_use]
     pub fn new(epoch_unix_ms: i64, engine_build: EngineBuild) -> Self {
         Self {
@@ -76,6 +82,7 @@ impl HostConfig {
             max_batch: 64,
             engine_build,
             key_window_ms: DEFAULT_KEY_WINDOW_MS,
+            snapshot_every_records: 1_000,
         }
     }
 }
@@ -146,6 +153,8 @@ pub struct HostStats {
     steps: AtomicU64,
     key_lookups: AtomicU64,
     replays: AtomicU64,
+    snapshots: AtomicU64,
+    snapshot_failures: AtomicU64,
 }
 
 impl HostStats {
@@ -172,6 +181,16 @@ impl HostStats {
     /// Repeated keys answered with their first receipt.
     pub fn replays(&self) -> u64 {
         self.replays.load(Ordering::Relaxed)
+    }
+
+    /// Snapshots written.
+    pub fn snapshots(&self) -> u64 {
+        self.snapshots.load(Ordering::Relaxed)
+    }
+
+    /// Snapshot writes that failed (each also an error event).
+    pub fn snapshot_failures(&self) -> u64 {
+        self.snapshot_failures.load(Ordering::Relaxed)
     }
 }
 
@@ -342,6 +361,8 @@ pub fn spawn<S: LogStore, C: Clock>(
                         stats: stats_host,
                         next_seq: 1,
                         keys: HashMap::new(),
+                        since_snapshot: 0,
+                        last_snapshot_seq: None,
                     };
                     host.run(started).await
                 }),
@@ -379,6 +400,10 @@ struct Host<S, C> {
     last_t: i64,
     /// Cached idempotency keys: the first command and receipt for each (player, key).
     keys: HashMap<(PlayerId, IdempotencyKey), Known>,
+    /// Records appended since the last snapshot.
+    since_snapshot: u64,
+    /// The seq of the newest snapshot in the store, if known.
+    last_snapshot_seq: Option<i64>,
 }
 
 /// A key's first use.
@@ -463,11 +488,29 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                 return Ok(());
             }
         }
+        match self.store.latest_snapshot(None).await {
+            Ok(row) => self.last_snapshot_seq = row.map(|r| r.seq),
+            Err(e) => {
+                let _ = started.send(Err(Fatal::Start(e)));
+                return Ok(());
+            }
+        }
+        // The read model names the log head from the start, so a host spawned on a non-empty
+        // log (recovery always is) does not report seq 0 until its next append (carry e).
+        self.publish.send_replace(Arc::new(ReadModel {
+            seq: self.next_seq - 1,
+            world: Arc::new(self.world.clone()),
+            rules: self.rules.clone(),
+        }));
         let _ = started.send(Ok(()));
         let result = self.serve().await;
         // Stopping: refuse what is still queued, so no caller waits forever.
         self.rx.close();
         while self.rx.try_recv().is_ok() {}
+        // A clean shutdown leaves a snapshot at the log head (an engine upgrade starts from it).
+        if result.is_ok() {
+            self.snapshot().await;
+        }
         result
     }
 
@@ -535,10 +578,12 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             let t = self.stamp();
             self.stats.steps.fetch_add(1, Ordering::Relaxed);
             changed = true;
-            match self.world.advance_to(t, &self.rules) {
+            match replay::step(&mut self.world, &Step::Advance, t, &self.rules) {
                 // No events: not logged; the read model is still published below.
-                Ok(events) if events.is_empty() => {}
-                Ok(events) => records.push(self.record(t, None, None, events, Outcome::Empty)),
+                Ok(stepped) if stepped.events.is_empty() => {}
+                Ok(stepped) => {
+                    records.push(self.record(t, None, None, stepped.events, stepped.outcome));
+                }
                 Err(e) => failure = Some(e),
             }
         }
@@ -569,31 +614,29 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                 continue;
             }
             let t = self.stamp();
-            let applied = match self.world.apply(&command, t, &self.rules) {
-                Ok(applied) => applied,
-                Err(e) => {
-                    // The poisoning command is not logged; dropping its reply answers Stopped.
-                    failure = Some(e);
-                    continue;
-                }
-            };
+            // 4. Through the shared record→core function, as replay runs it (D-038).
+            let stepped =
+                match replay::step(&mut self.world, &Step::Command(&command), t, &self.rules) {
+                    Ok(stepped) => stepped,
+                    Err(e) => {
+                        // The poisoning command is not logged; dropping its reply answers Stopped.
+                        failure = Some(e);
+                        continue;
+                    }
+                };
             self.stats.steps.fetch_add(1, Ordering::Relaxed);
             changed = true;
-            let mut events = applied.advanced;
-            let (outcome, result) = match applied.outcome {
-                Ok(own) => {
-                    events.extend_from_slice(&own);
-                    // A command produces a handful of events; u32 is far beyond any.
-                    let own_events = u32::try_from(own.len()).expect("own events fit u32");
-                    (Outcome::Accepted { own_events }, Ok(own))
-                }
-                Err(reason) => (Outcome::Rejected(reason), Err(reason)),
-            };
-            let record = self.record(t, Some(&command), key.clone(), events, outcome);
+            let record = self.record(
+                t,
+                Some(&command),
+                key.clone(),
+                stepped.events,
+                stepped.outcome,
+            );
             let receipt = Receipt {
                 seq: record.seq,
                 t,
-                outcome: result,
+                outcome: stepped.result,
             };
             if let Some(key) = key {
                 // Cached now, so a repeat later in this turn gets this receipt, after the append.
@@ -635,11 +678,47 @@ impl<S: LogStore, C: Clock> Host<S, C> {
         // Keys older than the window leave the cache; the log still knows them.
         let oldest = self.last_t.saturating_sub(self.config.key_window_ms);
         self.keys.retain(|_, k| k.receipt.t >= oldest);
+        // 3. Snapshots between turns, never mid-turn, once enough records were appended.
+        self.since_snapshot = self.since_snapshot.saturating_add(records.len() as u64);
+        if failure.is_none() && self.since_snapshot >= self.config.snapshot_every_records.max(1) {
+            self.snapshot().await;
+        }
         match failure {
             None => Ok(()),
             Some(e) => {
                 tracing::error!(error = %e, "the engine failed; the host stops");
                 Err(Fatal::Engine(e))
+            }
+        }
+    }
+
+    /// Writes a snapshot of the World as it is between turns, after record `next_seq - 1`. A
+    /// failure is not fatal (the log is the truth), but it is loud: an error event and
+    /// `HostStats::snapshot_failures`; the next schedule point retries (D-038).
+    async fn snapshot(&mut self) {
+        let seq = self.next_seq - 1;
+        if self.last_snapshot_seq == Some(seq) {
+            // The newest snapshot already covers every record; nothing new to keep.
+            self.since_snapshot = 0;
+            return;
+        }
+        let written = match snapshot::encode(&self.world, &self.config.engine_build) {
+            Ok(snap) => self
+                .store
+                .write_snapshot(&SnapshotRow::new(seq, &snap))
+                .await
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        match written {
+            Ok(()) => {
+                self.stats.snapshots.fetch_add(1, Ordering::Relaxed);
+                self.last_snapshot_seq = Some(seq);
+                self.since_snapshot = 0;
+            }
+            Err(error) => {
+                self.stats.snapshot_failures.fetch_add(1, Ordering::Relaxed);
+                tracing::error!(seq, %error, "snapshot failed; the host carries on");
             }
         }
     }
@@ -693,4 +772,125 @@ async fn sleep_until<C: Clock>(clock: &C, at: Option<i64>) {
         Some(at) => clock.sleep_until_unix_ms(at).await,
         None => std::future::pending().await,
     }
+}
+
+/// Why a universe could not be recovered from its store.
+#[derive(Debug, thiserror::Error)]
+pub enum RecoverError {
+    /// The store holds no snapshot at all: the universe was never bootstrapped (P2.9 writes the
+    /// first snapshot, at seq 0, before any record).
+    #[error("no snapshot: the universe has not been bootstrapped")]
+    NoSnapshot,
+    /// The newest snapshot claims more records than the log holds.
+    #[error("the snapshot at seq {snapshot_seq} is past the log head (seq {head})")]
+    SnapshotPastHead {
+        /// The snapshot's seq.
+        snapshot_seq: i64,
+        /// The log's last seq (0 when empty).
+        head: i64,
+    },
+    /// The store could not be read.
+    #[error("the store could not be read: {0}")]
+    Store(#[from] LogError),
+    /// The snapshot did not decode strictly (D-035).
+    #[error("the snapshot at seq {seq} is invalid: {error}")]
+    Snapshot {
+        /// The snapshot's seq.
+        seq: i64,
+        /// Why.
+        error: SnapshotError,
+    },
+    /// A `snapshots` column disagrees with the decoded header (P2.2 review LOW 2).
+    #[error("the snapshot at seq {seq}: column {column} disagrees with its header")]
+    ColumnMismatch {
+        /// The snapshot's seq.
+        seq: i64,
+        /// Which column.
+        column: &'static str,
+    },
+    /// Replaying the tail failed: a divergence, a gap, another build's record, or an engine
+    /// error. The World is discarded.
+    #[error("replay failed: {0}")]
+    Replay(#[from] ReplayError),
+}
+
+/// A recovered World and where it came from.
+#[derive(Debug)]
+pub struct Recovered {
+    /// The World after the snapshot and the replayed tail; `spawn` it.
+    pub world: World,
+    /// The snapshot's seq.
+    pub snapshot_seq: i64,
+    /// The last record replayed (the snapshot's seq when the tail is empty).
+    pub last_seq: i64,
+}
+
+/// Recovers a universe from its store (Architectural Design, Persistence; D-038):
+/// 1. the newest snapshot, of any build. The tail after it must hold only `build`'s records:
+///    replay refuses another build's record, so no replay crosses builds. A snapshot in a format
+///    this build cannot read is a typed error;
+/// 2. decoded strictly ([`snapshot::decode`]), with the row's columns cross-checked against the
+///    header;
+/// 3. every later record replayed through the shared function ([`replay::replay`]), which checks
+///    each record's events and outcome and refuses another build's record.
+///
+/// Verification is event replay plus the state hash; `check_links` (inside decoding) is a
+/// structural check only (D-033). The host then catches up to now on its first wake, and
+/// `spawn` rebuilds the idempotency keys from the log (D-037).
+///
+/// # Errors
+/// [`RecoverError`].
+pub async fn recover<S: LogStore>(
+    store: &mut S,
+    rules: &Rules,
+    build: &EngineBuild,
+) -> Result<Recovered, RecoverError> {
+    // The newest snapshot, of any build. The tail after it must hold only this build's records,
+    // which replay enforces (CrossBuildRecord), so replays never cross builds. That one rule
+    // covers a normal restart, an engine upgrade, a crash after one, and a rollback from a clean
+    // shutdown (D-038, carry f).
+    let row = store
+        .latest_snapshot(None)
+        .await?
+        .ok_or(RecoverError::NoSnapshot)?;
+    let seq = row.seq;
+    // A snapshot past the log head claims records the log does not hold; recovering from it
+    // would make the next acknowledged commands vanish at the following recovery (review M1).
+    let head = store.last().await?.map_or(0, |(seq, _)| seq);
+    if seq > head {
+        return Err(RecoverError::SnapshotPastHead {
+            snapshot_seq: seq,
+            head,
+        });
+    }
+    let row_build = EngineBuild::new(row.engine_build.clone())
+        .map_err(|error| RecoverError::Snapshot { seq, error })?;
+    let expect = Expected {
+        rules_version: rules.version,
+        engine_build: &row_build,
+    };
+    let decoded = snapshot::decode(&row.payload, &expect)
+        .map_err(|error| RecoverError::Snapshot { seq, error })?;
+    let header = &decoded.header;
+    let mismatch = |column| RecoverError::ColumnMismatch { seq, column };
+    if header.game_time_ms != row.game_time {
+        return Err(mismatch("game_time"));
+    }
+    if header.rules_version != row.rules_version {
+        return Err(mismatch("rules_version"));
+    }
+    if header.engine_build != row.engine_build {
+        return Err(mismatch("engine_build"));
+    }
+    if header.state_hash.as_slice() != row.state_hash.as_slice() {
+        return Err(mismatch("state_hash"));
+    }
+    let mut world = decoded.world;
+    let tail = store.records_after(seq).await?;
+    let last_seq = replay::replay(&mut world, seq, &tail, rules, build)?;
+    Ok(Recovered {
+        world,
+        snapshot_seq: seq,
+        last_seq,
+    })
 }

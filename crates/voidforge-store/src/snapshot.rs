@@ -184,6 +184,10 @@ pub enum SnapshotError {
     /// The payload is not the canonical encoding of the World it decodes to.
     #[error("the payload is not the World's canonical encoding")]
     NonCanonical,
+    /// The header is not the canonical encoding of the header it decodes to (for example an
+    /// overlong integer), so the same header could be written two ways (P2.2 review LOW 1).
+    #[error("the header is not its canonical encoding")]
+    NonCanonicalHeader,
 }
 
 /// BLAKE3-256 of a World's canonical bytes: the state hash (D-024).
@@ -244,8 +248,11 @@ pub fn decode(bytes: &[u8], expect: &Expected<'_>) -> Result<Decoded, SnapshotEr
     decode_with(bytes, Some(expect))
 }
 
-/// Decodes a snapshot of any rules version and build, for tools that report what a snapshot is.
-/// Every other check of [`decode`] still applies.
+/// Decodes a snapshot of any rules version and build, **for inspection only** (tools that report
+/// what a snapshot is). Its header's rules version and engine build are **not verified** against
+/// any expectation, so never restore from it: recovery uses [`decode`] and cross-checks the
+/// `snapshots` row's columns against the header (P2.2 review LOW 2; D-038). Every other check of
+/// [`decode`] still applies.
 ///
 /// # Errors
 /// As [`decode`], without the rules and build mismatches.
@@ -268,6 +275,11 @@ fn decode_with(bytes: &[u8], expect: Option<&Expected<'_>>) -> Result<Decoded, S
     };
     if header.format != FORMAT {
         return Err(SnapshotError::UnknownFormat(header.format));
+    }
+    // The header must be its own canonical encoding, as the payload must be.
+    let header_len = rest.len() - payload.len();
+    if canonical::to_bytes(&header)? != rest[..header_len] {
+        return Err(SnapshotError::NonCanonicalHeader);
     }
     let build = EngineBuild::new(header.engine_build.clone())
         .map_err(|_| SnapshotError::BadHeader("invalid engine build".to_owned()))?;

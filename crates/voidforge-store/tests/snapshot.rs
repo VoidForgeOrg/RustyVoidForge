@@ -491,3 +491,21 @@ fn every_single_byte_flip_is_a_typed_error() {
         }
     }
 }
+
+#[test]
+fn decode_refuses_a_non_canonical_header() {
+    // The header's first field, format 1, written as an overlong varint (0x81 0x00 instead of
+    // 0x01). postcard accepts it and decodes the same header, so only the re-encoding check can
+    // refuse it (P2.2 review LOW 1; D-038). The payload and hash are untouched.
+    let w = busy_world();
+    let s = snapshot::encode(&w, &build()).unwrap();
+    let mut bytes = s.bytes.clone();
+    assert_eq!(bytes[MAGIC.len()], 0x01, "format 1 is one varint byte");
+    bytes.splice(MAGIC.len()..=MAGIC.len(), [0x81, 0x00]);
+    assert_eq!(decode_err(&bytes, &w), SnapshotError::NonCanonicalHeader);
+    // decode_any refuses it too: only the build and rules expectations are skipped there.
+    assert_eq!(
+        snapshot::decode_any(&bytes),
+        Err(SnapshotError::NonCanonicalHeader)
+    );
+}
