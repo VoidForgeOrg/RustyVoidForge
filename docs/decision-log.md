@@ -427,7 +427,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-029: Commands, part 2: the five fleet commands and their reason codes
 
-- Date and package: 2026-10-17, P1.10. Proposed by dev-build. **Lead ruling, overnight; advisor review pending**: orch-advisor was held at a hook prompt, and orch-lead ruled on the six API-shape questions as proposed (slice 16, `ruling-lead-overnight.md`). Any amendment from the advisor's review lands as a follow-up before Phase 3.
+- Date and package: 2026-10-17, P1.10. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. orch-advisor was held at a hook prompt, and orch-lead ruled on the six API-shape questions as proposed (slice 16, `ruling-lead-overnight.md`). Any amendment from the advisor's review lands as a follow-up before Phase 3.
 - Decision:
   - **Payloads** (new `Action` variants): `AssembleFleet { planet, ships: BTreeSet<ShipId>, cargo: Cargo }`, `SendFleet { fleet, target, mission }`, `RecallFleet { fleet }`, `DisbandFleet { fleet }`, `TriggerUnload { fleet }`.
     - Cargo is grams per resource; zero is "no cargo". The design's "spread across Cargo Vessels by tonnage" needs nothing more, since cargo is a fleet total (D-022).
@@ -460,7 +460,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-030: Views and score
 
-- Date and package: 2026-10-18, P1.11. Proposed by dev-build. **Lead ruling, overnight; advisor review pending** (slice 17, `ruling-lead-overnight.md`). **Q4 is PROVISIONAL, parked for Tom as game intent.**
+- Date and package: 2026-10-18, P1.11. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 17, `ruling-lead-overnight.md`.) **Q4 is PROVISIONAL, parked for Tom as game intent.**
 - Decision:
   - **Entry point**: `World::view(&self, &Query, t, &Rules) -> Result<View, ViewError>`.
     - It takes `&World`, so "Pure reads" holds by type, and the determinism suite also checks the bytes are unchanged.
@@ -496,7 +496,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-031: World generation
 
-- Date and package: 2026-10-18, P1.12. Proposed by dev-build. **Lead ruling, overnight; advisor review pending** (slice 18, `ruling-lead-overnight.md`). **The placement option is PROVISIONAL, pending Tom (game intent).**
+- Date and package: 2026-10-18, P1.12. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 18, `ruling-lead-overnight.md`.) **The placement option is PROVISIONAL, pending Tom (game intent).**
 - Decision:
   - **Entry point**: `voidforge_worldgen::generate(seed, players, &Rules) -> Result<World, WorldgenError>`.
     - It produces the universe's first `World`: at time 0 (the host sets the epoch in P2.9), under the rules' version, with the seed recorded.
@@ -570,7 +570,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-034: Schema and migrations, sqlx, and the Database tests stage
 
-- Date and package: 2026-10-18, P2.1. Proposed by dev-design, acting as builder (`slices/19-p2-1-schema/proposal-schema.md`). **Lead ruling, overnight; advisor review pending.** None of it is game intent.
+- Date and package: 2026-10-18, P2.1. Proposed by dev-design, acting as builder (`slices/19-p2-1-schema/proposal-schema.md`). Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. None of it is game intent.
 - Decision:
   - **Tables**: `log_records` and `snapshots` match the [Persistence](Voidforge%20Architectural%20Design.md#persistence) tables column for column. `accounts` follows [Decision 9](Voidforge%20Technical%20Plan.md#decisions). They're created by three up-only sqlx migrations in `crates/voidforge-store/migrations/` (`0001_log_records`, `0002_snapshots`, `0003_accounts`), and `voidforge_store::migrate` applies them from Rust.
   - **Nullability is read literally**: only `log_records.player_id` and `log_records.idempotency_key` are nullable. An `advance` record writes JSON values in `payload` and `outcome` (for example JSON `null`), never SQL NULL. `wall_time` and both `created_at` columns default to `now()`.
@@ -625,7 +625,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 
 ### D-035: Snapshot codec, header, hash and engine build
 
-- Date and package: 2026-10-18, P2.2. Proposed by dev-design, acting as builder (`slices/20-p2-2-snapshot-codec/proposal-codec.md`). **Lead ruling, overnight; advisor review pending.** None of it is game intent.
+- Date and package: 2026-10-18, P2.2. Proposed by dev-design, acting as builder (`slices/20-p2-2-snapshot-codec/proposal-codec.md`). Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. None of it is game intent.
 - Decision:
   - **One encoding, two calls, one guard.** The canonical encoding is postcard with its default configuration (D-024).
     - `voidforge_store::canonical::to_bytes` and testkit's `determinism::canonical_bytes` both call `postcard::to_allocvec`.
@@ -665,3 +665,49 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `crates/voidforge-store/tests/snapshot.rs`: round trips on the busy world, an economy mid-advance with fleets and commands, and a generated world before and after Join game; the layout and hash; each refusal by variant; truncation at every length and every single-byte flip;
     - `crates/voidforge-store/tests/determinism.rs` joins the determinism suite (as worldgen's binary does): the guard, property round trips over testkit's `Scenario` and `Economy`, generated worlds, and in-process and two-process double runs over snapshot bytes. `.github/scripts/determinism.sh` runs it.
 - Where it's enforced: `crates/voidforge-store/src/{snapshot.rs, canonical.rs}`, `build.rs`, the two test binaries, the determinism job, `deny.toml`, and the [version table](versions.md).
+
+### D-036: The engine host loop, its log store and the record format
+
+- Date and package: 2026-10-18, P2.3. Proposed by dev-design, acting as builder (`slices/21-p2-3-host-loop/proposal-host.md`). Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. None of it is game intent.
+- Decision:
+  - **One thread owns the World.** `voidforge_host::spawn` starts a dedicated OS thread running a current-thread tokio runtime with every driver enabled, and the host loop is its only task.
+    - Callers hold a `HostHandle`: `submit` through a bounded inbox, gets a `Receipt` (seq, t, outcome), `Busy` when the inbox is full (the API's 503), or `Stopped`. They also read the `ReadModel` and the counters.
+    - `HostTask::join` returns why the host stopped. It stops by itself once every handle is gone.
+  - **The store is built on the host's thread.** `spawn` takes a store constructor, because a database connection belongs to the tokio runtime that opened it. `PgLog::lazy` opens its connection on first use, on the host's runtime. The Postgres round trip found this: the memory store can't show it.
+  - **The write path**, in order:
+    1. wait for a command or the next queue entry (`select!`, biased to the inbox, against a sleep until `epoch + at_ms`), never polling; an idle host doesn't wake (`HostStats::wakes`);
+    2. idempotency is P2.4;
+    3. stamp t = max(wall clock − epoch, last t), where the clock is injected (`SystemClock`, or `ManualClock` for tests) and the epoch is configuration until P2.9; take the next seq, gap-free from 1 and after existing records, and refuse a World behind the log's last record;
+    4. `apply(command, t)`, or `advance_to(t)` when only time has passed;
+    5. one durable `append` for the whole turn: commands already waiting join it, up to `max_batch` (64), with no added delay;
+    6. reply, then publish.
+  - **One record per step.**
+    - A command record's `events` are `Applied.advanced` followed by the command's own events.
+    - An advance record's `events` are what `advance_to` returned.
+    - Replay calls the same core function, flattens the result the same way, and compares.
+    - Rejected commands are logged with their reason.
+  - **An advance that fires no events is not logged.** Why that's sound: D-024's observation invariance (one advance or many give identical bytes) guarantees that the next logged step, which advances from the last logged state through this instant, reaches the same state. The log is a complete history of events, not of wake-ups.
+  - **The read model** (`seq`, `Arc<World>`, `Arc<Rules>`) is immutable, published through `watch` after every durable write **and after every step that changes the World without a record**. An eventless advance still changes rates and `valid_until` (for example a storage crossing), and without a publish, views would be `Stale` until the next command.
+  - **Fatal errors:**
+    - a failed append stops the host: nothing in the turn is acknowledged (its callers get `Stopped`), the queue is refused, and memory is dropped;
+    - an engine error that poisons the World (D-023) stops it too, after the turn's earlier steps are appended and acknowledged; the poisoning command isn't logged.
+  - **Typed records** (`voidforge_store::log::LogRecord`) behind the `LogStore` trait. `MemoryLog` (with injected append failures) and `PgLog` (one transaction per append) implement it.
+    - Records are typed, never `serde_json::Value`, because a `PlayerId` is a `u128` that a `Value` can't hold exactly. `PgLog` writes the JSON columns as text and reads them back as text, and jsonb keeps big integers exactly.
+    - The JSON forms (D-034: values, never SQL NULL):
+      - `payload` is the command's serde JSON, or `null`;
+      - `outcome` is `{"result":"accepted"}`, `{"result":"rejected","reason":"<code>"}`, or `null`;
+      - `events` is a JSON array.
+    - Columns: `player_id` is the UUID form, `wall_time` is the injected clock's milliseconds (exact both ways), and `rules_version` goes through `i32::try_from` (both stores refuse a larger value).
+  - **Dependencies:**
+    - tokio `=1.53.3` (rt, sync, time, macros), already in the tree. tokio-macros is newly allowlisted.
+    - serde_json becomes a normal dependency of store.
+    - No new sqlx features: UUIDs, JSON and timestamps bind as text or integers with SQL casts. The uuid crate stays with P3.3.
+    - The host's dev-dependencies are testkit and sqlx (for `#[sqlx::test]`).
+  - **Tests:**
+    - `crates/voidforge-host/tests/host.rs`: one per write-path step and crash row, on the memory store with a manual clock;
+    - `tests/postgres.rs`: the done-when, the same economy script through both stores giving identical records, receipts and World; extreme values; all-or-none appends; the documented JSON forms. It runs in the database stage, which now runs the `database` and `postgres` binaries by filter;
+    - `tests/determinism.rs`: in-process and two-process double runs over the records, run by `determinism.sh`.
+- Carried obligations:
+  - **P2.5 and P2.7: replay must reproduce unlogged eventless advances implicitly.** A test must show that a snapshot taken after one, then replay of the later records, equals the uninterrupted run.
+  - **P2.4: the key-reuse obligation (D-034) still stands.** Records carry `idempotency_key: None` until then.
+- Where it's enforced: `crates/voidforge-host/src/{lib.rs, clock.rs}`, `crates/voidforge-store/src/log.rs`, the three host test binaries, `.github/scripts/{database.sh, determinism.sh}`, `deny.toml`, and the [version table](versions.md).
