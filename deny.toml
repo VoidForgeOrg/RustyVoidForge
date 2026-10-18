@@ -223,6 +223,14 @@ allow = [
     { crate = "unicode-properties" },
     { crate = "version_check" },
     { crate = "whoami" },
+    # The snapshot codec (P2.2, decision log D-035): blake3 with the pure feature, and what it pulls
+    # in. cc, find-msvc-tools and shlex are build-time only; with pure, nothing is compiled by cc.
+    { crate = "blake3" },
+    { crate = "arrayvec" },
+    { crate = "cc" },
+    { crate = "constant_time_eq" },
+    { crate = "find-msvc-tools" },
+    { crate = "shlex" },
 ]
 # Duplicates allowed by name and version, each with its reason (decision log D-017).
 skip = [

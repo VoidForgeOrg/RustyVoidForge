@@ -622,3 +622,46 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **P2.4: a key is unique per player forever, but the host remembers keys only for a window.** A key reused after the window would look new to the host, then fail the append on the unique constraint, and a failed append is fatal. So one client could stop the host. P2.4 must refuse an expired key before the append, or keep the window covering the whole log.
   - **P2.3**: write `rules_version` with `i32::try_from`, and write JSON values (not SQL NULL) in an advance record's `payload` and `outcome`.
 - Where it's enforced: the migrations; `crates/voidforge-store/tests/database.rs` (19 Postgres tests); `.github/scripts/{check-migrations-only-add.sh, test-check-migrations-only-add.sh, database.sh}`; the CI job `database`; `deny.toml`; and the [version table](versions.md).
+
+### D-035: Snapshot codec, header, hash and engine build
+
+- Date and package: 2026-10-18, P2.2. Proposed by dev-design, acting as builder (`slices/20-p2-2-snapshot-codec/proposal-codec.md`). **Lead ruling, overnight; advisor review pending.** None of it is game intent.
+- Decision:
+  - **One encoding, two calls, one guard.** The canonical encoding is postcard with its default configuration (D-024).
+    - `voidforge_store::canonical::to_bytes` and testkit's `determinism::canonical_bytes` both call `postcard::to_allocvec`.
+    - Store's `determinism` tests assert that they give identical bytes on every harness world, event sequence and command list (`canonical_encoding_is_the_determinism_suites`).
+    - Any non-default postcard configuration (a flavor, a different integer form) must change both places, and the guard fails if one is missed.
+    - **Declined: making store the one definition and testkit depend on it.** That would pull sqlx and tokio into the test builds of every crate that uses testkit, and change the Project layering table, all for a one-line function. testkit keeps depending on core and rules only.
+  - **Snapshot bytes are a self-describing envelope**, `MAGIC ‖ header ‖ payload`:
+    - `MAGIC` is `b"VFSNAP"`;
+    - the header is the canonical encoding of `Header { format, rules_version, engine_build, game_time_ms, state_hash }`, and this build writes and reads format 1;
+    - the payload is the World's canonical bytes, to the end of the input.
+    - The Architectural Design's `snapshots.payload` ("Serialized World") is read as **this whole envelope**, so the format version and the hash travel with the World, also outside Postgres (P2.6, P2.7).
+    - The other columns repeat the header (`state_hash`, `rules_version`, `engine_build`, `game_time`); P2.5 checks they agree, and the writer supplies `seq`.
+  - **The hash covers the World payload only**: `state_hash = BLAKE3-256(payload)`, header excluded. The same World has the same hash under any build or format. That's D-024's promise, held as `state_hash_is_blake3_of_the_determinism_canonical_bytes`.
+  - **Decoding goes through core's serde boundary, and only canonical bytes are accepted.** `decode(bytes, Expected { rules_version, engine_build })` checks, in order, each a typed `SnapshotError` and never a panic:
+    1. the magic;
+    2. the header (`Truncated`, `BadHeader`);
+    3. the format (`UnknownFormat`);
+    4. the expected rules version and build (`RulesMismatch`, `BuildMismatch`);
+    5. the hash (`HashMismatch`), before any byte reaches serde;
+    6. the World through `try_from` and `check_links` (`BadPayload`; `Rejected` when the World refuses);
+    7. no trailing bytes (`TrailingBytes`);
+    8. the header against the World (`HeaderWorldMismatch`);
+    9. re-encoding gives the payload back (`NonCanonical`).
+    - So encode, decode and re-encode is identical by construction.
+    - `decode_any` skips only step 4, for tools.
+    - `encode` refuses a poisoned World (`Poisoned`, D-023).
+  - **Engine build identity**: `EngineBuild` is 1 to 64 bytes of printable ASCII without spaces, and the codec takes it as an input.
+    - `ENGINE_BUILD` is `"<workspace version>+<git commit>"`, set by store's `build.rs` from `VOIDFORGE_GIT_SHA` when set (CI and images), else `git rev-parse --short=12 HEAD`, else `unknown`.
+    - Local builds are identified by their HEAD commit, not by uncommitted edits.
+    - The core never sees it. The tests and the determinism suite pass fixed builds, so neither depends on git state.
+  - **Dependencies:**
+    - **blake3 `=1.8.7`** with `default-features = false, features = ["pure"]`: portable Rust, no assembly or C compiled, and the same hash in every mode. Its tree adds arrayvec, constant_time_eq, and cc, find-msvc-tools and shlex as build-time only. No new license (Apache-2.0 is taken from its OR expression) and no duplicate.
+    - **postcard `=1.1.3`** and serde become normal dependencies of store. D-024's "reachable only through dev-dependencies" no longer holds for postcard, which store now uses at run time.
+    - Store's dev-dependencies are testkit, worldgen and proptest, for harness worlds; none reaches the library.
+    - Core's, rules', worldgen's and testkit's `cargo tree -e normal,build` are identical to main's (`slices/20-p2-2-snapshot-codec/proof/dependency-proof.txt`).
+  - **Tests**:
+    - `crates/voidforge-store/tests/snapshot.rs`: round trips on the busy world, an economy mid-advance with fleets and commands, and a generated world before and after Join game; the layout and hash; each refusal by variant; truncation at every length and every single-byte flip;
+    - `crates/voidforge-store/tests/determinism.rs` joins the determinism suite (as worldgen's binary does): the guard, property round trips over testkit's `Scenario` and `Economy`, generated worlds, and in-process and two-process double runs over snapshot bytes. `.github/scripts/determinism.sh` runs it.
+- Where it's enforced: `crates/voidforge-store/src/{snapshot.rs, canonical.rs}`, `build.rs`, the two test binaries, the determinism job, `deny.toml`, and the [version table](versions.md).

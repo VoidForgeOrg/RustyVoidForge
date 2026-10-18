@@ -17,7 +17,7 @@ Library, dev only. P1.3 delivered `WorldBuilder`, `busy_world`, `v0_rules` and t
 - Builders schedule only through the core's `World::schedule_planet` and `World::schedule_fleet` (D-023), so every send, recall and planet event bumps a version as the engine does.
 - `busy_world()` holds every entity, state, mission and queue kind, including a stale entry. Its test has an exhaustive variant census, so a new variant must be added there.
 - It holds the determinism suite from P1.5, which every later package must keep green ([Phase 1](../../docs/Voidforge%20Technical%20Plan.md#phase-1-core-engine)). `just determinism`, and the required CI job of that name, run it and then the two-process double run.
-- Runs are compared on `determinism::canonical_bytes`, postcard. P2.2's state hash is BLAKE3 over exactly these World bytes, never a second encoding (D-024).
+- Runs are compared on `determinism::canonical_bytes`, postcard with its default configuration. The state hash (P2.2) is BLAKE3 over exactly these World bytes (D-024). testkit may not depend on store, so `voidforge_store::canonical::to_bytes` makes the same call. Store's `determinism` tests assert the two agree on every harness world, event sequence and command list, so a change to the postcard configuration must be made in both places ([D-035](../../docs/decision-log.md#d-035-snapshot-codec-header-hash-and-engine-build)). Store's and worldgen's `determinism` binaries drive these harnesses from their side, and `just determinism` runs all three.
 - Golden files in `tests/golden/` change only through `just bless`, and a reviewer checks every change ([Agent factory rules](../../docs/Voidforge%20Technical%20Plan.md#agent-factory-rules)). Both arrive with P2.6.
 
 ## Tests

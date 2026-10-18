@@ -62,7 +62,7 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 
 ## Crate dependencies
 
-The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, tokio, axum, tower-http, reqwest, postcard, blake3, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
+The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, tokio, axum, tower-http, reqwest, uuid, clap, jsonwebtoken, openidconnect, maud, tower-sessions, utoipa, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
@@ -74,7 +74,8 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | tracing-opentelemetry | =0.34.0 (no default features) | telemetry | P0.6 | D-017 |
 | thiserror | =2.0.21 | telemetry; core from P1.1; rules from P1.2 | P0.6 | D-017, D-018, D-020 |
 | proptest | =1.12.0 (std only, no fork or timeout) | core and testkit, dev-dependency only | P1.1 | D-019, D-024 |
-| postcard | =1.1.3 (alloc, default features off) | testkit (dev-only crate), for canonical bytes | P1.5 | D-024 |
+| postcard | =1.1.3 (alloc, default features off) | testkit (dev-only crate), for canonical bytes; store from P2.2, a runtime dependency (the snapshot codec) | P1.5 | D-024, D-035 |
+| blake3 | =1.8.7 (pure, default features off) | store, the state hash | P2.2 | D-035 |
 | rand_chacha | =0.9.0 (default features off) | worldgen, the only randomness source, seeded from the universe seed; already in the tree through opentelemetry_sdk's rand 0.9, so no new crate or duplicate | P1.12 | D-031 |
 | serde | =1.0.229 (std, derive) | rules; core from P1.3 | P1.2 | D-020, D-022 |
 | serde_json | =1.0.154 (std) | core and testkit, dev-dependency only | P1.3 | D-022 |
