@@ -554,7 +554,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `exceptions.rs` refuses an `allow` of it (E0453);
     - the `floats.ok.rs` and `clocks.ok.rs` controls use checked operations.
 
-    The harness covers 133 cases.
+    The harness covers 133 cases with these (136 with the addendum's `dependency_sections.ok.rs` harness control).
   - **Release overflow checks**: `overflow-checks = true` in the workspace's `[profile.release]`, so code outside the ban (the host and the binaries from Phase 2) panics on overflow instead of wrapping.
   - **New code** in these crates writes `checked_*` or `strict_*`; the lint enforces it. A strict site needs its bound argued in the review.
 

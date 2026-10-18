@@ -124,9 +124,16 @@ class Workspace:
         with open(self.path(rel)) as f:
             manifest = f.read()
         header = "[" + section + "]\n"
-        # A crate that already declares a dependency (for example voidforge-rules and toml) has
-        # what the fixture needs; adding it again would be a duplicate key, not a test.
-        declared = set(re.findall(r"(?m)^([A-Za-z0-9_-]+)(?:\.workspace)?\s*=", manifest))
+        # A crate that already declares a dependency in this section (for example
+        # voidforge-rules and toml) has what the fixture needs; adding it again would be a
+        # duplicate key, not a test. Only this section's keys count: a dev-dependency or a
+        # [package] key of the same name does not satisfy a fixture's normal dependency.
+        body = ""
+        if manifest.startswith(header) or ("\n" + header) in manifest:
+            start = manifest.index(header) + len(header)
+            nxt = re.search(r"(?m)^\[", manifest[start:])
+            body = manifest[start:start + nxt.start()] if nxt else manifest[start:]
+        declared = set(re.findall(r"(?m)^([A-Za-z0-9_-]+)(?:\.workspace)?\s*=", body))
         lines = [l for l in lines if re.match(r"\s*([A-Za-z0-9_-]+)", l).group(1) not in declared]
         if not lines:
             return
