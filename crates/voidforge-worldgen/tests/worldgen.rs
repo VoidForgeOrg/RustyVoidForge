@@ -1,7 +1,7 @@
 //! World generation's named tests (Technical Plan P1.12: "The same seed always yields the same
 //! state hash, and every world generation default below holds"; decision log D-031), one per
-//! default, on Rules v0 at the 100-player default and on denser rules for 1 and 7 players (D-031
-//! option B: under the default 1,000-unit cube, small worlds are infeasible by design).
+//! default, on Rules v0 at 1, 7 and 100 players (D-031 option A: any player count generates in
+//! the fixed cube) and on altered rules.
 //! Defaults are checked by brute force here, independently of the generator's grid.
 
 use voidforge_core::command::{Action, Command};
@@ -13,21 +13,13 @@ use voidforge_worldgen::{WorldgenError, generate};
 
 const U: i64 = DISTANCE_UNITS_PER_WORLD_UNIT;
 
-/// Rules v0 with the cube shrunk so `players` keep the 100-player density: side ≈ 1,000 ×
-/// (players / 100)^⅓ world units (precomputed: 216 for 1 player, 413 for 7).
-fn dense_rules(side_units: i64) -> Rules {
-    let mut rules = v0_rules();
-    rules.worldgen.cube_size_du = side_units * U;
-    rules.validate().unwrap();
-    rules
-}
-
 /// Rules with every worldgen number changed from Rules v0, so a default hard-coded in the
 /// generator shows up: 25 planets per player, 12-unit spacing, candidates 160 units apart with
-/// 4 neighbors within 110 units, slots and caps changed too.
+/// 4 neighbors within 110 units in a 450-unit cube, slots and caps changed too.
 fn altered_rules() -> Rules {
-    let mut rules = dense_rules(450);
+    let mut rules = v0_rules();
     let g = &mut rules.worldgen;
+    g.cube_size_du = 450 * U;
     g.planets_per_expected_player = 25;
     g.min_planet_spacing_du = 12 * U;
     g.homeworld_min_spacing_du = 160 * U;
@@ -43,8 +35,10 @@ fn altered_rules() -> Rules {
 fn worlds() -> Vec<(Rules, u32, World)> {
     [
         (v0_rules(), 100, 1),
-        (dense_rules(216), 1, 2),
-        (dense_rules(413), 7, 3),
+        (v0_rules(), 1, 2),
+        (v0_rules(), 7, 3),
+        (v0_rules(), 1, 0),
+        (v0_rules(), 7, u64::MAX),
         (altered_rules(), 7, 4),
     ]
     .into_iter()
@@ -190,15 +184,50 @@ fn the_same_seed_gives_identical_bytes_and_different_seeds_differ() {
 }
 
 #[test]
-fn small_worlds_under_the_default_cube_are_infeasible() {
-    // D-031 option B (provisional pending Tom): uniform placement in the 1,000-unit cube leaves
-    // a 1-player world (20 planets) no planet with 5 neighbors within 100 units.
+fn one_seven_and_a_hundred_players_generate_under_the_default_rules() {
+    // D-031 option A (Tom, 2026-10-18): any player count generates in the fixed 1,000-unit cube.
+    // The guarantees themselves are checked on these sizes by the `default_*` tests above.
+    for players in [1, 7, 100] {
+        let w = generate(1, players, &v0_rules()).unwrap();
+        assert_eq!(w.homeworld_candidates.len(), players as usize);
+        assert_eq!(w.planets.len(), 20 * players as usize);
+    }
+}
+
+/// The real player limit of the default cube: candidates 150 units apart by random placement
+/// fill it at about 240 to 255 (measured over seeds 0 to 11; the packing bound allows 901).
+/// Past it, generation stops with a typed error naming the candidates, never a loop.
+#[test]
+fn the_player_limit_is_a_typed_stop_at_the_candidates() {
+    let rules = v0_rules();
     assert_eq!(
-        generate(1, 1, &v0_rules()),
-        Err(WorldgenError::Infeasible(
-            "too few planets qualify as homeworld candidates"
-        ))
+        generate(0, 241, &rules).unwrap().homeworld_candidates.len(),
+        241
     );
+    assert_eq!(
+        generate(0, 242, &rules),
+        Err(WorldgenError::Exhausted {
+            what: "homeworld candidate",
+            placed: 241
+        })
+    );
+}
+
+#[test]
+fn planet_ids_do_not_reveal_the_candidates() {
+    // Candidates are placed first, but IDs follow coordinate order, so they are not the lowest
+    // IDs, and ID order is coordinate order.
+    let w = generate(9, 7, &v0_rules()).unwrap();
+    let mut ids: Vec<u64> = w.homeworld_candidates.iter().map(|p| p.0).collect();
+    ids.sort();
+    let lowest: Vec<u64> = w.planets.keys().take(7).map(|p| p.0).collect();
+    assert_ne!(ids, lowest);
+    let positions: Vec<(i64, i64, i64)> = w
+        .planets
+        .values()
+        .map(|p| (p.position.x, p.position.y, p.position.z))
+        .collect();
+    assert!(positions.windows(2).all(|p| p[0] < p[1]));
 }
 
 #[test]
@@ -223,7 +252,7 @@ fn feasibility_errors_are_typed() {
     jammed.worldgen.homeworld_neighbor_radius_du = 20 * U;
     assert!(matches!(
         generate(1, 50, &jammed),
-        Err(WorldgenError::Exhausted { .. })
+        Err(WorldgenError::Exhausted { what: "planet", .. })
     ));
     // Invalid rules are refused through validation.
     let mut bad = v0_rules();
@@ -258,9 +287,9 @@ fn the_100_player_default_generates() {
 
 #[test]
 fn a_fixed_seed_gives_the_recorded_world() {
-    // A golden: seed 8 at 7 players under the dense rules. Any change to the sampling, the RNG's
-    // use or the shuffle changes it; refresh only on a deliberate change (D-031).
-    let w = generate(8, 7, &dense_rules(413)).unwrap();
+    // A golden: seed 8 at 7 players under Rules v0. Any change to the sampling, the RNG's use or
+    // the shuffle changes it; refresh only on a deliberate change (D-031; option A refreshed it).
+    let w = generate(8, 7, &v0_rules()).unwrap();
     let first: Vec<(i64, i64, i64)> = w
         .planets
         .values()
@@ -272,8 +301,8 @@ fn a_fixed_seed_gives_the_recorded_world() {
     assert_eq!(candidates, GOLDEN_CANDIDATES);
 }
 
-const GOLDEN_FIRST: [(i64, i64, i64); 3] = [(55, 33, 219), (398, 59, 28), (176, 392, 178)];
-const GOLDEN_CANDIDATES: [u64; 7] = [133, 52, 23, 102, 22, 126, 40];
+const GOLDEN_FIRST: [(i64, i64, i64); 3] = [(7, 227, 327), (13, 947, 274), (28, 21, 660)];
+const GOLDEN_CANDIDATES: [u64; 7] = [91, 84, 126, 118, 80, 58, 61];
 
 /// review-r2's M2 witness: a cube of 160 units, spacing 11, and 4,000 planets for one player.
 /// The lattice (8x, 8y, 8z), x, y, z in 0..20 with x + y + z even, holds 4,000 points pairwise

@@ -2,10 +2,11 @@
 //! Design, State model and Determinism rules; decision log D-031).
 //!
 //! [`generate`] turns a 64-bit universe seed, an expected player count and the rules into the
-//! universe's first `World`: planets placed uniformly on whole world units in the rules' cube
-//! (D-021), every pair at least the rules' spacing apart, and an ordered list of homeworld
-//! candidates, each far enough from the others and with enough planets near it. Every number comes
-//! from the rules' `worldgen` section, never from a constant here.
+//! universe's first `World`: planets on whole world units in the rules' cube (D-021), every pair
+//! at least the rules' spacing apart, and an ordered list of homeworld candidates, each far
+//! enough from the others and with enough planets near it by construction (D-031, option A:
+//! candidates first, then their neighborhoods, then a uniform fill). Every number comes from the
+//! rules' `worldgen` section, never from a constant here.
 //!
 //! The only randomness is `ChaCha8Rng` seeded from the universe seed. Sampling is integer-exact
 //! rejection sampling. Each placement has a hard attempt bound, and running out of attempts is
@@ -42,14 +43,16 @@ pub enum WorldgenError {
     /// The rules are not valid.
     #[error(transparent)]
     Rules(#[from] RulesError),
-    /// The parameters cannot hold for this many players: a necessary packing bound fails, or too
-    /// few planets qualify as homeworld candidates (D-031: small worlds under the default rules).
+    /// The parameters cannot hold for this many players: a necessary packing bound fails.
     #[error("infeasible world generation: {0}")]
     Infeasible(&'static str),
-    /// A planet found no free spot within [`MAX_ATTEMPTS`] draws.
-    #[error("no room for another planet after {MAX_ATTEMPTS} draws ({placed} placed)")]
+    /// A homeworld candidate or a planet found no free spot within [`MAX_ATTEMPTS`] draws. For
+    /// candidates, this is the real player limit of the cube (D-031).
+    #[error("no room for another {what} after {MAX_ATTEMPTS} draws ({placed} placed)")]
     Exhausted {
-        /// Planets placed so far.
+        /// "homeworld candidate" or "planet".
+        what: &'static str,
+        /// How many of them were placed so far.
         placed: usize,
     },
     /// Building the world failed (exhausted IDs, a solve error): an engine bug, not a parameter.
@@ -61,14 +64,18 @@ pub enum WorldgenError {
 }
 
 /// Generates the first `World` of a universe from `seed` for `players` expected players
-/// (D-031, option B, provisional pending Tom).
+/// (D-031, option A, Tom's decision of 2026-10-18).
 ///
-/// 1. `players × planets_per_expected_player` planets, uniform in the cube on whole world
-///    units, each at least `min_planet_spacing_du` from every other.
-/// 2. Homeworld candidates: the planets with at least `homeworld_min_neighbors` others within
-///    `homeworld_neighbor_radius_du`, taken in a seeded shuffle, each kept if it is at least
-///    `homeworld_min_spacing_du` from those already kept, until `players` are kept. That order
-///    is the candidate order. Too few is [`WorldgenError::Infeasible`].
+/// 1. `players` homeworld candidates, uniform in the cube on whole world units, each at least
+///    `homeworld_min_spacing_du` from the others.
+/// 2. Around each candidate in turn, planets uniform within `homeworld_neighbor_radius_du`
+///    (inclusive, clipped to the cube) until it has `homeworld_min_neighbors`, counting any
+///    already there.
+/// 3. The rest uniform in the cube, up to `players × planets_per_expected_player`.
+///
+/// Every planet is at least `min_planet_spacing_du` from every other. The candidate order is a
+/// seeded shuffle. Planet IDs follow coordinate order, so an ID says nothing about which planets
+/// are candidates. Each placement has [`MAX_ATTEMPTS`] draws, then [`WorldgenError::Exhausted`].
 ///
 /// The world is at time 0 with the seed recorded, every planet unowned with the rules' slots
 /// and caps and empty stocks, and solved (D-025).
@@ -109,44 +116,54 @@ pub fn generate(seed: u64, players: u32, rules: &Rules) -> Result<World, Worldge
     }
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    // 1. The candidates. Validation keeps their spacing at least the planets', so they are the
+    // first planets as they are.
+    let mut sites = Placed::new(home_spacing);
+    while sites.points.len() < players as usize {
+        sites.place(&mut rng, side, "homeworld candidate")?;
+    }
     let mut placed = Placed::new(spacing);
-    while (placed.points.len() as u64) < total {
-        placed.place(&mut rng, side)?;
+    for &p in &sites.points {
+        placed.insert(p);
     }
 
-    // Planets that qualify, in placement order, then a seeded shuffle (Fisher–Yates), then a
-    // greedy pick keeping the candidates' spacing.
+    // 2. Each candidate's neighborhood, counting planets already within the radius (earlier
+    // neighborhoods can overlap it). Later placements only add neighbors.
     let min_neighbors = g.homeworld_min_neighbors as usize;
-    let counts = neighbor_counts(&placed.points, radius);
-    let mut eligible: Vec<usize> = (0..placed.points.len())
-        .filter(|&i| counts[i] >= min_neighbors)
-        .collect();
-    for i in (1..eligible.len()).rev() {
-        let j = below(&mut rng, (i as u64).strict_add(1)) as usize;
-        eligible.swap(i, j);
-    }
-    let mut chosen: Vec<usize> = Vec::new();
-    for i in eligible {
-        if chosen.len() == players as usize {
-            break;
-        }
-        let p = placed.points[i];
-        if chosen
+    for (k, &c) in sites.points.iter().enumerate() {
+        let mut near = placed
+            .points
             .iter()
-            .all(|&c| dist2(placed.points[c], p) >= sq(home_spacing))
-        {
-            chosen.push(i);
+            .enumerate()
+            .filter(|&(i, &q)| i != k && within(q, c, radius))
+            .count();
+        while near < min_neighbors {
+            placed.place_near(&mut rng, side, c, radius)?;
+            near = near.strict_add(1);
         }
     }
-    if chosen.len() < players as usize {
-        return Err(WorldgenError::Infeasible(
-            "too few planets qualify as homeworld candidates",
-        ));
+
+    // 3. The uniform fill. Validation gives planets_per_expected_player ≥ 1 + min_neighbors, so
+    // steps 1 and 2 never exceed the total.
+    while (placed.points.len() as u64) < total {
+        placed.place(&mut rng, side, "planet")?;
+    }
+
+    // 4. The candidate order: a seeded shuffle (Fisher–Yates). Candidates are the first
+    // `players` points.
+    let mut chosen: Vec<usize> = (0..players as usize).collect();
+    for i in (1..chosen.len()).rev() {
+        let j = below(&mut rng, (i as u64).strict_add(1)) as usize;
+        chosen.swap(i, j);
     }
 
     let mut world = World::new(0, rules.version, seed);
-    let mut ids = Vec::with_capacity(placed.points.len());
-    for p in &placed.points {
+    // IDs in coordinate order (a stable sort), so candidates are not the lowest IDs.
+    let mut by_position: Vec<usize> = (0..placed.points.len()).collect();
+    by_position.sort_by_key(|&i| placed.points[i]);
+    let mut ids = vec![PlanetId(0); placed.points.len()];
+    for i in by_position {
+        let p = &placed.points[i];
         let id = PlanetId(world.allocate_id()?);
         world.planets.insert(
             id,
@@ -171,10 +188,10 @@ pub fn generate(seed: u64, players: u32, rules: &Rules) -> Result<World, Worldge
                 next_event: None,
             },
         );
-        ids.push(id);
+        ids[i] = id;
     }
     world.homeworld_candidates = chosen.into_iter().map(|i| ids[i]).collect();
-    for id in ids {
+    for id in world.planets.keys().copied().collect::<Vec<_>>() {
         world.solve_planet(id, rules)?;
     }
     world.check_links()?;
@@ -208,19 +225,59 @@ impl Placed {
         adjacent(&self.grid, self.cell(p)).all(|i| dist2(self.points[i], p) >= sq(self.spacing))
     }
 
+    /// Adds `p` (the caller has checked it fits).
+    fn insert(&mut self, p: [i64; 3]) {
+        let key = self.cell(p);
+        self.grid.entry(key).or_default().push(self.points.len());
+        self.points.push(p);
+    }
+
     /// Places one point uniformly in `[0, side)³` that keeps the spacing, within
     /// [`MAX_ATTEMPTS`] draws.
-    fn place(&mut self, rng: &mut ChaCha8Rng, side: i64) -> Result<(), WorldgenError> {
+    fn place(
+        &mut self,
+        rng: &mut ChaCha8Rng,
+        side: i64,
+        what: &'static str,
+    ) -> Result<(), WorldgenError> {
         for _ in 0..MAX_ATTEMPTS {
             let p = uniform(rng, side);
             if self.fits(p) {
-                let key = self.cell(p);
-                self.grid.entry(key).or_default().push(self.points.len());
-                self.points.push(p);
+                self.insert(p);
                 return Ok(());
             }
         }
         Err(WorldgenError::Exhausted {
+            what,
+            placed: self.points.len(),
+        })
+    }
+
+    /// Places one point uniformly within `radius` of `c` (inclusive) and inside `[0, side)³`
+    /// that keeps the spacing, within [`MAX_ATTEMPTS`] draws: uniform in the bounding box
+    /// clipped to the cube, rejecting points outside the ball.
+    fn place_near(
+        &mut self,
+        rng: &mut ChaCha8Rng,
+        side: i64,
+        c: [i64; 3],
+        radius: i64,
+    ) -> Result<(), WorldgenError> {
+        // c is inside the cube and the radius is validated (D-031), so these stay in range.
+        let lo = c.map(|x| x.strict_sub(radius).max(0));
+        let hi = c.map(|x| x.strict_add(radius).min(side.strict_sub(1).max(0)));
+        for _ in 0..MAX_ATTEMPTS {
+            let p = [0, 1, 2].map(|i| {
+                let span = hi[i].strict_sub(lo[i]).strict_add(1).max(1) as u64;
+                lo[i].strict_add(below(rng, span) as i64)
+            });
+            if within(p, c, radius) && self.fits(p) {
+                self.insert(p);
+                return Ok(());
+            }
+        }
+        Err(WorldgenError::Exhausted {
+            what: "planet",
             placed: self.points.len(),
         })
     }
@@ -245,24 +302,9 @@ fn adjacent(
         .copied()
 }
 
-/// For each point, how many other points lie within `radius` (inclusive), using a grid of cell
-/// size `radius` so only the 27 surrounding cells are searched.
-fn neighbor_counts(points: &[[i64; 3]], radius: i64) -> Vec<usize> {
-    let c = radius.max(1);
-    let cell = |p: [i64; 3]| [p[0].strict_div(c), p[1].strict_div(c), p[2].strict_div(c)];
-    let mut grid: BTreeMap<[i64; 3], Vec<usize>> = BTreeMap::new();
-    for (i, &p) in points.iter().enumerate() {
-        grid.entry(cell(p)).or_default().push(i);
-    }
-    points
-        .iter()
-        .enumerate()
-        .map(|(i, &p)| {
-            adjacent(&grid, cell(p))
-                .filter(|&j| j != i && dist2(points[j], p) <= sq(radius))
-                .count()
-        })
-        .collect()
+/// Whether `a` is within `radius` of `b`, inclusive ("within 100 units").
+fn within(a: [i64; 3], b: [i64; 3], radius: i64) -> bool {
+    dist2(a, b) <= sq(radius)
 }
 
 /// A uniform integer in `0..n` (`n > 0`), without modulo bias: draws in the top partial range
