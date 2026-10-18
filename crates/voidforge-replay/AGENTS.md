@@ -14,7 +14,9 @@ voidforge-replay inspect postgres [--database-url <URL>] [--json]
 ```
 
 - **`golden`** verifies golden directories, or directories of goldens: the start, every record, the hash after every record, the end and the scores. It runs under the fixture build `0.1.0+golden`, with `rules/v<N>.toml` from the nearest ancestor unless `--rules` is given.
-- **`postgres`** verifies from a snapshot (`--from`, default the earliest) to the head (or `--to`). Every later snapshot row is a hash checkpoint. `--database-url` defaults to `DATABASE_URL` and is never printed.
+- **`postgres`** verifies from a snapshot (`--from`, default the earliest) to the head (or `--to`). `--database-url` defaults to `DATABASE_URL` and is never printed.
+  - Every later snapshot row is a checkpoint: it's decoded strictly and cross-checked, then compared with the replayed World brought to the snapshot's own game time (which reproduces unlogged eventless advances).
+  - A snapshot past the log head is refused.
 - **`inspect`** reports builds, rules versions, snapshot headers and record ranges. It reads headers through `decode_any`, so **nothing it prints is verified** (D-035): text output says UNVERIFIED, and JSON says `"verified": false`.
 - **`--build <ID>`** asserts the build that wrote the log (default: this binary's own `ENGINE_BUILD`). **A pass under `--build` means this binary's code reproduces that log, not that the named build's code was verified.** A production incident log is verified by its own build's binary. The output always names the build and whether `--build` gave it.
 

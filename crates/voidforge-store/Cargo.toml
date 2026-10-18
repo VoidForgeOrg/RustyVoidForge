@@ -22,6 +22,8 @@ thiserror.workspace = true
 voidforge-testkit.workspace = true
 voidforge-worldgen.workspace = true
 proptest.workspace = true
+# Drives verify_log over MemoryLog in its tests (P2.7, D-041).
+tokio.workspace = true
 
 [lints]
 workspace = true

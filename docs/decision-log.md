@@ -814,7 +814,11 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Decision:
   - **One verification path, in store.**
     - `voidforge_store::golden` now holds the golden format and `verify_golden`, moved from the host's tests. This amends D-040: the host's tests still record, and they verify through store.
-    - `voidforge_store::verify` holds `verify_log`. It works over any `LogStore`: the start snapshot is decoded strictly and cross-checked against its row, every later record goes through `replay::replay_record`, and the state hash is checked at every later snapshot row. A Postgres log carries no per-record hashes, so its snapshots are its checkpoints.
+    - `voidforge_store::verify` holds `verify_log`. It works over any `LogStore`: the start snapshot is decoded strictly and cross-checked against its row, every later record goes through `replay::replay_record`, and every later snapshot row is a checkpoint. A Postgres log carries no per-record hashes, so its snapshots are its checkpoints.
+      - Each later snapshot is decoded strictly and cross-checked against its row, like the start.
+      - The replayed World is brought to the snapshot's own game time, since a snapshot may follow unlogged eventless advances (D-036); any event on the way is a divergence. It must then have the snapshot's hash.
+      - Any snapshot past the log head is refused, as recovery refuses it.
+      - These rules come from dev-qa's QA repair of c29210c: F1, a shutdown snapshot after an eventless advance was reported diverged; F2, a corrupt, past-head or inconsistent later snapshot verified.
     - Both report a `VerifyError`: `Diverged`, `Refused` (another build or rules version) or `Input`.
     - `ReplayError::Diverged` now carries what the record holds and what replay produced, in the log's JSON form.
     - `LogStore` gains `snapshot_index` (snapshot rows without payloads) and `snapshot_at`. `PgLog` gains `lazy_url`.

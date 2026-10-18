@@ -215,11 +215,13 @@ async fn a_tampered_postgres_log_is_pinpointed(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap();
+    // The column no longer matches the snapshot's own header: a divergence at that snapshot
+    // (a valid snapshot of another state is `state_hash`; see store's tests/verify.rs).
     let (code, v) = replay(&pool, &GOLDEN_BUILD);
     let d = &v["sources"][0]["divergence"];
     assert_eq!(
         (code, d["seq"].as_i64(), d["what"].as_str()),
-        (1, Some(8), Some("state_hash"))
+        (1, Some(8), Some("snapshot"))
     );
 }
 
@@ -263,4 +265,50 @@ async fn inspect_postgres_reports_unverified_metadata(pool: PgPool) {
     assert_eq!(s["snapshots"].as_array().unwrap().len(), 3);
     assert_eq!(s["records"]["count"], 12);
     assert_eq!(s["records"]["engine_builds"][0], "0.1.0+golden");
+}
+
+/// dev-qa's F1 and F2 on c29210c, through the binary: a shutdown snapshot after an unlogged
+/// eventless advance verifies; a snapshot past the head is refused as a divergence.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn later_snapshots_are_checked_at_their_own_time(pool: PgPool) {
+    load(&pool, "whole-loop").await;
+    let files = golden("whole-loop");
+    let rules = voidforge_rules::parse(&std::fs::read_to_string(rules_file()).unwrap()).unwrap();
+    let build = fixture();
+    let mut world = snapshot::decode(
+        &files.start,
+        &Expected {
+            rules_version: rules.version,
+            engine_build: &build,
+        },
+    )
+    .unwrap()
+    .world;
+    let records = files.records().unwrap();
+    for r in &records {
+        replay::replay_record(&mut world, r, &rules, &build).unwrap();
+    }
+    let last = records.last().unwrap();
+    let events = world
+        .advance_to(last.game_time + 10 * 3_600_000, &rules)
+        .unwrap();
+    assert!(events.is_empty());
+    let mut pg = PgLog::new(pool.clone());
+    let shutdown = snapshot::encode(&world, &build).unwrap();
+    pg.write_snapshot(&SnapshotRow::new(last.seq, &shutdown))
+        .await
+        .unwrap();
+    let (code, v) = replay(&pool, &GOLDEN_BUILD);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["sources"][0]["checkpoints"].as_u64(), Some(4));
+    pg.write_snapshot(&SnapshotRow::new(last.seq + 1, &shutdown))
+        .await
+        .unwrap();
+    let (code, v) = replay(&pool, &GOLDEN_BUILD);
+    let d = &v["sources"][0]["divergence"];
+    assert_eq!(
+        (code, d["seq"].as_i64(), d["what"].as_str()),
+        (1, Some(last.seq + 1), Some("snapshot"))
+    );
 }

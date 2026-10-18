@@ -1999,6 +1999,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror",
+ "tokio",
  "voidforge-core",
  "voidforge-testkit",
  "voidforge-worldgen",

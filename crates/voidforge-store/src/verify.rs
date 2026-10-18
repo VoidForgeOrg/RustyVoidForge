@@ -13,7 +13,7 @@
 use voidforge_core::rules::Rules;
 use voidforge_core::state::World;
 
-use crate::log::{LogError, LogRecord, LogStore, SnapshotMeta, SnapshotRow};
+use crate::log::{LogError, LogRecord, LogStore, SnapshotRow};
 use crate::replay::{self, ReplayError};
 use crate::snapshot::{self, EngineBuild, Expected, SnapshotError};
 
@@ -246,6 +246,17 @@ pub async fn verify_log<S: LogStore>(
     to: Option<i64>,
 ) -> Result<Report, VerifyError> {
     let index = store.snapshot_index().await?;
+    // A snapshot past the log head claims records the log does not hold (as recovery refuses,
+    // D-038), wherever it is in the index.
+    let head = store.last().await?.map_or(0, |(seq, _)| seq);
+    if let Some(past) = index.iter().find(|s| s.seq > head) {
+        return Err(VerifyError::diverged(
+            Some(past.seq),
+            "snapshot",
+            format!("a snapshot at or before the log head (seq {head})"),
+            format!("a snapshot at seq {}", past.seq),
+        ));
+    }
     let start = match from {
         Some(seq) => index
             .iter()
@@ -267,13 +278,46 @@ pub async fn verify_log<S: LogStore>(
         .into_iter()
         .filter(|r| to.is_none_or(|t| r.seq <= t))
         .collect();
-    let later: Vec<&SnapshotMeta> = index.iter().filter(|s| s.seq > seq).collect();
-    let (last, checked) = replay_checked(&mut world, seq, &records, rules, build, |r| {
-        Ok(later
-            .iter()
-            .find(|s| s.seq == r.seq)
-            .map(|s| hex(&s.state_hash)))
-    })?;
+    // Every later snapshot is a checkpoint: decoded strictly and cross-checked like the start,
+    // then compared with the replayed World brought to the snapshot's own game time. A snapshot
+    // may follow unlogged eventless advances (D-036), which bringing the World there reproduces;
+    // events in between would have been logged, so any is a divergence.
+    let mut later = Vec::new();
+    for meta in index.iter().filter(|s| s.seq > seq) {
+        if records.last().is_some_and(|r| meta.seq <= r.seq) {
+            let row = store.snapshot_at(meta.seq).await?.ok_or_else(|| {
+                VerifyError::Input(format!("the snapshot at seq {} vanished", meta.seq))
+            })?;
+            // Strict decoding refuses a corrupt payload; the columns must match its header.
+            decode_row(&row, rules, build)?;
+            later.push(row);
+        }
+    }
+    let (mut last, mut checked) = (seq, 0_usize);
+    for r in &records {
+        replay::replay(&mut world, last, std::slice::from_ref(r), rules, build)?;
+        last = r.seq;
+        for row in later.iter().filter(|row| row.seq == r.seq) {
+            let at = Some(row.seq);
+            let mut brought = world.clone();
+            let events = brought.advance_to(row.game_time, rules).map_err(|e| {
+                VerifyError::diverged(at, "snapshot", "no engine error", e.to_string())
+            })?;
+            if !events.is_empty() {
+                return Err(VerifyError::diverged(
+                    at,
+                    "snapshot",
+                    format!("no events before the snapshot's time {}", row.game_time),
+                    crate::log::events_json(&events),
+                ));
+            }
+            let (expected, found) = (hex(&row.state_hash), hash_hex(&brought, at)?);
+            if found != expected {
+                return Err(VerifyError::diverged(at, "state_hash", expected, found));
+            }
+            checked = checked.saturating_add(1);
+        }
+    }
     Ok(Report {
         build: build.as_str().to_owned(),
         rules_version: rules.version,
