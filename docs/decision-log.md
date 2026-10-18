@@ -760,6 +760,11 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Verification is event replay plus the state hash** (D-033): every replayed record must reproduce its events and outcome, and byte identity is checked by canonical bytes and the state hash. `check_links`, which runs inside decoding, is structural only and doesn't validate gameplay fields.
   - **Unlogged eventless advances** (D-036's obligation) are reproduced implicitly: the next replayed step advances through the same instant to the same state (observation invariance, D-024). A snapshot taken after one includes it.
   - **The P2.2 review's LOWs:** the header must be its own canonical encoding (`NonCanonicalHeader`); `decode_any` is documented as inspection only, with build metadata unverified, and recovery never uses it.
+- **Bounded repair 1** (dev-qa's findings, confirmed by review-r1):
+  - **M1:** `recover` refuses a snapshot whose seq is past the log head (`SnapshotPastHead { snapshot_seq, head }`). Recovering from one would make the next acknowledged commands vanish at the following recovery. Tested through both stores.
+  - **L1:** `replay_record` refuses a record whose `rules_version` isn't the supplied rules' (`RulesMismatch`), per Determinism rules.
+  - **L2:** it refuses a command record whose `player` column isn't the command's player (`Malformed`).
+  - **L3:** QA's two cases are in the suite: a record whose events were emptied diverges, and another build's *advance* record is refused.
 - Where it's enforced:
   - `crates/voidforge-store/src/{replay.rs, log.rs, snapshot.rs}`;
   - `crates/voidforge-host/src/lib.rs` (`recover`, the schedule, the shutdown snapshot);

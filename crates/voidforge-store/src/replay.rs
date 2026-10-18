@@ -98,6 +98,17 @@ pub enum ReplayError {
         /// The seq found.
         found: i64,
     },
+    /// The record was written under another rules version than the rules supplied: replay
+    /// refuses a mismatch (Architectural Design, Determinism rules).
+    #[error("record {seq} is for rules version {found}, replaying with {expected}")]
+    RulesMismatch {
+        /// The record.
+        seq: i64,
+        /// The rules supplied.
+        expected: u32,
+        /// The record's.
+        found: u32,
+    },
     /// A record kind this build does not replay yet (`rules_change`, `system`).
     #[error("record {seq}: {kind} records are not replayed by this build")]
     Unsupported {
@@ -152,7 +163,20 @@ pub fn replay_record(
             found: record.engine_build.as_str().to_owned(),
         });
     }
+    if record.rules_version != rules.version {
+        return Err(ReplayError::RulesMismatch {
+            seq,
+            expected: rules.version,
+            found: record.rules_version,
+        });
+    }
     let what = match (record.kind, &record.payload) {
+        (RecordKind::Command, Payload::Command(c)) if record.player != Some(c.player) => {
+            return Err(ReplayError::Malformed {
+                seq,
+                what: "the player column differs from the command's player",
+            });
+        }
         (RecordKind::Command, Payload::Command(c)) => Step::Command(c),
         (RecordKind::Advance, Payload::Empty) => Step::Advance,
         (RecordKind::Command | RecordKind::Advance, _) => {

@@ -509,3 +509,14 @@ async fn an_upgrade_over_another_builds_tail_is_refused_through_postgres(pool: P
     })
     .await;
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_snapshot_past_the_log_head_is_refused_through_postgres(pool: PgPool) {
+    // Review M1 through Postgres.
+    let options = (*pool.connect_options()).clone();
+    common::snapshot_past_head_is_refused(PgLog::new(pool.clone()), move || {
+        PgLog::lazy(options.clone())
+    })
+    .await;
+}

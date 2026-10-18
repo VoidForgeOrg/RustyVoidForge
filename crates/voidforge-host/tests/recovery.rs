@@ -766,3 +766,117 @@ async fn a_host_spawned_on_a_non_empty_log_reads_the_log_head() {
     drop(handle);
     task.join().unwrap();
 }
+
+// --- Bounded repair 1 (review M1, L1 to L3) ---
+
+#[tokio::test]
+async fn a_snapshot_past_the_log_head_is_refused() {
+    let log = MemoryLog::new();
+    common::snapshot_past_head_is_refused(log.clone(), move || log.clone()).await;
+}
+
+/// An economy run from the bootstrap snapshot, stopped by a crash (so no later snapshot): a log
+/// of advance and command records, every one replayed by `recover`.
+async fn economy_log() -> MemoryLog {
+    let rules = v0_rules();
+    let e = economy(0x2_5301);
+    let log = MemoryLog::new();
+    let start = e.world(&rules);
+    log.clone()
+        .write_snapshot(&SnapshotRow::new(
+            0,
+            &snapshot::encode(&start, &build()).unwrap(),
+        ))
+        .await
+        .unwrap();
+    let mut cfg = config();
+    cfg.snapshot_every_records = 1_000_000;
+    let clock = clock_at(0);
+    let (mut handle, task) = {
+        let store = common::FailAfter::new(log.clone(), 40);
+        voidforge_host::spawn(start, rules.clone(), move || store, clock.clone(), cfg).unwrap()
+    };
+    for (at, k) in e.script() {
+        clock.set(EPOCH + at);
+        common::settle(&mut handle, &clock).await;
+        let command = e.command(k, &handle.read().world);
+        if handle.submit_with_key(command, key_for(k)).await.is_err() {
+            break;
+        }
+    }
+    drop(handle);
+    assert!(task.join().is_err(), "stopped by the crash");
+    assert_eq!(log.snapshot_rows().len(), 1, "only the bootstrap snapshot");
+    assert_eq!(recover(&log, &rules).await.unwrap().last_seq, 40);
+    log
+}
+
+fn first_where(
+    log: &MemoryLog,
+    f: impl Fn(&voidforge_store::log::LogRecord) -> bool,
+) -> voidforge_store::log::LogRecord {
+    log.snapshot().into_iter().find(f).expect("such a record")
+}
+
+#[tokio::test]
+async fn a_record_of_another_rules_version_is_refused() {
+    // Review L1: replay refuses a rules mismatch (Determinism rules).
+    let log = economy_log().await;
+    let mut r = first_where(&log, |r| r.seq == 5);
+    r.rules_version = 1;
+    log.tamper(r);
+    assert!(matches!(
+        recover(&log, &v0_rules()).await,
+        Err(RecoverError::Replay(ReplayError::RulesMismatch {
+            seq: 5,
+            expected: 0,
+            found: 1
+        }))
+    ));
+}
+
+#[tokio::test]
+async fn a_command_records_player_column_must_match_its_command() {
+    // Review L2.
+    let log = economy_log().await;
+    let mut r = first_where(&log, |r| {
+        r.kind == voidforge_store::log::RecordKind::Command
+    });
+    let seq = r.seq;
+    r.player = Some(voidforge_core::state::PlayerId(r.player.unwrap().0 ^ 1));
+    log.tamper(r);
+    assert!(matches!(
+        recover(&log, &v0_rules()).await,
+        Err(RecoverError::Replay(ReplayError::Malformed { seq: s, .. })) if s == seq
+    ));
+}
+
+#[tokio::test]
+async fn a_record_whose_events_were_emptied_diverges() {
+    // Review L3, QA's M10: verification also covers a record that claims no events.
+    let log = economy_log().await;
+    let mut r = first_where(&log, |r| !r.events.is_empty());
+    let seq = r.seq;
+    r.events.clear();
+    log.tamper(r);
+    assert!(matches!(
+        recover(&log, &v0_rules()).await,
+        Err(RecoverError::Replay(ReplayError::Diverged { seq: s, what: "events" })) if s == seq
+    ));
+}
+
+#[tokio::test]
+async fn another_builds_advance_record_is_refused() {
+    // Review L3, QA's M11: the build check covers advance records, not only commands.
+    let log = economy_log().await;
+    let mut r = first_where(&log, |r| {
+        r.kind == voidforge_store::log::RecordKind::Advance
+    });
+    let seq = r.seq;
+    r.engine_build = EngineBuild::new("0.1.0+other").unwrap();
+    log.tamper(r);
+    assert!(matches!(
+        recover(&log, &v0_rules()).await,
+        Err(RecoverError::Replay(ReplayError::CrossBuildRecord { seq: s, .. })) if s == seq
+    ));
+}

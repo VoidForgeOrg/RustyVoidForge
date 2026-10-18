@@ -781,6 +781,14 @@ pub enum RecoverError {
     /// first snapshot, at seq 0, before any record).
     #[error("no snapshot: the universe has not been bootstrapped")]
     NoSnapshot,
+    /// The newest snapshot claims more records than the log holds.
+    #[error("the snapshot at seq {snapshot_seq} is past the log head (seq {head})")]
+    SnapshotPastHead {
+        /// The snapshot's seq.
+        snapshot_seq: i64,
+        /// The log's last seq (0 when empty).
+        head: i64,
+    },
     /// The store could not be read.
     #[error("the store could not be read: {0}")]
     Store(#[from] LogError),
@@ -846,6 +854,15 @@ pub async fn recover<S: LogStore>(
         .await?
         .ok_or(RecoverError::NoSnapshot)?;
     let seq = row.seq;
+    // A snapshot past the log head claims records the log does not hold; recovering from it
+    // would make the next acknowledged commands vanish at the following recovery (review M1).
+    let head = store.last().await?.map_or(0, |(seq, _)| seq);
+    if seq > head {
+        return Err(RecoverError::SnapshotPastHead {
+            snapshot_seq: seq,
+            head,
+        });
+    }
     let row_build = EngineBuild::new(row.engine_build.clone())
         .map_err(|error| RecoverError::Snapshot { seq, error })?;
     let expect = Expected {

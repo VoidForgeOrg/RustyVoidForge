@@ -410,7 +410,14 @@ where
     let back = recover(&mut inspect, &rules, &build()).await.unwrap();
     assert_eq!((back.snapshot_seq, back.last_seq), (6, 6));
     assert_eq!(back.world, b_clean);
-    // 6. A newer format at the head (a build this one cannot read): a typed error.
+    // 6. A newer format at the head (a build this one cannot read): a typed error. B appends one
+    // more record and crashes, and the newer build's snapshot is planted at that head (seq 7):
+    // a snapshot past the head would be refused first (review M1).
+    let world6 = recover(&mut inspect, &rules, &upgraded())
+        .await
+        .unwrap()
+        .world;
+    run_build(world6, make.clone(), &upgraded(), joins(2, "d"), Some(1)).await;
     let mut newer = inspect.latest_snapshot(None).await.unwrap().unwrap();
     let decoded = voidforge_store::snapshot::decode_any(&newer.payload).unwrap();
     let mut header = decoded.header;
@@ -423,7 +430,8 @@ where
     bytes.extend(voidforge_store::canonical::to_bytes(&header).unwrap());
     bytes.extend_from_slice(&newer.payload[payload_start..]);
     newer.payload = bytes;
-    newer.seq += 100;
+    newer.seq = inspect.last().await.unwrap().unwrap().0;
+    assert_eq!(newer.seq, 7);
     inspect.write_snapshot(&newer).await.unwrap();
     assert!(matches!(
         recover(&mut inspect, &rules, &upgraded()).await,
@@ -468,4 +476,36 @@ where
             .last_seq,
         2
     );
+}
+
+/// Review M1, on one store: a snapshot past the log head (it claims records the log does not
+/// hold) is refused with both numbers, never recovered from (D-038).
+pub async fn snapshot_past_head_is_refused<S, M>(mut inspect: S, make: M)
+where
+    S: LogStore + Clone + Sync,
+    M: Fn() -> S + Clone + Send + 'static,
+{
+    use voidforge_host::{RecoverError, recover};
+    let rules = voidforge_testkit::v0_rules();
+    let mut b = voidforge_testkit::WorldBuilder::new();
+    b.player(voidforge_testkit::ALICE);
+    let world = b.build();
+    let snap = voidforge_store::snapshot::encode(&world, &build()).unwrap();
+    inspect
+        .write_snapshot(&SnapshotRow::new(0, &snap))
+        .await
+        .unwrap();
+    let a = recover(&mut inspect, &rules, &build()).await.unwrap();
+    run_build(a.world, make, &build(), joins(3, "p"), Some(2)).await;
+    // Records 1 and 2, no snapshot after the bootstrap; then a planted snapshot claiming seq 7.
+    let mut planted = inspect.latest_snapshot(None).await.unwrap().unwrap();
+    planted.seq = 7;
+    inspect.write_snapshot(&planted).await.unwrap();
+    assert!(matches!(
+        recover(&mut inspect, &rules, &build()).await,
+        Err(RecoverError::SnapshotPastHead {
+            snapshot_seq: 7,
+            head: 2
+        })
+    ));
 }
