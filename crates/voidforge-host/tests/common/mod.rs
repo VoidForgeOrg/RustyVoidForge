@@ -15,6 +15,7 @@ use voidforge_store::log::{IdempotencyKey, LogError, LogRecord, LogStore, Memory
 use voidforge_store::snapshot::EngineBuild;
 use voidforge_testkit::determinism::Economy;
 
+pub mod filelog;
 pub mod golden;
 
 /// The universe epoch the tests use: game time 0 is this Unix millisecond.

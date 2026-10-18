@@ -75,8 +75,9 @@ echo "--- sqlx offline metadata check"
 DATABASE_URL="$cli_url" cargo sqlx prepare --workspace --check -- --all-targets
 
 echo "--- store and host tests against Postgres"
-# Only the Postgres binaries (store's database, host's postgres): the other ignored tests are the
-# determinism suites' two-process runs.
+# Only the Postgres binaries (store's database, host's and replay's postgres, host's crash): the
+# other ignored tests are the determinism suites' two-process runs, the crash harness's child and
+# its nightly run.
 SQLX_OFFLINE=true cargo nextest run --workspace --run-ignored only --no-fail-fast --locked \
-    -E 'binary(=database) | binary(=postgres)'
+    -E 'binary(=database) | binary(=postgres) | (binary(=crash) & test(=every_retried_command_ends_with_exactly_one_outcome_on_postgres))'
 
