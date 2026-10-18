@@ -2,7 +2,7 @@
 
 The engine host, the single writer for a universe. It runs the bounded inbox, stamping and sequence numbers, the durable log append, idempotency, snapshots and recovery, and publishes the read model.
 
-Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `HostConfig` and the injected `Clock` (`SystemClock`, `ManualClock`) ([D-036](../../docs/decision-log.md#d-036-the-engine-host-loop-its-log-store-and-the-record-format)). P2.4 adds idempotency and P2.5 snapshots and recovery. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `HostConfig` and the injected `Clock` (`SystemClock`, `ManualClock`) ([D-036](../../docs/decision-log.md#d-036-the-engine-host-loop-its-log-store-and-the-record-format)). P2.4 added idempotency: `submit_with_key`, the key cache and the log lookup, and `HostError::KeyConflict` ([D-037](../../docs/decision-log.md#d-037-idempotency-keys-at-any-age-the-cache-window-and-key-conflicts)). P2.5 adds snapshots and recovery. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 
@@ -21,7 +21,7 @@ Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `H
 - An engine error that poisons the World is fatal too, after the turn's earlier steps are appended and acknowledged.
 - The store is built on the host's thread (`spawn` takes a constructor): a database connection belongs to the runtime that opened it (`PgLog::lazy`).
 - A command is acknowledged only after its log record is durable. A failed append is fatal: the host stops and recovers.
-- A known idempotency key returns the logged outcome without applying anything. The key map is rebuilt from the log on recovery.
+- A known idempotency key returns the logged outcome without applying anything, at any age: keys within `key_window_ms` are cached (rebuilt from the log at start), and a miss is looked up in the log once per turn, so a used key never reaches the append (D-037). The same key with a different command is `KeyConflict`.
 - The host publishes an immutable read model after every step, and reads never go through the command path.
 - Recovery loads the newest snapshot with a matching build, replays later records, checks their recorded events, then advances to now.
 - Instrumentation lives here and in the other shell crates, never in the core.
@@ -37,6 +37,7 @@ just determinism                         # includes the host's two-process doubl
 ```
 
 - `tests/host.rs` has one test per write-path step and crash-table row, on `MemoryLog` with a `ManualClock`. `tests/common` holds `GatedLog` (it holds the host inside an append), `settle` and the scripted economy `drive`.
+- `tests/idempotency.rs` covers keys: repeats, conflicts, per-player keys, the same turn, a restart, the window edges, the expired-key attack, and a failed lookup.
 - `tests/postgres.rs` holds the done-when: the same script through `MemoryLog` and `PgLog` gives identical records, receipts and World. It's `#[ignore]`d outside the database stage.
 
 P2.3 to P2.5: commands round-trip through an in-memory store and Postgres, idempotency survives restart, and snapshot round trip and recovery pass. P2.8: crash-and-retry.

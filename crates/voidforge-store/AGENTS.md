@@ -20,7 +20,7 @@ Library. P2.1 added the schema: three migrations in `migrations/`, `MIGRATOR` an
 - Decoding goes through the World's serde boundary (`check_links` always runs) and accepts only canonical bytes. Corrupt input is a typed `SnapshotError`, never a panic.
 - The codec takes the engine build as an input. `ENGINE_BUILD` (from `build.rs`: `VOIDFORGE_GIT_SHA`, else git, else `unknown`) is for the binaries, and tests pass fixed values.
 - `canonical::to_bytes` and testkit's `canonical_bytes` must stay the same call. The `determinism` tests guard it.
-- Log records are typed and never `serde_json::Value` (a `PlayerId` is a `u128`). `PgLog` writes and reads the JSON columns as text, in the forms D-036 documents. One `append` is one transaction, all or none.
+- Log records are typed and never `serde_json::Value` (a `PlayerId` is a `u128`). `PgLog` writes and reads the JSON columns as text, in the forms D-036 documents. One `append` is one transaction, all or none. An accepted outcome records `own_events` (D-037), and `MemoryLog` refuses a duplicate (player, key) as the table does.
 - Migrations only ever add. No destructive change ships in the same release as the code that stops using it ([CI/CD](../../docs/Voidforge%20Technical%20Plan.md#cicd)). CI's `database` job refuses an edited, renamed or deleted migration ([D-034](../../docs/decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)).
 - No foreign key from the log to `accounts`: the log must replay into a database without accounts (D-034).
 

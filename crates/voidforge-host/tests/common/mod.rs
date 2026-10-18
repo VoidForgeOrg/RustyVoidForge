@@ -8,9 +8,10 @@ use std::time::Duration;
 
 use tokio::sync::{Semaphore, watch};
 use voidforge_core::rules::Rules;
+use voidforge_core::state::PlayerId;
 use voidforge_core::state::World;
 use voidforge_host::{HostConfig, HostHandle, ManualClock, Receipt};
-use voidforge_store::log::{LogError, LogRecord, LogStore, MemoryLog};
+use voidforge_store::log::{IdempotencyKey, LogError, LogRecord, LogStore, MemoryLog};
 use voidforge_store::snapshot::EngineBuild;
 use voidforge_testkit::determinism::Economy;
 
@@ -84,6 +85,17 @@ impl LogStore for GatedLog {
     async fn records(&mut self) -> Result<Vec<LogRecord>, LogError> {
         self.inner.records().await
     }
+
+    async fn find_keys(
+        &mut self,
+        keys: &[(PlayerId, IdempotencyKey)],
+    ) -> Result<Vec<LogRecord>, LogError> {
+        self.inner.find_keys(keys).await
+    }
+
+    async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
+        self.inner.keyed_since(since).await
+    }
 }
 
 /// Waits until nothing in the published World is due at the clock's time: every due entry has
@@ -121,11 +133,32 @@ pub async fn drive(
         clock.set(EPOCH + at);
         settle(handle, clock).await;
         let command = e.command(k, &handle.read().world);
-        receipts.push(handle.submit(command).await.expect("acknowledged"));
+        // Every command carries a key; every third is retried at once, and the retry must get
+        // the first receipt back (D-037), changing nothing.
+        let key = key_for(k);
+        let receipt = handle
+            .submit_with_key(command.clone(), key.clone())
+            .await
+            .expect("acknowledged");
+        if k % 3 == 0 {
+            let seq = handle.read().seq;
+            let again = handle
+                .submit_with_key(command, key)
+                .await
+                .expect("acknowledged");
+            assert_eq!(again, receipt, "a retry gets the first receipt");
+            assert_eq!(handle.read().seq, seq, "a retry appends nothing");
+        }
+        receipts.push(receipt);
     }
     clock.set(EPOCH + end_ms);
     settle(handle, clock).await;
     receipts
+}
+
+/// The key a script uses for its `k`th command.
+pub fn key_for(k: u64) -> IdempotencyKey {
+    IdempotencyKey::new(format!("script-{k}")).unwrap()
 }
 
 /// An economy with fleets and a generated command script, as the determinism suite uses.

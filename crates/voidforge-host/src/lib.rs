@@ -7,7 +7,8 @@
 //!
 //! Each turn of the loop:
 //! 1. waits for a command or for the next queue entry to come due, never polling;
-//! 2. (idempotency is P2.4);
+//! 2. looks up each command's idempotency key: a known one gets its first receipt back, and
+//!    nothing is applied or appended (D-037);
 //! 3. stamps t = max(wall clock − epoch, last t) and takes the next sequence number;
 //! 4. runs `apply(command, t)`, or `advance_to(t)` when only time has passed;
 //! 5. appends the turn's records in one durable write (group commit: commands already waiting
@@ -20,9 +21,16 @@
 //! same state, but the read model is still published after it. A failed append, or an engine error
 //! that poisons the world, is fatal: the host stops, and nothing it did not make durable is ever
 //! acknowledged.
+//!
+//! Idempotency (D-037): a repeated (player, key) always gets its first receipt, at any age. Keys
+//! from the last `key_window_ms` of game time are cached; a key that misses the cache is looked up
+//! in the log (one query per turn), so a duplicate never reaches the append, where the table's
+//! unique constraint would make it fatal. The same key with a different command is
+//! [`HostError::KeyConflict`].
 
 pub mod clock;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -30,8 +38,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 use voidforge_core::command::{Command, Rejection};
 use voidforge_core::rules::Rules;
-use voidforge_core::state::{DomainEvent, EngineError, World};
-use voidforge_store::log::{LogError, LogRecord, LogStore, Outcome, Payload, RecordKind};
+use voidforge_core::state::{DomainEvent, EngineError, PlayerId, World};
+use voidforge_store::log::{
+    IdempotencyKey, LogError, LogRecord, LogStore, Outcome, Payload, RecordKind,
+};
 use voidforge_store::snapshot::EngineBuild;
 
 pub use clock::{Clock, ManualClock, SystemClock};
@@ -48,10 +58,16 @@ pub struct HostConfig {
     pub max_batch: usize,
     /// The build written into every record.
     pub engine_build: EngineBuild,
+    /// How much game time of idempotency keys stays cached in memory. Older keys are still known,
+    /// through the log (D-037); the window only bounds the cache.
+    pub key_window_ms: i64,
 }
 
+/// A day of game time: the default key cache window.
+pub const DEFAULT_KEY_WINDOW_MS: i64 = 24 * 3_600_000;
+
 impl HostConfig {
-    /// The defaults: an inbox of 1,024 and turns of up to 64 commands.
+    /// The defaults: an inbox of 1,024, turns of up to 64 commands, and a day of cached keys.
     #[must_use]
     pub fn new(epoch_unix_ms: i64, engine_build: EngineBuild) -> Self {
         Self {
@@ -59,6 +75,7 @@ impl HostConfig {
             inbox_capacity: 1024,
             max_batch: 64,
             engine_build,
+            key_window_ms: DEFAULT_KEY_WINDOW_MS,
         }
     }
 }
@@ -84,6 +101,13 @@ pub enum HostError {
     /// was not written (the crash table's "before the append").
     #[error("the engine host has stopped")]
     Stopped,
+    /// The player already used this idempotency key for a different command, logged at `seq`.
+    /// Nothing was applied (the API answers 422 `idempotency_key_conflict`; D-037).
+    #[error("the idempotency key was used for a different command (record {seq})")]
+    KeyConflict {
+        /// The record of the key's first use.
+        seq: i64,
+    },
 }
 
 /// Why a host stopped on its own, or could not start.
@@ -100,6 +124,9 @@ pub enum Fatal {
         /// The last record's game time.
         log_ms: i64,
     },
+    /// Looking keys up in the log failed: the host cannot tell a new key from a used one.
+    #[error("an idempotency key lookup failed: {0}")]
+    Lookup(LogError),
     /// An append failed: the host stops rather than run with memory the log does not contain.
     #[error("an append failed: {0}")]
     Append(LogError),
@@ -117,6 +144,8 @@ pub struct HostStats {
     wakes: AtomicU64,
     appends: AtomicU64,
     steps: AtomicU64,
+    key_lookups: AtomicU64,
+    replays: AtomicU64,
 }
 
 impl HostStats {
@@ -134,6 +163,16 @@ impl HostStats {
     pub fn steps(&self) -> u64 {
         self.steps.load(Ordering::Relaxed)
     }
+
+    /// Log lookups for keys that missed the cache: at most one per turn.
+    pub fn key_lookups(&self) -> u64 {
+        self.key_lookups.load(Ordering::Relaxed)
+    }
+
+    /// Repeated keys answered with their first receipt.
+    pub fn replays(&self) -> u64 {
+        self.replays.load(Ordering::Relaxed)
+    }
 }
 
 /// The immutable state readers see, published after every durable write and after every step
@@ -150,7 +189,8 @@ pub struct ReadModel {
 
 struct Submission {
     command: Command,
-    reply: oneshot::Sender<Receipt>,
+    key: Option<IdempotencyKey>,
+    reply: oneshot::Sender<Result<Receipt, HostError>>,
 }
 
 /// The way in: submit commands and read the read model. Clones share one host. The host stops
@@ -169,14 +209,40 @@ impl HostHandle {
     /// [`HostError::Busy`] at once if the inbox is full; [`HostError::Stopped`] if the host has
     /// stopped or stops before the command's record is durable.
     pub async fn submit(&self, command: Command) -> Result<Receipt, HostError> {
+        self.send(command, None).await
+    }
+
+    /// Submits a command with the player's idempotency key. A key the player used before gets
+    /// that first receipt back (original seq, t and outcome), applying and appending nothing.
+    ///
+    /// # Errors
+    /// As [`HostHandle::submit`], and [`HostError::KeyConflict`] if the key was used for a
+    /// different command.
+    pub async fn submit_with_key(
+        &self,
+        command: Command,
+        key: IdempotencyKey,
+    ) -> Result<Receipt, HostError> {
+        self.send(command, Some(key)).await
+    }
+
+    async fn send(
+        &self,
+        command: Command,
+        key: Option<IdempotencyKey>,
+    ) -> Result<Receipt, HostError> {
         let (reply, receipt) = oneshot::channel();
         self.inbox
-            .try_send(Submission { command, reply })
+            .try_send(Submission {
+                command,
+                key,
+                reply,
+            })
             .map_err(|e| match e {
                 mpsc::error::TrySendError::Full(_) => HostError::Busy,
                 mpsc::error::TrySendError::Closed(_) => HostError::Stopped,
             })?;
-        receipt.await.map_err(|_| HostError::Stopped)
+        receipt.await.map_err(|_| HostError::Stopped)?
     }
 
     /// The latest read model.
@@ -275,6 +341,7 @@ pub fn spawn<S: LogStore, C: Clock>(
                         publish,
                         stats: stats_host,
                         next_seq: 1,
+                        keys: HashMap::new(),
                     };
                     host.run(started).await
                 }),
@@ -310,12 +377,58 @@ struct Host<S, C> {
     stats: Arc<HostStats>,
     next_seq: i64,
     last_t: i64,
+    /// Cached idempotency keys: the first command and receipt for each (player, key).
+    keys: HashMap<(PlayerId, IdempotencyKey), Known>,
 }
 
-/// A step's reply, sent once its record is durable.
-struct Pending {
-    reply: oneshot::Sender<Receipt>,
+/// A key's first use.
+#[derive(Debug, Clone)]
+struct Known {
+    command: Command,
     receipt: Receipt,
+}
+
+/// A reply, sent once the turn's records are durable.
+struct Pending {
+    reply: oneshot::Sender<Result<Receipt, HostError>>,
+    answer: Result<Receipt, HostError>,
+}
+
+/// The first use of a key, as its record holds it: the command and the receipt it got.
+fn known(record: &LogRecord) -> Result<((PlayerId, IdempotencyKey), Known), LogError> {
+    let corrupt = |what: &str| LogError::Corrupt {
+        seq: record.seq,
+        what: what.to_owned(),
+    };
+    let (Some(player), Some(key), Payload::Command(command)) =
+        (record.player, &record.idempotency_key, &record.payload)
+    else {
+        return Err(corrupt("a keyed record without a player or command"));
+    };
+    let outcome = match record.outcome {
+        Outcome::Accepted { own_events } => {
+            let own = usize::try_from(own_events).unwrap_or(usize::MAX);
+            let from = record
+                .events
+                .len()
+                .checked_sub(own)
+                .ok_or_else(|| corrupt("more own events than events"))?;
+            Ok(record.events[from..].to_vec())
+        }
+        Outcome::Rejected(reason) => Err(reason),
+        Outcome::Empty => return Err(corrupt("a keyed record without an outcome")),
+    };
+    Ok((
+        (player, key.clone()),
+        Known {
+            command: command.clone(),
+            receipt: Receipt {
+                seq: record.seq,
+                t: record.game_time,
+                outcome,
+            },
+        },
+    ))
 }
 
 impl<S: LogStore, C: Clock> Host<S, C> {
@@ -335,6 +448,20 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             }
             Ok(Some((seq, _))) => self.next_seq = seq + 1,
             Ok(None) => {}
+        }
+        // The key cache, rebuilt from the log's keyed records within the window.
+        let since = self.world.time_ms.saturating_sub(self.config.key_window_ms);
+        let rebuilt = self
+            .store
+            .keyed_since(since)
+            .await
+            .and_then(|records| records.iter().map(known).collect::<Result<Vec<_>, _>>());
+        match rebuilt {
+            Ok(entries) => self.keys.extend(entries),
+            Err(e) => {
+                let _ = started.send(Err(Fatal::Start(e)));
+                return Ok(());
+            }
         }
         let _ = started.send(Ok(()));
         let result = self.serve().await;
@@ -373,25 +500,72 @@ impl<S: LogStore, C: Clock> Host<S, C> {
         }
     }
 
-    /// One turn: the steps, one durable write, then the replies and the read model.
+    /// One turn: the key lookup, the steps, one durable write, then the replies and the read
+    /// model.
     async fn turn(&mut self, batch: Vec<Submission>) -> Result<(), Fatal> {
+        // 2. Keys that miss the cache are looked up in the log, all in one query.
+        let mut misses: Vec<(PlayerId, IdempotencyKey)> = batch
+            .iter()
+            .filter_map(|s| s.key.clone().map(|k| (s.command.player, k)))
+            .filter(|pk| !self.keys.contains_key(pk))
+            .collect();
+        misses.sort();
+        misses.dedup();
+        if !misses.is_empty() {
+            self.stats.key_lookups.fetch_add(1, Ordering::Relaxed);
+            let found = self
+                .store
+                .find_keys(&misses)
+                .await
+                .and_then(|records| records.iter().map(known).collect::<Result<Vec<_>, _>>());
+            match found {
+                Ok(entries) => self.keys.extend(entries),
+                Err(e) => {
+                    tracing::error!(error = %e, "key lookup failed; the host stops");
+                    return Err(Fatal::Lookup(e));
+                }
+            }
+        }
         let mut records = Vec::new();
         let mut pending = Vec::new();
         let mut failure = None;
+        let mut changed = false;
         if batch.is_empty() {
             // 4. Only time has passed.
             let t = self.stamp();
             self.stats.steps.fetch_add(1, Ordering::Relaxed);
+            changed = true;
             match self.world.advance_to(t, &self.rules) {
                 // No events: not logged; the read model is still published below.
                 Ok(events) if events.is_empty() => {}
-                Ok(events) => records.push(self.record(t, None, events, Outcome::Empty)),
+                Ok(events) => records.push(self.record(t, None, None, events, Outcome::Empty)),
                 Err(e) => failure = Some(e),
             }
         }
-        for Submission { command, reply } in batch {
+        for Submission {
+            command,
+            key,
+            reply,
+        } in batch
+        {
             if failure.is_some() {
                 // Not applied after a failure: dropping the reply answers Stopped.
+                continue;
+            }
+            // A known key: its first receipt, or a conflict. Nothing applied or appended.
+            if let Some(known) = key
+                .as_ref()
+                .and_then(|k| self.keys.get(&(command.player, k.clone())))
+            {
+                let answer = if known.command == command {
+                    self.stats.replays.fetch_add(1, Ordering::Relaxed);
+                    Ok(known.receipt.clone())
+                } else {
+                    Err(HostError::KeyConflict {
+                        seq: known.receipt.seq,
+                    })
+                };
+                pending.push(Pending { reply, answer });
                 continue;
             }
             let t = self.stamp();
@@ -404,22 +578,36 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                 }
             };
             self.stats.steps.fetch_add(1, Ordering::Relaxed);
+            changed = true;
             let mut events = applied.advanced;
             let (outcome, result) = match applied.outcome {
                 Ok(own) => {
                     events.extend_from_slice(&own);
-                    (Outcome::Accepted, Ok(own))
+                    // A command produces a handful of events; u32 is far beyond any.
+                    let own_events = u32::try_from(own.len()).expect("own events fit u32");
+                    (Outcome::Accepted { own_events }, Ok(own))
                 }
                 Err(reason) => (Outcome::Rejected(reason), Err(reason)),
             };
-            let record = self.record(t, Some(&command), events, outcome);
+            let record = self.record(t, Some(&command), key.clone(), events, outcome);
+            let receipt = Receipt {
+                seq: record.seq,
+                t,
+                outcome: result,
+            };
+            if let Some(key) = key {
+                // Cached now, so a repeat later in this turn gets this receipt, after the append.
+                self.keys.insert(
+                    (command.player, key),
+                    Known {
+                        command,
+                        receipt: receipt.clone(),
+                    },
+                );
+            }
             pending.push(Pending {
                 reply,
-                receipt: Receipt {
-                    seq: record.seq,
-                    t,
-                    outcome: result,
-                },
+                answer: Ok(receipt),
             });
             records.push(record);
         }
@@ -433,7 +621,7 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             self.stats.appends.fetch_add(1, Ordering::Relaxed);
         }
         // 6. Reply and publish: every step that happened is durable or needs no record.
-        if failure.is_none() {
+        if failure.is_none() && changed {
             let seq = records.last().map_or(self.publish.borrow().seq, |r| r.seq);
             self.publish.send_replace(Arc::new(ReadModel {
                 seq,
@@ -442,8 +630,11 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             }));
         }
         for p in pending {
-            let _ = p.reply.send(p.receipt);
+            let _ = p.reply.send(p.answer);
         }
+        // Keys older than the window leave the cache; the log still knows them.
+        let oldest = self.last_t.saturating_sub(self.config.key_window_ms);
+        self.keys.retain(|_, k| k.receipt.t >= oldest);
         match failure {
             None => Ok(()),
             Some(e) => {
@@ -469,6 +660,7 @@ impl<S: LogStore, C: Clock> Host<S, C> {
         &mut self,
         t: i64,
         command: Option<&Command>,
+        key: Option<IdempotencyKey>,
         events: Vec<DomainEvent>,
         outcome: Outcome,
     ) -> LogRecord {
@@ -485,7 +677,7 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             game_time: t,
             wall_time_ms: self.clock.now_unix_ms(),
             player: command.map(|c| c.player),
-            idempotency_key: None,
+            idempotency_key: key,
             payload: command.map_or(Payload::Empty, |c| Payload::Command(c.clone())),
             outcome,
             events,

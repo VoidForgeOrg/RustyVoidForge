@@ -10,7 +10,7 @@ use voidforge_core::command::{Action, Command, Rejection};
 use voidforge_core::state::{DomainEvent, PlanetId, PlayerId};
 use voidforge_store::MIGRATOR;
 use voidforge_store::log::{
-    LogError, LogRecord, LogStore, MemoryLog, Outcome, Payload, PgLog, RecordKind,
+    IdempotencyKey, LogError, LogRecord, LogStore, MemoryLog, Outcome, Payload, PgLog, RecordKind,
 };
 use voidforge_testkit::v0_rules;
 
@@ -74,7 +74,7 @@ async fn commands_round_trip_through_memory_and_postgres_identically(pool: PgPoo
         assert!(
             memory_records
                 .iter()
-                .any(|r| r.outcome == Outcome::Accepted)
+                .any(|r| matches!(r.outcome, Outcome::Accepted { .. }))
         );
         assert!(
             memory_records
@@ -94,7 +94,7 @@ fn record(seq: i64, player: PlayerId) -> LogRecord {
         game_time: i64::MAX,
         wall_time_ms: EPOCH + 123_456_789,
         player: Some(player),
-        idempotency_key: Some("k".to_owned()),
+        idempotency_key: Some(IdempotencyKey::new("k").unwrap()),
         payload: Payload::Command(Command {
             player,
             action: Action::RecallFleet {
@@ -136,7 +136,7 @@ async fn appends_are_all_or_none(pool: PgPool) {
     // A batch whose first record is valid and whose second repeats seq 1: the first must not
     // stay behind. (The first has its own key, so only the second can fail.)
     let mut valid = record(2, PlayerId(7));
-    valid.idempotency_key = Some("k2".to_owned());
+    valid.idempotency_key = Some(IdempotencyKey::new("k2").unwrap());
     let batch = [valid, record(1, PlayerId(8))];
     let err = log.append(&batch).await;
     assert!(matches!(err, Err(LogError::Database(_))), "{err:?}");
@@ -181,8 +181,8 @@ async fn the_json_columns_hold_the_documented_forms(pool: PgPool) {
     advance.payload = Payload::Empty;
     advance.outcome = Outcome::Empty;
     let mut accepted = record(3, PlayerId(7));
-    accepted.idempotency_key = Some("k3".to_owned());
-    accepted.outcome = Outcome::Accepted;
+    accepted.idempotency_key = Some(IdempotencyKey::new("k3").unwrap());
+    accepted.outcome = Outcome::Accepted { own_events: 1 };
     log.append(&[record(1, PlayerId(7)), advance, accepted])
         .await
         .unwrap();
@@ -211,5 +211,146 @@ async fn the_json_columns_hold_the_documented_forms(pool: PgPool) {
         ("advance", "null", "null")
     );
     assert_eq!(rows[1].payload_type, "null", "a JSON null, never SQL NULL");
-    assert_eq!(rows[2].outcome, r#"{"result": "accepted"}"#);
+    assert_eq!(
+        rows[2].outcome,
+        r#"{"result": "accepted", "own_events": 1}"#
+    );
+}
+
+/// P2.4: restart and retry through Postgres, both from the rebuilt cache and through the log
+/// lookup for a key older than the window (D-037).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn keys_survive_a_restart_through_postgres(pool: PgPool) {
+    use voidforge_core::state::BuildingKind;
+    let h = voidforge_core::quantity::MS_PER_HOUR;
+    let mut b = voidforge_testkit::WorldBuilder::new();
+    let home = b.player(voidforge_testkit::ALICE);
+    let world = b.build();
+    let drill = Command {
+        player: voidforge_testkit::ALICE,
+        action: Action::BuildBuilding {
+            planet: home,
+            kind: BuildingKind::Drill,
+        },
+    };
+    let refinery = Command {
+        player: voidforge_testkit::ALICE,
+        action: Action::BuildBuilding {
+            planet: home,
+            kind: BuildingKind::Refinery,
+        },
+    };
+    let key = IdempotencyKey::new("restart-key").unwrap();
+    let options = (*pool.connect_options()).clone();
+    let mut cfg = config();
+    cfg.key_window_ms = 2 * h;
+    let host = |world, clock: voidforge_host::ManualClock, cfg: voidforge_host::HostConfig| {
+        let options = options.clone();
+        voidforge_host::spawn(world, v0_rules(), move || PgLog::lazy(options), clock, cfg).unwrap()
+    };
+
+    let (handle, task) = host(world, clock_at(h), cfg.clone());
+    let first = handle
+        .submit_with_key(drill.clone(), key.clone())
+        .await
+        .unwrap();
+    let world = handle.read().world.as_ref().clone();
+    drop(handle);
+    task.join().unwrap();
+
+    // Inside the window: the rebuilt cache answers.
+    let (handle, task) = host(world, clock_at(h), cfg.clone());
+    assert_eq!(
+        handle
+            .submit_with_key(drill.clone(), key.clone())
+            .await
+            .unwrap(),
+        first
+    );
+    assert_eq!(handle.stats().key_lookups(), 0);
+    handle
+        .submit(Command {
+            player: voidforge_testkit::ALICE,
+            action: Action::JoinGame,
+        })
+        .await
+        .unwrap();
+    let world = handle.read().world.as_ref().clone();
+    drop(handle);
+    task.join().unwrap();
+
+    // Far past the window: the World moves on, the cache is rebuilt without the key, and the
+    // Postgres lookup answers it. Neither the retry nor the conflicting reuse reaches the append.
+    let (handle, task) = host(world, clock_at(30 * h), cfg);
+    handle
+        .submit(Command {
+            player: voidforge_testkit::ALICE,
+            action: Action::JoinGame,
+        })
+        .await
+        .unwrap();
+    let records = PgLog::new(pool.clone()).records().await.unwrap().len();
+    assert_eq!(
+        handle.submit_with_key(drill, key.clone()).await.unwrap(),
+        first
+    );
+    assert_eq!(
+        handle.submit_with_key(refinery, key).await,
+        Err(voidforge_host::HostError::KeyConflict { seq: first.seq })
+    );
+    assert!(
+        handle.stats().key_lookups() >= 1,
+        "answered by the Postgres lookup"
+    );
+    assert_eq!(
+        PgLog::new(pool.clone()).records().await.unwrap().len(),
+        records
+    );
+    drop(handle);
+    task.join().unwrap();
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn find_keys_and_keyed_since_match_the_memory_store(pool: PgPool) {
+    let mut pg = PgLog::new(pool);
+    let mut memory = MemoryLog::new();
+    let mut records = vec![
+        record(1, PlayerId(7)),
+        record(2, PlayerId(8)),
+        record(3, PlayerId(7)),
+    ];
+    records[1].game_time = 5;
+    records[2].idempotency_key = Some(IdempotencyKey::new("other").unwrap());
+    let mut keyless = record(4, PlayerId(9));
+    keyless.idempotency_key = None;
+    records.push(keyless);
+    pg.append(&records).await.unwrap();
+    memory.append(&records).await.unwrap();
+    let k = IdempotencyKey::new("k").unwrap();
+    for keys in [
+        vec![(PlayerId(7), k.clone())],
+        vec![
+            (PlayerId(8), k.clone()),
+            (PlayerId(7), IdempotencyKey::new("other").unwrap()),
+        ],
+        vec![(PlayerId(9), k.clone())],
+        vec![],
+    ] {
+        assert_eq!(
+            pg.find_keys(&keys).await.unwrap(),
+            memory.find_keys(&keys).await.unwrap()
+        );
+    }
+    assert_eq!(
+        pg.find_keys(&[(PlayerId(7), k)]).await.unwrap(),
+        vec![records[0].clone()]
+    );
+    for since in [i64::MIN, 0, 5, 6, i64::MAX] {
+        assert_eq!(
+            pg.keyed_since(since).await.unwrap(),
+            memory.keyed_since(since).await.unwrap()
+        );
+    }
 }

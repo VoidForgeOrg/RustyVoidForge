@@ -7,7 +7,8 @@
 //!
 //! The JSON forms (D-034: JSON values, never SQL NULL):
 //! - `payload`: the command's serde JSON, or `null` for a record without one;
-//! - `outcome`: `{"result":"accepted"}`, `{"result":"rejected","reason":"<code>"}` (the reason
+//! - `outcome`: `{"result":"accepted","own_events":n}` (the record's last n events are the
+//!   command's own; D-037), `{"result":"rejected","reason":"<code>"}` (the reason
 //!   is [`Rejection::code`], D-029), or `null`;
 //! - `events`: a JSON array of domain events.
 
@@ -71,8 +72,12 @@ pub enum Payload {
 pub enum Outcome {
     /// JSON `null`: an advance.
     Empty,
-    /// The command was accepted.
-    Accepted,
+    /// The command was accepted. The record's last `own_events` events are the command's own;
+    /// the ones before them came due in the apply's advance (D-036, D-037).
+    Accepted {
+        /// How many of the record's events, at its end, the command produced.
+        own_events: u32,
+    },
     /// The command was rejected with this reason.
     Rejected(Rejection),
 }
@@ -81,8 +86,46 @@ pub enum Outcome {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 enum OutcomeJson {
-    Accepted,
+    Accepted { own_events: u32 },
     Rejected { reason: Rejection },
+}
+
+/// A client's idempotency key: 1 to 128 bytes of printable ASCII without spaces (D-037). Keys
+/// are per player: two players may use the same key.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IdempotencyKey(String);
+
+/// The longest idempotency key, in bytes.
+pub const IDEMPOTENCY_KEY_MAX: usize = 128;
+
+/// A key that is empty, too long, or not printable ASCII without spaces.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("an idempotency key is 1 to {IDEMPOTENCY_KEY_MAX} bytes of printable ASCII without spaces")]
+pub struct InvalidKey;
+
+impl IdempotencyKey {
+    /// A key.
+    ///
+    /// # Errors
+    /// [`InvalidKey`] if it is empty, longer than [`IDEMPOTENCY_KEY_MAX`] bytes, or holds
+    /// anything but printable ASCII without spaces.
+    pub fn new(key: impl Into<String>) -> Result<Self, InvalidKey> {
+        let key = key.into();
+        let valid = !key.is_empty()
+            && key.len() <= IDEMPOTENCY_KEY_MAX
+            && key.bytes().all(|b| b.is_ascii_graphic());
+        if valid {
+            Ok(Self(key))
+        } else {
+            Err(InvalidKey)
+        }
+    }
+
+    /// The key as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// One `log_records` row.
@@ -98,8 +141,8 @@ pub struct LogRecord {
     pub wall_time_ms: i64,
     /// The issuing player.
     pub player: Option<PlayerId>,
-    /// The client's key (P2.4).
-    pub idempotency_key: Option<String>,
+    /// The client's key, unique per player.
+    pub idempotency_key: Option<IdempotencyKey>,
     /// The command, if any.
     pub payload: Payload,
     /// Its outcome, if any.
@@ -152,6 +195,16 @@ pub trait LogStore: Send + 'static {
     ) -> impl Future<Output = Result<(), LogError>> + Send;
     /// Every record, in seq order.
     fn records(&mut self) -> impl Future<Output = Result<Vec<LogRecord>, LogError>> + Send;
+    /// The records holding any of these (player, key) pairs, in seq order.
+    fn find_keys(
+        &mut self,
+        keys: &[(PlayerId, IdempotencyKey)],
+    ) -> impl Future<Output = Result<Vec<LogRecord>, LogError>> + Send;
+    /// The records with a key at or after game time `since`, in seq order.
+    fn keyed_since(
+        &mut self,
+        since: i64,
+    ) -> impl Future<Output = Result<Vec<LogRecord>, LogError>> + Send;
 }
 
 // --- JSON and UUID forms ---
@@ -166,7 +219,9 @@ fn payload_json(p: &Payload) -> Result<String, serde_json::Error> {
 fn outcome_json(o: Outcome) -> Result<String, serde_json::Error> {
     match o {
         Outcome::Empty => Ok("null".to_owned()),
-        Outcome::Accepted => serde_json::to_string(&OutcomeJson::Accepted),
+        Outcome::Accepted { own_events } => {
+            serde_json::to_string(&OutcomeJson::Accepted { own_events })
+        }
         Outcome::Rejected(reason) => serde_json::to_string(&OutcomeJson::Rejected { reason }),
     }
 }
@@ -181,7 +236,7 @@ fn parse_payload(s: &str) -> Result<Payload, serde_json::Error> {
 fn parse_outcome(s: &str) -> Result<Outcome, serde_json::Error> {
     Ok(match serde_json::from_str::<Option<OutcomeJson>>(s)? {
         None => Outcome::Empty,
-        Some(OutcomeJson::Accepted) => Outcome::Accepted,
+        Some(OutcomeJson::Accepted { own_events }) => Outcome::Accepted { own_events },
         Some(OutcomeJson::Rejected { reason }) => Outcome::Rejected(reason),
     })
 }
@@ -244,6 +299,7 @@ struct MemoryInner {
     records: Vec<LogRecord>,
     fail_appends: bool,
     appends: u64,
+    lookups: u64,
 }
 
 /// An in-memory log for tests. Clones share one log, so a test keeps a clone to read records and
@@ -267,6 +323,12 @@ impl MemoryLog {
     #[must_use]
     pub fn snapshot(&self) -> Vec<LogRecord> {
         self.lock().records.clone()
+    }
+
+    /// How many key lookups (`find_keys`) were made.
+    #[must_use]
+    pub fn lookups(&self) -> u64 {
+        self.lock().lookups
     }
 
     /// How many appends succeeded (one per durable write: group commit puts several records in
@@ -304,6 +366,20 @@ impl LogStore for MemoryLog {
             if duplicate || r.seq < 1 {
                 return Err(LogError::Memory(format!("seq {} refused", r.seq)));
             }
+            // UNIQUE (player_id, idempotency_key), as the table refuses it (D-034).
+            if let (Some(player), Some(key)) = (r.player, &r.idempotency_key) {
+                let reused =
+                    inner.records.iter().chain(&records[..i]).any(|o| {
+                        o.player == Some(player) && o.idempotency_key.as_ref() == Some(key)
+                    });
+                if reused {
+                    return Err(LogError::Memory(format!(
+                        "seq {}: the player's key {:?} is already logged",
+                        r.seq,
+                        key.as_str()
+                    )));
+                }
+            }
             i32::try_from(r.rules_version).map_err(|_| LogError::Unrepresentable {
                 seq: r.seq,
                 what: format!("rules version {} exceeds i32", r.rules_version),
@@ -318,9 +394,85 @@ impl LogStore for MemoryLog {
     async fn records(&mut self) -> Result<Vec<LogRecord>, LogError> {
         Ok(self.lock().records.clone())
     }
+
+    async fn find_keys(
+        &mut self,
+        keys: &[(PlayerId, IdempotencyKey)],
+    ) -> Result<Vec<LogRecord>, LogError> {
+        self.lock().lookups += 1;
+        Ok(self
+            .lock()
+            .records
+            .iter()
+            .filter(|r| match (r.player, &r.idempotency_key) {
+                (Some(p), Some(k)) => keys.iter().any(|(kp, kk)| *kp == p && kk == k),
+                _ => false,
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
+        Ok(self
+            .lock()
+            .records
+            .iter()
+            .filter(|r| r.idempotency_key.is_some() && r.game_time >= since)
+            .cloned()
+            .collect())
+    }
 }
 
 // --- The Postgres store ---
+
+/// A `log_records` row as the Postgres store reads it: the JSON columns as text.
+struct Row {
+    seq: i64,
+    kind: String,
+    game_time: i64,
+    wall_time_ms: i64,
+    player_id: Option<String>,
+    idempotency_key: Option<String>,
+    payload: String,
+    outcome: String,
+    events: String,
+    rules_version: i32,
+    engine_build: String,
+}
+
+impl Row {
+    fn into_record(self) -> Result<LogRecord, LogError> {
+        let seq = self.seq;
+        let corrupt = |what: String| LogError::Corrupt { seq, what };
+        Ok(LogRecord {
+            seq,
+            kind: RecordKind::parse(&self.kind)
+                .ok_or_else(|| corrupt(format!("kind {:?}", self.kind)))?,
+            game_time: self.game_time,
+            wall_time_ms: self.wall_time_ms,
+            player: match self.player_id {
+                None => None,
+                Some(p) => {
+                    Some(parse_player_uuid(&p).ok_or_else(|| corrupt(format!("player id {p:?}")))?)
+                }
+            },
+            idempotency_key: match self.idempotency_key {
+                None => None,
+                Some(k) => Some(
+                    IdempotencyKey::new(k).map_err(|e| corrupt(format!("idempotency key: {e}")))?,
+                ),
+            },
+            payload: parse_payload(&self.payload).map_err(|e| corrupt(format!("payload: {e}")))?,
+            outcome: parse_outcome(&self.outcome).map_err(|e| corrupt(format!("outcome: {e}")))?,
+            events: serde_json::from_str(&self.events)
+                .map_err(|e| corrupt(format!("events: {e}")))?,
+            rules_version: u32::try_from(self.rules_version)
+                .map_err(|_| corrupt(format!("rules version {}", self.rules_version)))?,
+            engine_build: EngineBuild::new(self.engine_build)
+                .map_err(|e| corrupt(format!("engine build: {e}")))?,
+        })
+    }
+}
 
 /// The Postgres log, on the P2.1 schema. One `append` is one transaction, so a group of records
 /// shares one durable commit.
@@ -379,7 +531,7 @@ impl LogStore for PgLog {
                 r.game_time,
                 r.wall_time_ms,
                 player,
-                r.idempotency_key,
+                r.idempotency_key.as_ref().map(IdempotencyKey::as_str),
                 json.payload,
                 json.outcome,
                 json.events,
@@ -394,7 +546,8 @@ impl LogStore for PgLog {
     }
 
     async fn records(&mut self) -> Result<Vec<LogRecord>, LogError> {
-        let rows = sqlx::query!(
+        sqlx::query_as!(
+            Row,
             r#"SELECT seq, kind, game_time,
                       (extract(epoch FROM wall_time) * 1000)::bigint AS "wall_time_ms!",
                       player_id::text AS player_id, idempotency_key,
@@ -403,37 +556,60 @@ impl LogStore for PgLog {
                FROM log_records ORDER BY seq"#
         )
         .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|row| {
-                let seq = row.seq;
-                let corrupt = |what: String| LogError::Corrupt { seq, what };
-                Ok(LogRecord {
-                    seq,
-                    kind: RecordKind::parse(&row.kind)
-                        .ok_or_else(|| corrupt(format!("kind {:?}", row.kind)))?,
-                    game_time: row.game_time,
-                    wall_time_ms: row.wall_time_ms,
-                    player: match row.player_id {
-                        None => None,
-                        Some(p) => Some(
-                            parse_player_uuid(&p)
-                                .ok_or_else(|| corrupt(format!("player id {p:?}")))?,
-                        ),
-                    },
-                    idempotency_key: row.idempotency_key,
-                    payload: parse_payload(&row.payload)
-                        .map_err(|e| corrupt(format!("payload: {e}")))?,
-                    outcome: parse_outcome(&row.outcome)
-                        .map_err(|e| corrupt(format!("outcome: {e}")))?,
-                    events: serde_json::from_str(&row.events)
-                        .map_err(|e| corrupt(format!("events: {e}")))?,
-                    rules_version: u32::try_from(row.rules_version)
-                        .map_err(|_| corrupt(format!("rules version {}", row.rules_version)))?,
-                    engine_build: EngineBuild::new(row.engine_build)
-                        .map_err(|e| corrupt(format!("engine build: {e}")))?,
-                })
-            })
-            .collect()
+        .await?
+        .into_iter()
+        .map(Row::into_record)
+        .collect()
+    }
+
+    async fn find_keys(
+        &mut self,
+        keys: &[(PlayerId, IdempotencyKey)],
+    ) -> Result<Vec<LogRecord>, LogError> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let players: Vec<String> = keys.iter().map(|(p, _)| player_uuid(*p)).collect();
+        let names: Vec<String> = keys.iter().map(|(_, k)| k.as_str().to_owned()).collect();
+        // One indexed lookup on UNIQUE (player_id, idempotency_key) for the whole turn.
+        sqlx::query_as!(
+            Row,
+            r#"SELECT seq, kind, game_time,
+                      (extract(epoch FROM wall_time) * 1000)::bigint AS "wall_time_ms!",
+                      player_id::text AS player_id, idempotency_key,
+                      payload::text AS "payload!", outcome::text AS "outcome!",
+                      events::text AS "events!", rules_version, engine_build
+               FROM log_records
+               WHERE (player_id, idempotency_key) IN
+                     (SELECT p::uuid, k FROM unnest($1::text[], $2::text[]) AS u(p, k))
+               ORDER BY seq"#,
+            &players,
+            &names,
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(Row::into_record)
+        .collect()
+    }
+
+    async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {
+        sqlx::query_as!(
+            Row,
+            r#"SELECT seq, kind, game_time,
+                      (extract(epoch FROM wall_time) * 1000)::bigint AS "wall_time_ms!",
+                      player_id::text AS player_id, idempotency_key,
+                      payload::text AS "payload!", outcome::text AS "outcome!",
+                      events::text AS "events!", rules_version, engine_build
+               FROM log_records
+               WHERE idempotency_key IS NOT NULL AND game_time >= $1
+               ORDER BY seq"#,
+            since,
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(Row::into_record)
+        .collect()
     }
 }
