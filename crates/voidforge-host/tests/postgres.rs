@@ -488,3 +488,24 @@ async fn recovery_through_postgres_is_byte_identical(pool: PgPool) {
     );
     assert_eq!(recovered, reference);
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn upgrades_recover_through_postgres(pool: PgPool) {
+    // Carry (f) through Postgres: the same cases as the memory store.
+    let options = (*pool.connect_options()).clone();
+    common::upgrade_cases(PgLog::new(pool.clone()), move || {
+        PgLog::lazy(options.clone())
+    })
+    .await;
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn an_upgrade_over_another_builds_tail_is_refused_through_postgres(pool: PgPool) {
+    let options = (*pool.connect_options()).clone();
+    common::upgrade_over_another_builds_tail_is_refused(PgLog::new(pool.clone()), move || {
+        PgLog::lazy(options.clone())
+    })
+    .await;
+}

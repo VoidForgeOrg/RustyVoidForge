@@ -781,21 +781,6 @@ pub enum RecoverError {
     /// first snapshot, at seq 0, before any record).
     #[error("no snapshot: the universe has not been bootstrapped")]
     NoSnapshot,
-    /// No snapshot of this build, and the newest one (of another build) is not at the log head,
-    /// so recovering from it would replay another build's records.
-    #[error(
-        "no usable snapshot: none of build {build}, and the newest ({newest_build} at seq {newest_seq}) is not at the log head (seq {head})"
-    )]
-    NoUsableSnapshot {
-        /// The running build.
-        build: String,
-        /// The newest snapshot's build.
-        newest_build: String,
-        /// The newest snapshot's seq.
-        newest_seq: i64,
-        /// The log's last seq.
-        head: i64,
-    },
     /// The store could not be read.
     #[error("the store could not be read: {0}")]
     Store(#[from] LogError),
@@ -833,8 +818,9 @@ pub struct Recovered {
 }
 
 /// Recovers a universe from its store (Architectural Design, Persistence; D-038):
-/// 1. the newest snapshot of `build`; otherwise, for an engine upgrade, the newest snapshot of
-///    any build if it is at the log head, so no record of another build is replayed;
+/// 1. the newest snapshot, of any build. The tail after it must hold only `build`'s records:
+///    replay refuses another build's record, so no replay crosses builds. A snapshot in a format
+///    this build cannot read is a typed error;
 /// 2. decoded strictly ([`snapshot::decode`]), with the row's columns cross-checked against the
 ///    header;
 /// 3. every later record replayed through the shared function ([`replay::replay`]), which checks
@@ -851,25 +837,14 @@ pub async fn recover<S: LogStore>(
     rules: &Rules,
     build: &EngineBuild,
 ) -> Result<Recovered, RecoverError> {
-    let row = match store.latest_snapshot(Some(build.as_str())).await? {
-        Some(row) => row,
-        None => {
-            let newest = store
-                .latest_snapshot(None)
-                .await?
-                .ok_or(RecoverError::NoSnapshot)?;
-            let head = store.last().await?.map_or(0, |(seq, _)| seq);
-            if newest.seq != head {
-                return Err(RecoverError::NoUsableSnapshot {
-                    build: build.as_str().to_owned(),
-                    newest_build: newest.engine_build,
-                    newest_seq: newest.seq,
-                    head,
-                });
-            }
-            newest
-        }
-    };
+    // The newest snapshot, of any build. The tail after it must hold only this build's records,
+    // which replay enforces (CrossBuildRecord), so replays never cross builds. That one rule
+    // covers a normal restart, an engine upgrade, a crash after one, and a rollback from a clean
+    // shutdown (D-038, carry f).
+    let row = store
+        .latest_snapshot(None)
+        .await?
+        .ok_or(RecoverError::NoSnapshot)?;
     let seq = row.seq;
     let row_build = EngineBuild::new(row.engine_build.clone())
         .map_err(|error| RecoverError::Snapshot { seq, error })?;

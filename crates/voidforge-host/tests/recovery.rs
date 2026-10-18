@@ -472,37 +472,12 @@ async fn recovery_takes_the_newest_snapshot_of_its_build() {
 }
 
 #[tokio::test]
-async fn an_upgrade_starts_from_another_builds_snapshot_only_at_the_log_head() {
-    let rules = v0_rules();
-    let (log, world) = ran(3, 1_000).await;
-    let newer = EngineBuild::new("0.2.0+upgrade").unwrap();
-    // The old build's shutdown snapshot is at the head: the new build starts from it.
-    let back = voidforge_host::recover(&mut log.clone(), &rules, &newer)
-        .await
-        .unwrap();
-    assert_eq!((back.snapshot_seq, back.last_seq), (3, 3));
-    same_world(&back.world, &world);
-    // With records after the newest snapshot, the new build would have to replay the old
-    // build's records: refused.
-    let (log, _) = ran(3, 2).await;
-    let rows: Vec<i64> = log.snapshot_rows().iter().map(|r| r.seq).collect();
-    assert_eq!(rows, vec![0, 2, 3]);
-    let mut tail_only = MemoryLog::new();
-    for r in log.snapshot() {
-        tail_only.append(&[r]).await.unwrap();
-    }
-    tail_only
-        .write_snapshot(&log.snapshot_rows()[1])
-        .await
-        .unwrap();
-    assert!(matches!(
-        voidforge_host::recover(&mut tail_only.clone(), &rules, &newer).await,
-        Err(RecoverError::NoUsableSnapshot {
-            newest_seq: 2,
-            head: 3,
-            ..
-        })
-    ));
+async fn upgrades_recover_through_the_memory_store() {
+    // Carry (f): an upgrade start, a crash after it, rollback before and after (D-038).
+    let log = MemoryLog::new();
+    common::upgrade_cases(log.clone(), move || log.clone()).await;
+    let log = MemoryLog::new();
+    common::upgrade_over_another_builds_tail_is_refused(log.clone(), move || log.clone()).await;
 }
 
 #[tokio::test]

@@ -740,9 +740,20 @@ Each entry records its date, the package that made it, the decision, the reasons
     - after a durable turn once `snapshot_every_records` (default 1,000) records were appended since the last one;
     - and at clean shutdown, unless the newest snapshot is already at the head.
     - The row follows D-035's mapping, with seq = the last record included. A snapshot after an eventless advance includes it.
+    - **The read model names the log head from the start** (carry e, from dev-qa): a host spawned on a non-empty log publishes `seq` = the head, not 0.
     - **A failed write isn't fatal but is loud:** an error event and `HostStats::snapshot_failures`, and the next schedule point retries.
   - **Recovery** (`voidforge_host::recover`):
-    1. the newest snapshot of the running build; otherwise, for an engine upgrade, the newest snapshot of any build only if it's at the log head; otherwise `NoUsableSnapshot`. No snapshot at all is `NoSnapshot`: there's no empty-start path, because P2.9's bootstrap writes the seq-0 snapshot before any record;
+    1. **the newest snapshot, of any build, and the whole tail after it must be the running build's records** (replay refuses another build's record: `CrossBuildRecord`). This single rule covers:
+       - a normal restart;
+       - an engine upgrade (the old build's shutdown snapshot at the head);
+       - a crash after an upgrade (the old build's snapshot plus the new build's tail);
+       - a rollback from a clean shutdown (the newer build's snapshot at the head).
+
+       It refuses any replay across builds, and a snapshot format this build can't read is a typed error. **Carry (f), from dev-qa.** Two earlier rules were rejected:
+       - "a matching build first, else another build only at the log head" can't recover a crash after an upgrade;
+       - "a matching build first" fails a rollback after a clean shutdown and can never do better than the newest of any build.
+
+       No snapshot at all is `NoSnapshot`
     2. a strict `decode` (rules version in force, the row's build), with the row's columns cross-checked against the header (`ColumnMismatch`);
     3. the later records replayed with verification;
     4. `spawn`. The host catches up to now on its first wake and rebuilds the idempotency keys from the log (D-037).
