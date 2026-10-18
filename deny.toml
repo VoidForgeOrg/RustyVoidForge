@@ -231,6 +231,8 @@ allow = [
     { crate = "constant_time_eq" },
     { crate = "find-msvc-tools" },
     { crate = "shlex" },
+    # The engine host (P2.3, decision log D-036): tokio's select! and test macros.
+    { crate = "tokio-macros" },
 ]
 # Duplicates allowed by name and version, each with its reason (decision log D-017).
 skip = [

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The Database tests stage (Technical Plan, CI/CD; decision log D-034): the migrations applied to an
-# empty database and re-run as a no-op, the sqlx offline metadata check, and the store's Postgres
-# tests. The CI `database` job and `just db-test` both run this script.
+# empty database and re-run as a no-op, the sqlx offline metadata check, and the Postgres tests of
+# store and host. The CI `database` job and `just db-test` both run this script.
 #
 # Environment:
 #   DATABASE_URL  the dedicated test database; its name must be voidforge_test. #[sqlx::test] keeps
@@ -74,6 +74,9 @@ echo "ok: $files migrations applied to an empty database; the second run applied
 echo "--- sqlx offline metadata check"
 DATABASE_URL="$cli_url" cargo sqlx prepare --workspace --check -- --all-targets
 
-echo "--- store tests against Postgres"
-# Only the Postgres binary: the store's other ignored test is the determinism two-process run.
-SQLX_OFFLINE=true cargo nextest run -p voidforge-store --test database --run-ignored only --no-fail-fast --locked
+echo "--- store and host tests against Postgres"
+# Only the Postgres binaries (store's database, host's postgres): the other ignored tests are the
+# determinism suites' two-process runs.
+SQLX_OFFLINE=true cargo nextest run --workspace --run-ignored only --no-fail-fast --locked \
+    -E 'binary(=database) | binary(=postgres)'
+

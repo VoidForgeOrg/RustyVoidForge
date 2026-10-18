@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO log_records\n                       (seq, kind, game_time, wall_time, player_id, idempotency_key, payload,\n                        outcome, events, rules_version, engine_build)\n                   VALUES ($1, $2, $3, 'epoch'::timestamptz + $4::bigint * interval '1 millisecond',\n                           $5::text::uuid, $6, $7::text::jsonb, $8::text::jsonb, $9::text::jsonb,\n                           $10, $11)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "54261eb32b02d496689cd761fdbf4871165b8de85f4e2ada518ecdc4af82454e"
+}

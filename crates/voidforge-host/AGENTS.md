@@ -2,12 +2,12 @@
 
 The engine host, the single writer for a universe. It runs the bounded inbox, stamping and sequence numbers, the durable log append, idempotency, snapshots and recovery, and publishes the read model.
 
-Library. It is a stub today; P2.3 is the first package that fills it. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `HostConfig` and the injected `Clock` (`SystemClock`, `ManualClock`) ([D-036](../../docs/decision-log.md#d-036-the-engine-host-loop-its-log-store-and-the-record-format)). P2.4 adds idempotency and P2.5 snapshots and recovery. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 
 - Workspace: `voidforge-core`, `voidforge-store`, `voidforge-telemetry`.
-- External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): The shell runtime from the Tech stack (tokio and tracing).
+- External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): The shell runtime from the Tech stack (tokio and tracing). Dev-dependencies (tests only): testkit, for scripted worlds and commands, and sqlx, for `#[sqlx::test]` (D-036).
 - Never: Any workspace crate other than core, store and telemetry.
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
@@ -15,7 +15,11 @@ Library. It is a stub today; P2.3 is the first package that fills it. The layeri
 
 - Only the host changes the live `World` ([Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering)). One thread owns it, and everything else reaches it through the bounded inbox ([Engine host and write path](../../docs/Voidforge%20Architectural%20Design.md#engine-host-and-write-path)).
 - Host recovery and replay map a log record to `advance_to` or `apply` through one shared function, so they cannot drift apart. P2.5 adds it to a crate both may depend on, and P2.7 reuses it.
-- Stamp t = max(wall clock, last t), so stamps never go backwards.
+- Stamp t = max(wall clock − epoch, last t), so stamps never go backwards. The clock is injected (`Clock`), so tests drive it.
+- One log record per step. A command record's events are the apply's advance followed by the command's own events; an advance that fires no events is not logged, but the read model is published after it (D-036).
+- Sequence numbers are gap-free from 1 and continue after existing records. A turn's records share one durable append (group commit), and nothing is replied or published before it is durable.
+- An engine error that poisons the World is fatal too, after the turn's earlier steps are appended and acknowledged.
+- The store is built on the host's thread (`spawn` takes a constructor): a database connection belongs to the runtime that opened it (`PgLog::lazy`).
 - A command is acknowledged only after its log record is durable. A failed append is fatal: the host stops and recovers.
 - A known idempotency key returns the logged outcome without applying anything. The key map is rebuilt from the log on recovery.
 - The host publishes an immutable read model after every step, and reads never go through the command path.
@@ -27,8 +31,13 @@ Library. It is a stub today; P2.3 is the first package that fills it. The layeri
 ```sh
 cargo build -p voidforge-host
 cargo clippy -p voidforge-host --all-targets -- -D warnings
-cargo nextest run --workspace --locked   # this crate has no tests yet, so `-p voidforge-host` alone exits 4
+cargo nextest run -p voidforge-host      # the write path on the memory store, and the determinism double run
+just db-test                             # needs `just up`: tests/postgres.rs, memory and Postgres identical
+just determinism                         # includes the host's two-process double run
 ```
+
+- `tests/host.rs` has one test per write-path step and crash-table row, on `MemoryLog` with a `ManualClock`. `tests/common` holds `GatedLog` (it holds the host inside an append), `settle` and the scripted economy `drive`.
+- `tests/postgres.rs` holds the done-when: the same script through `MemoryLog` and `PgLog` gives identical records, receipts and World. It's `#[ignore]`d outside the database stage.
 
 P2.3 to P2.5: commands round-trip through an in-memory store and Postgres, idempotency survives restart, and snapshot round trip and recovery pass. P2.8: crash-and-retry.
 

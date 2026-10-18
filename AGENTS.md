@@ -60,7 +60,7 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 | test | `cargo nextest run --workspace --locked`, which needs [cargo-nextest](https://nexte.st) |
 | determinism | `.github/scripts/determinism.sh`: the determinism suite, then the two-process double run ([D-024](docs/decision-log.md#d-024-determinism-suite-canonical-bytes-and-the-two-process-run)) |
 | database | `.github/scripts/check-migrations-only-add.sh <base>` and its cases, `.github/scripts/test-check-migrations-only-add.sh` ([D-034](docs/decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)) |
-| database | `.github/scripts/database.sh` against a Postgres service: the migrations on an empty database twice, `cargo sqlx prepare --check`, then the store's Postgres tests; needs [sqlx-cli](docs/versions.md) |
+| database | `.github/scripts/database.sh` against a Postgres service: the migrations on an empty database twice, `cargo sqlx prepare --check`, then the Postgres tests of store and host; needs [sqlx-cli](docs/versions.md) |
 
 `cargo build` builds everything. The [`justfile`](justfile) has the same commands as `just lint`, `just supply-chain`, `just test`, `just determinism` and `just db-test`. `just db-test` needs the local stack (`just up`). It uses only a dedicated `voidforge_test` database and the `_sqlx_test_*` databases it creates and drops, and never touches `voidforge` ([D-034](docs/decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)). The store's Postgres tests are `#[ignore]`d, so `just test` compiles them but only `just db-test` runs them. `just migrate` applies the migrations to an explicit `DATABASE_URL`, and has no default.
 
