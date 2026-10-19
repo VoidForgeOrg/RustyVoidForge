@@ -489,6 +489,15 @@ fn the_document_has_every_endpoint() {
     .map(|(m, p)| (m.to_owned(), p.to_owned()))
     .collect();
     assert_eq!(paths, expected);
+    // The radius is an i64 from 0 (D-049, dev-qa's L1).
+    let radius = doc["paths"]["/planets"]["get"]["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "radius")
+        .unwrap();
+    assert_eq!(radius["schema"]["minimum"], serde_json::json!(0));
+    assert_eq!(radius["schema"]["maximum"], serde_json::json!(i64::MAX));
     // The contract is public (D-049, T2); every other path needs a dex token.
     for (method, path) in &paths {
         let security = &doc["paths"][path][method]["security"];
@@ -631,7 +640,7 @@ fn integers_are_bounded_by_their_rust_type() {
     ] {
         agree::<PlanetView>(&c, "PlanetView", &with(&planet, "/planet_id", value), valid);
     }
-    // Through the parameters: the planet's path ID (u64) and the radius (i64).
+    // Through the parameters: the planet's path ID (u64) and the radius (an i64 from 0, D-049).
     let id = c.parameter("/planets/{id}", "get", "id");
     assert!(id.is_valid(&json!(u64::MAX)));
     assert!(!id.is_valid(&u64_past_max));
@@ -639,7 +648,9 @@ fn integers_are_bounded_by_their_rust_type() {
     let radius = c.parameter("/planets", "get", "radius");
     assert!(radius.is_valid(&json!(i64::MAX)));
     assert!(!radius.is_valid(&json!(1_u64 << 63)));
-    assert!(radius.is_valid(&json!(i64::MIN)));
+    assert!(radius.is_valid(&json!(0)));
+    assert!(!radius.is_valid(&json!(-1)));
+    assert!(!radius.is_valid(&json!(i64::MIN)));
     assert!(!radius.is_valid(&i64_past_min));
 }
 

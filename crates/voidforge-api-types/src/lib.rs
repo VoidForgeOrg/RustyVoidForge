@@ -230,6 +230,14 @@ struct Doc;
 pub fn openapi() -> serde_json::Value {
     let mut doc = serde_json::to_value(Doc::openapi()).expect("the OpenAPI document serializes");
     bound_integers(&mut doc);
+    // `radius` is an i64 from 0 (D-049, dev-qa's L1): a negative radius is invalid_query. utoipa's
+    // bounds are f64s, which can't hold i64::MAX exactly, and a minimum of 0 would read as a u64
+    // to bound_integers, so the one parameter that needs it is set here.
+    let radius = doc["paths"]["/planets"]["get"]["parameters"]
+        .as_array_mut()
+        .and_then(|ps| ps.iter_mut().find(|p| p["name"] == "radius"))
+        .expect("GET /planets has a radius parameter");
+    radius["schema"]["minimum"] = serde_json::json!(0);
     doc
 }
 
