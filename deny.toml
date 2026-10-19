@@ -153,6 +153,7 @@ allow = [
     # serde_json, a dev-dependency of voidforge-core and voidforge-testkit for round-trip tests
     # (P1.3, decision log D-022), with what it pulls in.
     { crate = "serde_json" },
+    { crate = "serde_urlencoded" },
     { crate = "zmij" },
     # voidforge-rules parsing (P1.2, decision log D-020): serde and toml with what they pull in.
     { crate = "serde" },
