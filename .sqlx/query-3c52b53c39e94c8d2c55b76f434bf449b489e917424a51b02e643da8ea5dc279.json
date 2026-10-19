@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT (EXISTS (SELECT 1 FROM snapshots) OR EXISTS (SELECT 1 FROM log_records)) AS \"used!\"",
+  "query": "SELECT to_regclass('snapshots') IS NOT NULL AS \"exists!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "used!",
+        "name": "exists!",
         "type_info": "Bool",
         "origin": "Expression"
       }
@@ -17,5 +17,5 @@
       null
     ]
   },
-  "hash": "d3cfa20cf6921ebc8c7e61b3482879f8836a08eac30c6dc3a7e1caec52e50f9d"
+  "hash": "3c52b53c39e94c8d2c55b76f434bf449b489e917424a51b02e643da8ea5dc279"
 }

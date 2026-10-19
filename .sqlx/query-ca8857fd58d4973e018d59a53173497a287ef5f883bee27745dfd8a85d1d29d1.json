@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM snapshots) AS \"seeded!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seeded!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ca8857fd58d4973e018d59a53173497a287ef5f883bee27745dfd8a85d1d29d1"
+}

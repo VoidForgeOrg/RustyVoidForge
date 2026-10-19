@@ -113,6 +113,16 @@ impl PgAccounts {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    /// Accounts over a pool that connects on first use, on the runtime that uses it (`serve`,
+    /// P3.4s). The URL was checked by the caller; `None` if it is not a Postgres URL.
+    #[must_use]
+    pub fn lazy_url(url: &str) -> Option<Self> {
+        let options: sqlx::postgres::PgConnectOptions = url.parse().ok()?;
+        Some(Self::new(
+            sqlx::postgres::PgPoolOptions::new().connect_lazy_with(options),
+        ))
+    }
 }
 
 impl AccountStore for PgAccounts {

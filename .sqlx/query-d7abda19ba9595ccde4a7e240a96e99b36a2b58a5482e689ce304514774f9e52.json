@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT epoch_unix_ms FROM universe",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "epoch_unix_ms",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "universe",
+            "name": "epoch_unix_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d7abda19ba9595ccde4a7e240a96e99b36a2b58a5482e689ce304514774f9e52"
+}

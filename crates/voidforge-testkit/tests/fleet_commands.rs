@@ -1066,7 +1066,10 @@ fn send_refuses_a_trip_one_millisecond_past_the_horizon() {
     let (mut w, fleet, far) = world(MAX_TRAVEL_MS + 1);
     let applied = w.apply(&command(fleet, far), 0, &rules).unwrap();
     assert_eq!(applied.outcome, Err(Rejection::UnreachableTarget));
-    assert!(matches!(w.fleets[&fleet].state, FleetState::Stationed { .. }));
+    assert!(matches!(
+        w.fleets[&fleet].state,
+        FleetState::Stationed { .. }
+    ));
     assert!(!w.is_poisoned());
 }
 
