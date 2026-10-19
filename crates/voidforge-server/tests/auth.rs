@@ -131,13 +131,19 @@ struct Dex {
     /// The issuer the discovery document claims (normally the real one).
     claimed_issuer: Mutex<Option<String>>,
     keys: Mutex<Vec<Value>>,
+    /// Discovery requests: every fetch attempt, failed ones included.
     fetches: AtomicUsize,
     down: AtomicBool,
+    /// How long discovery takes to answer, in milliseconds.
+    delay_ms: AtomicUsize,
 }
 
 async fn discovery(
     State(dex): State<Arc<Dex>>,
 ) -> Result<axum::Json<Value>, axum::http::StatusCode> {
+    dex.fetches.fetch_add(1, Ordering::SeqCst);
+    let delay = dex.delay_ms.load(Ordering::SeqCst) as u64;
+    tokio::time::sleep(Duration::from_millis(delay)).await;
     if dex.down.load(Ordering::SeqCst) {
         return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -157,7 +163,6 @@ async fn jwks(State(dex): State<Arc<Dex>>) -> Result<axum::Json<Value>, axum::ht
     if dex.down.load(Ordering::SeqCst) {
         return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
     }
-    dex.fetches.fetch_add(1, Ordering::SeqCst);
     Ok(axum::Json(
         json!({"keys": dex.keys.lock().unwrap().clone()}),
     ))
@@ -399,6 +404,14 @@ async fn every_claim_is_checked_with_its_edges() {
             "the issuer with a slash",
         ),
         (set("aud", json!("someone-else")), "a foreign audience"),
+        (
+            set("aud", json!("VOIDFORGE-WEB")),
+            "an audience in another case",
+        ),
+        (
+            set("aud", json!("voidforge-web ")),
+            "an audience with a trailing space",
+        ),
         (
             set("aud", json!(["voidforge-cli", "someone-else"])),
             "an extra audience",
@@ -745,6 +758,13 @@ fn the_defaults_match_the_local_stack_and_absurd_settings_are_refused() {
         config(&["--audience", "a,b"]).unwrap().audiences,
         ["a", "b"]
     );
+    // The issuer is taken verbatim (R1-3): a trailing slash stays, to fail the exact match.
+    assert_eq!(
+        config(&["--issuer", "http://localhost:5556/dex/"])
+            .unwrap()
+            .issuer,
+        "http://localhost:5556/dex/"
+    );
     assert_eq!(
         config(&["--token-leeway-secs", "300"])
             .unwrap()
@@ -777,4 +797,95 @@ fn the_defaults_match_the_local_stack_and_absurd_settings_are_refused() {
         let e = config(&args).unwrap_err();
         assert!(e.contains(setting), "{args:?}: {e}");
     }
+}
+
+// --- Repair round 1 (review-r1's R1-1, QA's Q8, Q9 and Q11, I1) ---
+
+/// R1-1: with a dex slower than the floor, queued unknown-kid requests still make one fetch per
+/// floor window: the floor counts from when a fetch finishes, and a waiter looks again.
+#[tokio::test]
+async fn a_slow_dex_gets_one_fetch_per_floor_however_many_wait() {
+    let key = TestKey::new("k1");
+    let stranger = TestKey::new("k9");
+    let h =
+        Arc::new(Harness::new(&[&key], Duration::from_secs(1), Duration::from_secs(86_400)).await);
+    h.token(&key.sign(&claims(&h.issuer))).await.accepted();
+    assert_eq!(h.fetches(), 1);
+    h.dex.delay_ms.store(1500, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let token = stranger.sign(&claims(&h.issuer));
+    let calls: Vec<_> = (0..20)
+        .map(|_| {
+            let (h, token) = (h.clone(), token.clone());
+            tokio::spawn(async move { h.token(&token).await })
+        })
+        .collect();
+    for call in calls {
+        call.await
+            .unwrap()
+            .invalid(&token, "an unknown kid behind a slow dex");
+    }
+    assert_eq!(h.fetches(), 2, "one fetch for twenty waiting requests");
+}
+
+/// QA's Q9: while dex is down, the floor holds too: a failed fetch is a fetch.
+#[tokio::test]
+async fn a_down_dex_gets_one_fetch_per_floor() {
+    let key = TestKey::new("k1");
+    let h = Harness::default(&[&key]).await;
+    h.dex.down.store(true, Ordering::SeqCst);
+    let token = key.sign(&claims(&h.issuer));
+    h.token(&token).await.unavailable();
+    h.token(&token).await.unavailable();
+    assert_eq!(h.fetches(), 1, "the second request waits out the floor");
+}
+
+/// QA's Q8: a malformed kid never fetches, even past the floor.
+#[tokio::test]
+async fn a_malformed_kid_never_fetches() {
+    let key = TestKey::new("k1");
+    let h = Harness::new(&[&key], Duration::from_secs(1), Duration::from_secs(86_400)).await;
+    h.token(&key.sign(&claims(&h.issuer))).await.accepted();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let long = "k".repeat(129);
+    for kid in ["k 1", "", long.as_str()] {
+        let token = raw(
+            &json!({"alg": "RS256", "kid": kid}),
+            &claims(&h.issuer),
+            "c2ln",
+        );
+        h.token(&token).await.invalid(&token, "a malformed kid");
+    }
+    assert_eq!(h.fetches(), 1);
+}
+
+/// QA's Q11: discovery's issuer must match exactly; a trailing slash is another issuer.
+#[tokio::test]
+async fn a_discovery_issuer_with_a_trailing_slash_is_not_ours() {
+    let key = TestKey::new("k1");
+    let h = Harness::default(&[&key]).await;
+    *h.dex.claimed_issuer.lock().unwrap() = Some(format!("{}/", h.issuer));
+    h.token(&key.sign(&claims(&h.issuer))).await.unavailable();
+    assert!(matches!(
+        h.verifier.refresh().await,
+        Err(FetchError::IssuerMismatch { .. })
+    ));
+}
+
+/// I1: a token with a `crit` header is refused (RFC 7515 4.1.11), properly signed or not, and
+/// before any key is touched (401 even while dex is down).
+#[tokio::test]
+async fn a_critical_header_is_refused() {
+    let key = TestKey::new("k1");
+    let h = Harness::default(&[&key]).await;
+    let mut header = Header::new(Algorithm::RS256);
+    header.kid = Some("k1".to_owned());
+    header.crit = Some(vec!["exp".to_owned()]);
+    let token = jsonwebtoken::encode(&header, &claims(&h.issuer), &key.encoding).unwrap();
+    h.token(&token).await.invalid(&token, "crit");
+    h.dex.down.store(true, Ordering::SeqCst);
+    h.token(&token)
+        .await
+        .invalid(&token, "crit while dex is down");
+    assert_eq!(h.fetches(), 0);
 }

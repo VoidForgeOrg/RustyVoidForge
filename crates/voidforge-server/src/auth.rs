@@ -5,8 +5,8 @@
 //! The order is fixed, and every failure is a typed refusal, never an accept or a sentinel:
 //! 1. the header, before any key state: none is 401 `missing_token`; anything but exactly one
 //!    well-formed `Bearer <token>` of at most 8 KiB is 401 `invalid_token`;
-//! 2. the token's header: `alg` must be RS256 (never `none`, HS* or another family), and a `kid`
-//!    of 1 to 128 printable ASCII bytes is required;
+//! 2. the token's header: `alg` must be RS256 (never `none`, HS* or another family), no `crit`
+//!    (RFC 7515 4.1.11), and a `kid` of 1 to 128 printable ASCII bytes is required;
 //! 3. the key, from dex's keys cached by `kid` ([`TokenVerifier`]); when none can be loaded, or
 //!    an unknown `kid`'s refresh fails, 503 `unavailable` with `Retry-After`: the token may be
 //!    valid, and it can't be checked now;
@@ -49,7 +49,8 @@ pub const MAX_LEEWAY_SECS: u64 = 300;
 /// stack; P3.4's `serve` takes them.
 #[derive(Debug, Clone, clap::Args)]
 pub struct AuthArgs {
-    /// The issuer: dex's URL, matched exactly, and the base of its discovery document.
+    /// The issuer: dex's URL, matched exactly as given (a trailing slash included), and the base
+    /// of its discovery document.
     #[arg(long, env = "VOIDFORGE_ISSUER", default_value = DEFAULT_ISSUER)]
     pub issuer: String,
     /// The audiences a token may name; every one it names must be here.
@@ -113,7 +114,9 @@ impl AuthArgs {
             setting,
             reason: reason.to_owned(),
         };
-        let issuer = self.issuer.trim_end_matches('/');
+        // Taken verbatim: the match with the token's `iss` and discovery's `issuer` is exact, so
+        // a trailing slash here fails there, loudly, rather than being trimmed silently.
+        let issuer = self.issuer.as_str();
         if !(issuer.starts_with("http://") || issuer.starts_with("https://"))
             || issuer.len() <= "https://".len()
         {
@@ -187,6 +190,8 @@ pub enum Check {
     Algorithm,
     /// No `kid`, or not 1 to 128 printable ASCII bytes.
     KeyId,
+    /// A `crit` header: no critical extension is understood (RFC 7515 4.1.11).
+    Critical,
     /// No key has that `kid`, even after a refresh.
     UnknownKey,
     /// The signature doesn't verify, or the claims don't decode.
@@ -214,8 +219,14 @@ pub struct TokenVerifier {
     http: reqwest::Client,
     validation: Validation,
     keys: RwLock<KeySet>,
-    /// Single flight: one fetch at a time, and the time of the last attempt.
-    fetch: tokio::sync::Mutex<Option<Instant>>,
+    /// Single flight: one fetch at a time, and how the last one ended.
+    fetch: tokio::sync::Mutex<Option<LastFetch>>,
+}
+
+/// When the last fetch finished, and whether it succeeded.
+struct LastFetch {
+    at: Instant,
+    ok: bool,
 }
 
 #[derive(Default)]
@@ -322,10 +333,22 @@ impl TokenVerifier {
         if header.alg != Algorithm::RS256 {
             return Err(refuse(Check::Algorithm));
         }
+        // RFC 7515 4.1.11: a critical extension this verifier doesn't know must be refused, and
+        // it knows none (dex never sets `crit`).
+        if header.crit.is_some() {
+            return Err(refuse(Check::Critical));
+        }
         let kid = header
             .kid
             .filter(|k| well_formed_kid(k))
             .ok_or(refuse(Check::KeyId))?;
+        // A clock before 1970 is an error, never a time of 0.
+        let Some(now) = unix_secs(SystemTime::now()) else {
+            tracing::error!("the system clock is before 1970: tokens can't be checked");
+            return Err(Refusal::Unavailable {
+                retry_after_secs: MAX_RETRY_SECS,
+            });
+        };
         let key = match self.key(&kid).await {
             Lookup::Found(key) => key,
             Lookup::Unknown => return Err(refuse(Check::UnknownKey)),
@@ -337,13 +360,10 @@ impl TokenVerifier {
         };
         let data = jsonwebtoken::decode::<Claims>(token, &key, &self.validation)
             .map_err(|_| refuse(Check::Signature))?;
-        self.claims(data.claims).map_err(refuse)
+        self.claims(data.claims, now).map_err(refuse)
     }
 
-    fn claims(&self, c: Claims) -> Result<Principal, Check> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
+    fn claims(&self, c: Claims, now: u64) -> Result<Principal, Check> {
         let leeway = self.config.leeway.as_secs();
         if c.iss != self.config.issuer {
             return Err(Check::Issuer);
@@ -373,82 +393,106 @@ impl TokenVerifier {
         })
     }
 
-    /// The key for `kid`: from the cache while it's fresh enough, otherwise after a refresh,
-    /// which runs at most once per `min_refresh` and once at a time.
-    async fn key(&self, kid: &str) -> Lookup {
-        let usable = |set: &KeySet| {
-            set.fetched_at
-                .is_some_and(|at| at.elapsed() <= self.config.max_stale)
-        };
-        {
-            let set = self.keys.read().unwrap_or_else(|e| e.into_inner());
-            if usable(&set)
-                && let Some(key) = set.keys.get(kid)
-            {
-                return Lookup::Found(key.clone());
-            }
-        }
-        // Not there: one refresh, if the floor allows it.
-        let mut last = self.fetch.lock().await;
-        let allowed = last.is_none_or(|at| at.elapsed() >= self.config.min_refresh);
-        let fetched = if allowed {
-            *last = Some(Instant::now());
-            match self.fetch_keys().await {
-                Ok(keys) => {
-                    let mut set = self.keys.write().unwrap_or_else(|e| e.into_inner());
-                    *set = KeySet {
-                        keys,
-                        fetched_at: Some(Instant::now()),
-                    };
-                    true
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "fetching dex's keys failed; keeping the last good keys");
-                    false
-                }
-            }
+    /// The cached key for `kid`, while the cache is fresh enough.
+    fn cached(&self, kid: &str) -> Option<DecodingKey> {
+        let set = self.keys.read().unwrap_or_else(|e| e.into_inner());
+        if self.usable(&set) {
+            set.keys.get(kid).cloned()
         } else {
-            false
+            None
+        }
+    }
+
+    fn usable(&self, set: &KeySet) -> bool {
+        set.fetched_at
+            .is_some_and(|at| at.elapsed() <= self.config.max_stale)
+    }
+
+    /// The key for `kid`: from the cache, or after a refresh. Fetches run one at a time, and at
+    /// most once per `min_refresh`, counted from when the last one **finished**, so a slow dex
+    /// can't let queued requests each fetch (repair round 1, review-r1's R1-1). A request that
+    /// waited for another's fetch looks at the cache again before fetching itself.
+    async fn key(&self, kid: &str) -> Lookup {
+        if let Some(key) = self.cached(kid) {
+            return Lookup::Found(key);
+        }
+        let mut last = self.fetch.lock().await;
+        if let Some(key) = self.cached(kid) {
+            return Lookup::Found(key);
+        }
+        let due = last
+            .as_ref()
+            .is_none_or(|l| l.at.elapsed() >= self.config.min_refresh);
+        let ok = if due {
+            let ok = self.fetch_and_store().await.is_ok();
+            *last = Some(LastFetch {
+                at: Instant::now(),
+                ok,
+            });
+            ok
+        } else {
+            last.as_ref().is_some_and(|l| l.ok)
         };
         drop(last);
-        let set = self.keys.read().unwrap_or_else(|e| e.into_inner());
-        if !usable(&set) {
-            return Lookup::Unavailable;
+        if let Some(key) = self.cached(kid) {
+            return Lookup::Found(key);
         }
-        match set.keys.get(kid) {
-            Some(key) => Lookup::Found(key.clone()),
-            // A fresh set without the kid: it's unknown. A failed refresh: it may be a key dex
-            // just rotated in, so it can't be judged now.
-            None if fetched || !allowed => Lookup::Unknown,
-            None => Lookup::Unavailable,
+        let usable = self.usable(&self.keys.read().unwrap_or_else(|e| e.into_inner()));
+        // The last fetch succeeded and lacks the kid: it's unknown. It failed: it may be a key
+        // dex just rotated in, so it can't be judged now.
+        if ok && usable {
+            Lookup::Unknown
+        } else {
+            Lookup::Unavailable
         }
     }
 
     /// Seconds until the next fetch may run, from 1 to 30.
     async fn retry_after(&self) -> u64 {
-        let last = *self.fetch.lock().await;
-        let wait = last.map_or(Duration::ZERO, |at| {
-            self.config.min_refresh.saturating_sub(at.elapsed())
-        });
+        let wait = self
+            .fetch
+            .lock()
+            .await
+            .as_ref()
+            .map_or(Duration::ZERO, |l| {
+                self.config.min_refresh.saturating_sub(l.at.elapsed())
+            });
         wait.as_secs().saturating_add(1).clamp(1, MAX_RETRY_SECS)
     }
 
     /// Fetches the keys now, through discovery, and replaces the cache on success. The periodic
-    /// refresh calls it; requests go through the floor instead.
+    /// refresh calls it; requests go through the floor instead. Either way the floor counts
+    /// from when it finishes.
     ///
     /// # Errors
     /// [`FetchError`]; the cache keeps its last good keys.
     pub async fn refresh(&self) -> Result<usize, FetchError> {
         let mut last = self.fetch.lock().await;
-        *last = Some(Instant::now());
-        let keys = self.fetch_keys().await?;
-        let n = keys.len();
-        let mut set = self.keys.write().unwrap_or_else(|e| e.into_inner());
-        *set = KeySet {
-            keys,
-            fetched_at: Some(Instant::now()),
-        };
-        Ok(n)
+        let result = self.fetch_and_store().await;
+        *last = Some(LastFetch {
+            at: Instant::now(),
+            ok: result.is_ok(),
+        });
+        result
+    }
+
+    /// One fetch; the cache is replaced only on success. Failures are logged.
+    async fn fetch_and_store(&self) -> Result<usize, FetchError> {
+        match self.fetch_keys().await {
+            Ok(keys) => {
+                let n = keys.len();
+                let mut set = self.keys.write().unwrap_or_else(|e| e.into_inner());
+                *set = KeySet {
+                    keys,
+                    fetched_at: Some(Instant::now()),
+                };
+                Ok(n)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "fetching dex's keys failed; keeping the last good keys");
+                Err(e)
+            }
+        }
     }
 
     /// Keeps the keys fresh for the server's life: until a first set loads, retries with a
@@ -552,6 +596,11 @@ fn rsa_key(jwk: &serde_json::Value) -> Option<(String, DecodingKey)> {
     let kid = field("kid").filter(|k| well_formed_kid(k))?;
     let key = DecodingKey::from_rsa_components(field("n")?, field("e")?).ok()?;
     Some((kid.to_owned(), key))
+}
+
+/// Seconds since the Unix epoch, or None for a clock before it: never a sentinel 0.
+fn unix_secs(t: SystemTime) -> Option<u64> {
+    t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
 fn well_formed_kid(kid: &str) -> bool {
@@ -661,5 +710,18 @@ impl IntoResponse for Refusal {
             }
         }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Repair round 1, R1-2: a clock before 1970 is no time at all, never 0.
+    #[test]
+    fn a_clock_before_the_epoch_is_no_time() {
+        assert_eq!(unix_secs(UNIX_EPOCH), Some(0));
+        assert_eq!(unix_secs(UNIX_EPOCH + Duration::from_secs(42)), Some(42));
+        assert_eq!(unix_secs(UNIX_EPOCH - Duration::from_secs(1)), None);
     }
 }

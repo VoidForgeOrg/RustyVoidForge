@@ -1094,6 +1094,17 @@ Each entry records its date, the package that made it, the decision, the reasons
 
       Every 401 is checked for its code and `WWW-Authenticate`, for an echoed token, and for any check named in the body.
     - **`tests/dex.rs`** checks the real dex, `#[ignore]`d and run by **`just dex-test`**: discovery and keys load (any dex config), and a password-grant token for alice verifies while a tampered copy doesn't. The second test needs `DEX_CONFIG=config.ci.yaml just up`. **QA runs it** (amendment 5).
+- **Repair round 1** (QA PASS and review-r1 CLEAR on 4427641, with no accept path found; the follow-ups were folded in):
+  - **The floor counts from when a fetch finishes** (review-r1's R1-1). It was stamped when a fetch started, so with a dex slower than the floor, every queued unknown-`kid` request made its own fetch: review-r1 measured 53 fetches for 53 requests. Now the floor, and whether that fetch succeeded, are recorded when it ends.
+    - A request that waited for the lock looks at the cache again before fetching.
+    - Inside the floor, an unknown `kid` is 401 after a successful fetch and 503 after a failed one, so a down dex gets one fetch per floor too (dev-qa's Q9).
+    - The second look is defense in depth: with the floor counted from the finish, no test can tell it's missing, and the mutation table says so.
+  - **`crit` is refused** before any key is touched (RFC 7515 §4.1.11: a critical extension this verifier doesn't understand must be refused, and it understands none; dex never sets one).
+  - **The clock is never a sentinel** (R1-2): a system clock before 1970 is a 503 `unavailable`, logged loudly, not a time of 0.
+  - **The configured issuer is taken verbatim** (R1-3), trailing slash and all, so a mismatch with discovery or with `iss` fails loudly at the exact match instead of being trimmed away.
+  - **Decided, not missed** (dev-qa's I2): `iat` has no maximum age, because `exp` bounds a token's lifetime. `exp` at u64::MAX is a far-future token.
+  - **Tests added:** dev-qa's Q8 to Q11 (a malformed `kid` never fetches; a down dex gets one fetch per floor; an audience in another case or with a trailing space is refused; discovery's issuer with a trailing slash is another issuer); review-r1's slow-dex case (20 waiting requests, one fetch); `crit`; and the clock conversion.
+  - **A web → server guardrail fixture is restored** (dev-qa's Q2). With the server's library, cargo resolves the dependency, and the checker reports the declaration, the resolved path and every crate the server reaches. The fixture lists them exactly, so it changes when the server's dependencies do.
 - **Carried obligations:**
   - **P5** (deployment):
     - add a TLS feature to reqwest for an `https` issuer (until then, an https issuer means 503, never an accept);
