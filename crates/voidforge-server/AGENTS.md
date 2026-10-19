@@ -38,6 +38,7 @@ cargo nextest run -p voidforge-server
 - `tests/auth.rs` covers the token checks over real HTTP, against a local dex stand-in with keys generated at run time (D-046): every refusal's code and headers, rotation, the refresh floor, single-flight, dex down, stale keys, and the configuration bounds.
 - `tests/dex.rs` (`just dex-test`, by hand) checks the real dex. It needs `DEX_CONFIG=config.ci.yaml just up` for the password-grant token.
 - `tests/api_codes.rs` checks that the API's 422 codes are the core's reason codes (D-045).
+- `tests/routes.rs` (database stage) drives every route over HTTP through the real router, host, `Players` and Postgres: each 200 and error body as an insta snapshot, the privacy rule, the viewer rules, near's checks and cap, stale reads, 401 and 503 on every authenticated route, `no_free_homeworld` on every route, and route/document parity, with every status checked against the document (D-049).
 - `tests/accounts.rs` (database stage) drives the account path through the real host and Postgres: one row and one homeworld per principal across repeats, concurrency, a full universe, a stopped or busy host, restarts and four kill points, every error's answer, and the subject never logged at TRACE, sqlx included (D-047). `tests/postgres.rs` also covers seed's refusal of an accounts-only database, under a race.
 
 P2.9: on an empty database, the bootstrap always yields the same state hash. P3.2 to P3.5 and P3.8: token, account, route (insta contract snapshots), leaderboard and rate-limit tests.
