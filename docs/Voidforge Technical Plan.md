@@ -278,12 +278,13 @@ The public HTTP API from the architectural design, protected by dex tokens and t
 | P3.2 | Token checks: dex ID tokens verified against cached signing keys, issuer, an audience allowlist and expiry | server | Expired, foreign and tampered tokens all get 401 |
 | P3.3 | Accounts: issuer and subject map to a player UUIDv7; the first call issues Join game | server, store | A new dex user gets a homeworld exactly once |
 | P3.4 | Routes: `POST /commands` and the GET routes; 200, 400, 401, 422 and 503 mapping; views projected to now | server | insta contract snapshots are stable, and /openapi.json covers every route |
+| P3.4s | Serve: `voidforge-server serve` recovers the host from Postgres, reads a durable universe epoch that `seed` records (a migration), takes dex config and a bind address, and shuts down cleanly with a final snapshot | server, store | `serve` restarts over the same universe with the same epoch, and a Ctrl-C shutdown leaves a snapshot the next start recovers from |
 | P3.5 | Leaderboard job: rebuilt every 60 seconds from the read model | server | The as-of time advances and the ranks match the scores |
 | P3.6 | End-to-end scenario: bots log in through dex, then join, build, race to colonize and transport cargo | bots | Passes in CI against the compose stack within minutes, on the fast test rules |
 | P3.7 | Terminal login: the device code flow through dex for the voidforge-cli client, built into voidforge-bots so people and bots can play from a terminal | bots | A device code login yields a token the API accepts |
 | P3.8 | Rate limits: a per-player request limit on the API, answered with 429 | server | A burst over the limit gets 429, and the next window succeeds |
 
-Packages run one at a time, in ID order.
+Packages run one at a time, in ID order; P3.4s runs between P3.4 and P3.5.
 
 Gate: the end-to-end scenario passes in CI with real dex tokens, and QA has tried the API by hand.
 
