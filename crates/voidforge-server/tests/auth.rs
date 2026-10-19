@@ -496,6 +496,10 @@ async fn the_header_is_checked_before_anything_else() {
     let key = TestKey::new("k1");
     let h = Harness::default(&[&key]).await;
     let token = key.sign(&claims(&h.issuer));
+    let mut padded = claims(&h.issuer);
+    padded["padding"] = json!("p".repeat(8 * 1024));
+    let big = key.sign(&padded);
+    assert!(big.len() > 8 * 1024 && big.len() < 16 * 1024);
     h.call(&[]).await.missing();
     for (values, why) in [
         (vec![format!("Basic {token}")], "another scheme"),
@@ -510,6 +514,10 @@ async fn the_header_is_checked_before_anything_else() {
         (
             vec![format!("Bearer {}", "a".repeat(9 * 1024))],
             "over 8 KiB",
+        ),
+        (
+            vec![format!("Bearer {big}")],
+            "a properly signed token over 8 KiB",
         ),
         (vec![token.clone()], "no scheme"),
     ] {
@@ -554,6 +562,17 @@ async fn unknown_kids_refresh_at_most_once_per_floor() {
         h.token(&token).await.invalid(&token, "an unknown kid");
     }
     assert_eq!(h.fetches(), 1, "the floor holds");
+    // Another algorithm never reaches the keys, even with an unknown kid past the floor.
+    let h = Harness::new(&[&key], Duration::from_secs(1), Duration::from_secs(86_400)).await;
+    for alg in ["HS256", "ES256", "PS256"] {
+        let token = raw(
+            &json!({"alg": alg, "kid": "never-seen"}),
+            &claims(&h.issuer),
+            "c2ln",
+        );
+        h.token(&token).await.invalid(&token, alg);
+    }
+    assert_eq!(h.fetches(), 0, "no key fetch for another algorithm");
 }
 
 #[tokio::test]
@@ -589,6 +608,18 @@ async fn dex_down_at_start_is_503_until_keys_load_never_an_accept() {
     h.token(&none)
         .await
         .invalid(&none, "alg none while dex is down");
+    // The algorithm is checked before any key is touched: never 503 for HS256 or ES256.
+    let mut hs = Header::new(Algorithm::HS256);
+    hs.kid = Some("k1".to_owned());
+    let hs =
+        jsonwebtoken::encode(&hs, &claims(&h.issuer), &EncodingKey::from_secret(b"s")).unwrap();
+    h.token(&hs).await.invalid(&hs, "HS256 while dex is down");
+    let es = raw(
+        &json!({"alg": "ES256", "kid": "k1"}),
+        &claims(&h.issuer),
+        "c2ln",
+    );
+    h.token(&es).await.invalid(&es, "ES256 while dex is down");
     // dex comes up; after the floor, the same token verifies.
     h.dex.down.store(false, Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(1100)).await;
