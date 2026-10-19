@@ -746,7 +746,10 @@ async fn the_body_limit_is_exactly_64_kib(pool: PgPool) {
     let token = api.token(ALICE_SUB);
     let command = r#"{"type":"recall_fleet","payload":{"fleet_id":424242}}"#;
     let padded = |len: usize| format!("{command}{}", " ".repeat(len - command.len()));
-    let limit = voidforge_server::api::MAX_BODY_BYTES;
+    // The number itself, as the contract states it, not the server's constant: a test that
+    // read the constant would move with it (the mutation table's Q7).
+    let limit = 65_536;
+    assert_eq!(voidforge_server::api::MAX_BODY_BYTES, limit);
     let at = api
         .send(
             Method::POST,
