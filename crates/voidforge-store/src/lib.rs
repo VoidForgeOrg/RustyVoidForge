@@ -244,3 +244,52 @@ pub async fn universe_epoch(pool: &PgPool) -> Result<Option<i64>, sqlx::Error> {
         .fetch_optional(pool)
         .await
 }
+
+/// The advisory lock key a serving process holds: the bytes of "VoidForg". An advisory lock is
+/// scoped to its database, and a database holds one universe, so one key per database is one lock
+/// per universe (D-050, the P3.4s QA's I4).
+pub const SERVE_LOCK_KEY: i64 = 6_228_312_689_076_040_295;
+
+/// Why `serve` can't hold its universe.
+#[derive(Debug, thiserror::Error)]
+pub enum LockError {
+    /// The database URL is not a Postgres URL.
+    #[error("the database URL is not a Postgres URL")]
+    Url,
+    /// The database could not be reached or read.
+    #[error("database: {0}")]
+    Database(#[from] sqlx::Error),
+    /// Another process holds this universe: two hosts on one log would race for its sequence.
+    #[error("another serve already holds this universe; only one may run against it")]
+    Held,
+}
+
+/// A held universe: a session advisory lock on a connection of its own. Postgres releases it when
+/// the connection closes, whether this value is dropped or the process dies.
+#[derive(Debug)]
+pub struct UniverseLock {
+    _connection: sqlx::PgConnection,
+}
+
+/// Takes the universe at `url` for one serving process, without waiting: a second `serve` on the
+/// same universe refuses rather than queue behind the first (D-050).
+///
+/// # Errors
+/// [`LockError::Held`] if another session holds it; otherwise the connection failure.
+pub async fn lock_universe(url: &str) -> Result<UniverseLock, LockError> {
+    use sqlx::Connection as _;
+    let options: sqlx::postgres::PgConnectOptions = url.parse().map_err(|_| LockError::Url)?;
+    let mut connection = sqlx::PgConnection::connect_with(&options).await?;
+    let taken = sqlx::query_scalar!(
+        r#"SELECT pg_try_advisory_lock($1) AS "taken!""#,
+        SERVE_LOCK_KEY
+    )
+    .fetch_one(&mut connection)
+    .await?;
+    if !taken {
+        return Err(LockError::Held);
+    }
+    Ok(UniverseLock {
+        _connection: connection,
+    })
+}

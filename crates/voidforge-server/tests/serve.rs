@@ -1071,3 +1071,271 @@ async fn bootstrap_refuses_an_epoch_outside_the_window_before_connecting() {
         );
     }
 }
+
+// --- Repair round 1: every shutdown step watches for a second signal and is bounded (review-r2's
+// M1, QA's D1), the join bound (Q2), seed's default epoch (Q3), and one serve per universe (I4) ---
+
+/// Makes the host's shutdown snapshot take at least 2 s: an AFTER INSERT trigger that sleeps.
+async fn slow_snapshots(pool: &PgPool) {
+    sqlx::query(
+        "CREATE FUNCTION slow_snapshot() RETURNS trigger LANGUAGE plpgsql AS
+           $$ BEGIN PERFORM pg_sleep(2); RETURN NEW; END $$",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER slow_snapshot AFTER INSERT ON snapshots
+           FOR EACH ROW EXECUTE FUNCTION slow_snapshot()",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// Waits (bounded) until a session in this database runs a statement starting with `query` and
+/// waits on `wait`: a `wait_event_type` ('Lock') or a `wait_event` ('PgSleep').
+async fn waits(pool: &PgPool, query: &str, wait: &str) {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+              WHERE datname = current_database() AND (wait_event_type = $2 OR wait_event = $2)
+                AND query LIKE $1 || '%'",
+        )
+        .bind(query)
+        .bind(wait)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if n > 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{query:?} never waited on {wait}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Holds the final verification's SELECT behind a snapshots lock (review-r2's probe): the
+/// shutdown snapshot's INSERT is slowed, and an ACCESS EXCLUSIVE lock queued behind it is granted
+/// after it commits and before the check reads. Returns the transaction holding the lock.
+async fn hold_the_final_check<'a>(
+    pool: &'a PgPool,
+    s: &Serve,
+) -> sqlx::Transaction<'a, sqlx::Postgres> {
+    slow_snapshots(pool).await;
+    let mut tx = pool.begin().await.unwrap();
+    s.signal("INT");
+    waits(pool, "INSERT INTO snapshots", "PgSleep").await;
+    sqlx::query("LOCK TABLE snapshots IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    waits(
+        pool,
+        "SELECT seq, game_time, rules_version, engine_build, state_hash, payload",
+        "Lock",
+    )
+    .await;
+    tx
+}
+
+/// Review-r2's M1, as a regression: a second signal while the final check waits on Postgres
+/// exits 6 at once, rather than waiting for the query and then exiting 0.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_second_signal_during_the_final_check_exits_6_at_once(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let s = serve(&url, &dex.issuer, &[]);
+    assert_eq!(
+        call(
+            "GET",
+            s.url("/players/me"),
+            Some(dex.token(ALICE_SUB)),
+            None
+        )
+        .status,
+        200
+    );
+    let tx = hold_the_final_check(&pool, &s).await;
+    s.signal("TERM");
+    let (code, stderr) = s.exit(Duration::from_secs(2));
+    assert_eq!(code, 6, "{stderr}");
+    assert!(stderr.contains("while checking the snapshot"), "{stderr}");
+    tx.rollback().await.unwrap();
+}
+
+/// The final check is bounded: held past 5 s with no second signal, it's exit 6, not a wait for
+/// as long as Postgres holds it.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_final_check_is_bounded_at_5_s(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let s = serve(&url, &dex.issuer, &[]);
+    assert_eq!(
+        call(
+            "GET",
+            s.url("/players/me"),
+            Some(dex.token(ALICE_SUB)),
+            None
+        )
+        .status,
+        200
+    );
+    let tx = hold_the_final_check(&pool, &s).await;
+    let held = Instant::now();
+    let (code, stderr) = s.exit(Duration::from_secs(10));
+    let after = held.elapsed();
+    assert_eq!(code, 6, "{stderr}");
+    assert!(stderr.contains("did not finish within 5 s"), "{stderr}");
+    assert!(
+        after > Duration::from_secs(4) && after < Duration::from_secs(8),
+        "{after:?}"
+    );
+    tx.rollback().await.unwrap();
+}
+
+/// QA's D1, as a regression: one signal stream covers every step from the first signal to the
+/// exit, so a second signal at any moment of the shutdown is exit 6. Each round appends a record
+/// first, so the stop always has a snapshot to write, and that write is slowed to 2 s, so every
+/// delay here falls inside the stop. (Without a new record the newest snapshot is already at the
+/// head, nothing is written, and a stop takes under 100 ms.) The first signal is SIGINT and the
+/// second SIGTERM, which the kernel can't merge into one delivery.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_second_signal_at_any_moment_of_the_shutdown_exits_6(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    slow_snapshots(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    for delay_ms in [0, 2, 5, 10, 20, 40, 80, 200, 1000] {
+        let s = serve(&url, &dex.issuer, &[]);
+        let key: &'static str = Box::leak(format!("sweep-{delay_ms}").into_boxed_str());
+        let r = call("POST", s.url("/commands"), Some(token.clone()), Some(key));
+        assert_eq!(r.status, 422, "{:?}", r.body);
+        let (snapshot, head) = snapshot_and_head(&pool).await;
+        assert!(snapshot < head, "the stop has a snapshot to write");
+        s.signal("INT");
+        std::thread::sleep(Duration::from_millis(delay_ms));
+        s.signal("TERM");
+        let (code, stderr) = s.exit(Duration::from_secs(5));
+        assert_eq!(
+            code, 6,
+            "second signal {delay_ms} ms after the first:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("second signal (SIGTERM)"),
+            "{delay_ms} ms: {stderr}"
+        );
+    }
+}
+
+/// QA's Q2: the join is bounded at 10 s. The host can't stop while its append waits on a held
+/// lock, so one signal gives exit 6 about 10 s later (no drain, a 1 s margin either side).
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_host_join_is_bounded_at_10_s(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    let s = serve(&url, &dex.issuer, &["--drain-secs", "0"]);
+    assert_eq!(
+        call("GET", s.url("/players/me"), Some(token.clone()), None).status,
+        200
+    );
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE log_records IN EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let in_flight = request("POST", s.url("/commands"), Some(token), Some("bound"));
+    append_waits_on_a_lock(&pool).await;
+    s.signal("INT");
+    let sent = Instant::now();
+    let (code, stderr) = s.exit(Duration::from_secs(20));
+    let after = sent.elapsed();
+    assert_eq!(code, 6, "{stderr}");
+    assert!(stderr.contains("did not stop within 10 s"), "{stderr}");
+    assert!(
+        after > Duration::from_secs(9) && after < Duration::from_secs(13),
+        "{after:?}"
+    );
+    lock.rollback().await.unwrap();
+    let _ = in_flight.join().unwrap();
+}
+
+/// QA's Q3: seed's default epoch is the wall clock when it runs.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn seed_defaults_the_epoch_to_the_wall_clock(pool: PgPool) {
+    let now = || {
+        i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+    };
+    let before = now();
+    let out = Command::new(BIN)
+        .args([
+            "seed",
+            "--seed",
+            "7",
+            "--players",
+            "10",
+            "--rules",
+            &rules_path(),
+        ])
+        .env("DATABASE_URL", url(&pool))
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    let after = now();
+    assert_eq!(out.status.code(), Some(0));
+    let epoch = epoch_row(&pool).await.unwrap();
+    assert!(
+        (before..=after).contains(&epoch),
+        "{before} <= {epoch} <= {after}"
+    );
+}
+
+/// QA's I4, the lead's addition: one serve per universe. A second gets exit 3 before it recovers
+/// or binds, and the first serves on, unaffected, and stops cleanly. Once it has stopped, the
+/// universe can be served again.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_second_serve_on_the_same_universe_is_refused(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    let first = serve(&url, &dex.issuer, &[]);
+    let out = Command::new(BIN)
+        .args(["serve", "--database-url", &url, "--rules", &rules_path()])
+        .args(["--bind", "127.0.0.1:0", "--issuer", &dex.issuer])
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("another serve already holds this universe"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("recovered the universe"),
+        "refused before recovery"
+    );
+    assert!(!stdout.contains("ready:"), "refused before binding");
+    assert_eq!(
+        call("GET", first.url("/players/me"), Some(token), None).status,
+        200
+    );
+    first.signal("INT");
+    assert_eq!(first.exit(PATIENCE).0, 0);
+    let again = serve(&url, &dex.issuer, &[]);
+    again.signal("INT");
+    assert_eq!(again.exit(PATIENCE).0, 0);
+}

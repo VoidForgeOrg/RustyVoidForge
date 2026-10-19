@@ -17,8 +17,9 @@ case "${RULES:-v0}" in
     *) echo "error: RULES is v0 or fast, not ${RULES}" >&2; exit 2 ;;
 esac
 [ "$db" = voidforge_dev ] || { echo "error: refusing database $db" >&2; exit 2; }
-# The queries are checked against .sqlx/, never against this database (D-034). exec, so Ctrl-C and
-# SIGTERM reach serve itself and it stops with its final snapshot.
-SQLX_OFFLINE=true cargo build -q -p voidforge-server --locked
+# The queries are checked against .sqlx/, never against this database (D-034). `cargo run` finds the
+# binary wherever cargo builds it (CARGO_TARGET_DIR included), and on Unix it execs the binary in
+# its own place, so after this exec Ctrl-C and SIGTERM reach serve itself, which stops with its
+# final snapshot. (Compose runs the binary directly, never `just`: D-050.)
 VOIDFORGE_DATABASE_URL="postgres://voidforge:voidforge-local-test-password@localhost:5432/$db" \
-    exec target/debug/voidforge-server serve --rules "$rules"
+    SQLX_OFFLINE=true exec cargo run -q -p voidforge-server --locked -- serve --rules "$rules"

@@ -36,7 +36,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
-use voidforge_core::rules::Rules;
 use voidforge_core::state::EngineError;
 use voidforge_store::log::SnapshotRow;
 use voidforge_store::log::{
@@ -49,6 +48,9 @@ pub use clock::{Clock, ManualClock, SystemClock};
 /// The command vocabulary this API already exposes (in [`Receipt`] and [`ReadModel`]), so the
 /// server can name it without depending on the core (decision log D-047).
 pub use voidforge_core::command::{Action, Command, Rejection};
+/// The rules type `recover` and `spawn` take, so `serve` can pass a parsed rules file between its
+/// runtimes without depending on the core (decision log D-050). A name only.
+pub use voidforge_core::rules::Rules;
 /// The read vocabulary the server maps to the wire: the views, and the read-only state enums
 /// and IDs they name. Names only; nothing here changes the live World (D-049).
 pub use voidforge_core::solver::FlowLabel;

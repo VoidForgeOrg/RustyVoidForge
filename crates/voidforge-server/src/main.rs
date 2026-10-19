@@ -30,9 +30,10 @@ const SEED_EXIT_CODES: &str = "Exit codes: 0 seeded, 2 usage error, 3 refused (t
 
 const SERVE_EXIT_CODES: &str = "Exit codes: 0 stopped cleanly (the final snapshot is at the log \
     head), 2 usage error (a setting out of range), 3 refused (no universe, no recorded epoch, an \
-    epoch out of range, or another rules version), 4 input or database error (connecting, \
+    epoch out of range, another rules version, or another serve already holds the universe), 4 input or database error (connecting, \
     migrating, recovery, or the bind), 5 telemetry failed, 6 stopped uncleanly (a second signal, \
-    a drain timeout, or the host stopped on its own; recovery replays the log).";
+    a drain timeout, the host stopped on its own or didn't stop within 10 s, or the final snapshot \
+    isn't at the log head, or its check didn't finish within 5 s; recovery replays the log).";
 
 /// The Voidforge server.
 #[derive(Debug, Parser)]
