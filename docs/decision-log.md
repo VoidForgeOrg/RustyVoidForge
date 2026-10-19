@@ -1157,3 +1157,10 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **P3.4:** take `Player` on every route that acts as a player, and build `Players<PgAccounts>` in `serve` with the host it starts (the epoch is D-044's).
   - **P3.8:** a refused account's calls append nothing, but each costs an indexed read; the rate limit bounds them.
 - Where it's enforced: `crates/voidforge-store/src/{accounts.rs, lib.rs}`, `crates/voidforge-server/src/{accounts.rs, codes.rs, auth.rs, main.rs}`, `crates/voidforge-host/src/lib.rs`, `crates/voidforge-core/src/command.rs`, the core's, host's, server's and store's AGENTS.md, `crates/voidforge-server/tests/{accounts.rs, postgres.rs, api_codes.rs}`, `.github/scripts/database.sh`, `deny.toml`, and the [version table](versions.md).
+
+### D-048: `serve` is its own package, P3.4s
+
+- Date and package: 2026-10-19, planning (P3.4). Proposed by dev-build as T8 of `slices/34-p3-4-routes/proposal-routes.md`; approved by the lead (`ruling-lead.md`); the Technical Plan row added by the advisor.
+- Decision: running the server for real (`voidforge-server serve`) becomes package P3.4s, after P3.4 and before P3.5. It covers host recovery from Postgres, a durable universe epoch that `seed` records through a new migration (D-044's carry, closing the "Phase 3 owns a stable epoch source" amendments above), dex configuration, the bind address, and a clean shutdown with a final snapshot. It builds `Players<PgAccounts>` with the host it starts (D-047's carry). P3.5's leaderboard job wires into it and P3.6 runs against it.
+- Reasons: it is a separate design with its own failure modes, and folding it into P3.4 would double that package. Until it lands, P3.4's QA probes an in-process test server over a seeded `voidforge_dev` with real dex. The Phase 3 gate's "QA has tried the API by hand" uses `serve`.
+- Where it's recorded: the [Technical Plan's Phase 3 table](Voidforge%20Technical%20Plan.md#phase-3-api-and-auth).
