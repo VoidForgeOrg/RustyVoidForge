@@ -1,7 +1,7 @@
 # Voidforge task runner (Technical Plan, Tech stack and CI/CD). The lint, supply-chain and test
 # recipes run the same commands as the CI jobs of the same name, so a red check reproduces here.
 # db-test and migrate arrived with P2.1 (D-034), bless with P2.6 (D-040), replay with P2.7 (D-041), seed and seed-reset with
-# P2.9 (D-043). Recipes appear with the packages that implement them: e2e (P3.6) does not exist yet (decision log D-014).
+# P2.9 (D-043), openapi with P3.1 (D-045). Recipes appear with the packages that implement them: e2e (P3.6) does not exist yet (decision log D-014).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -92,3 +92,9 @@ seed-reset:
 # files change only this way, and a reviewer checks every change: call it out in the PR body.
 bless:
     VOIDFORGE_BLESS=1 cargo nextest run -p voidforge-host --test golden --locked --run-ignored only -E 'test(=bless)' --no-capture
+
+# Writes crates/voidforge-api-types/openapi.json from the API types (decision log D-045). The
+# public contract changes only this way, and a reviewer checks every change: call it out in the
+# PR body.
+openapi:
+    VOIDFORGE_BLESS_OPENAPI=1 cargo nextest run -p voidforge-api-types --test openapi_file --locked --run-ignored only -E 'test(=bless)' --no-capture
