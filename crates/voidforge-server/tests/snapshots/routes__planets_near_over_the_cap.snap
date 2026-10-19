@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: r.body
+---
+{
+  "code": "invalid_query",
+  "message": "1001 planets are within that radius, more than 1000; narrow it"
+}

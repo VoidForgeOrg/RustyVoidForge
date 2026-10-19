@@ -1,0 +1,5 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: "r.body[\"code\"]"
+---
+"malformed_body"

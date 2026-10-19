@@ -62,7 +62,7 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 
 ## Crate dependencies
 
-The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, tower-http, openidconnect, maud, tower-sessions, insta, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
+The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, tower-http, openidconnect, maud, tower-sessions, scraper, tower_governor) gets its exact version here, with a decision-log entry, in the package that first adds it.
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
@@ -84,10 +84,11 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest | P2.3 | D-036 |
 | clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line | P2.7 | D-041 |
 | utoipa | =6.0.0 (macros; default features off) | api-types, the OpenAPI document | P3.1 | D-045 |
-| axum | =0.8.9 (http1, tokio, json; default features off) | server, the token extractor; the tests' local servers | P3.2 | D-046 |
+| axum | =0.8.9 (http1, tokio, json, query; default features off) | server: the token extractor, the routes (query since P3.4, D-049); the tests' local servers | P3.2 | D-046, D-049 |
 | jsonwebtoken | =11.1.0 (aws_lc_rs; default features off, so no PEM) | server, token signatures (RS256) | P3.2 | D-046 |
 | reqwest | =0.13.5 (json; default features off, no TLS until P5) | server, dex's discovery document and keys; already in the tree through telemetry's OTLP exporter | P3.2 | D-046 |
 | aws-lc-rs | =1.18.2 | server, dev-dependency only: generates the token tests' RSA keys (also jsonwebtoken's backend) | P3.2 | D-046 |
 | jsonschema | =0.59.0 (default features off: no HTTP or TLS) | api-types, dev-dependency only: validates examples against the OpenAPI schemas (draft 2020-12), with exact integer bounds | P3.1 | D-045 |
 | uuid | =1.28.0 (std, v7; default features off) | server: draws each new player's UUIDv7 | P3.3 | D-047 |
+| insta | =1.46.1 (json; default features off) | server, dev-dependency only: the routes' contract snapshots | P3.4 | D-049 |
 | log | =0.4.34 (std; default features off) | server, dev-dependency only: the privacy test captures sqlx's `log` events | P3.3 | D-047 |

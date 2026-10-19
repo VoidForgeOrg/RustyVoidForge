@@ -336,9 +336,9 @@ fn assemble_rejects_unknown_planets_and_ships_no_ships_and_negative_cargo() {
 #[test]
 fn assemble_rejects_another_players_ship_and_ships_not_on_that_roster() {
     let mut s = setup();
-    // Bob's ship (on his roster) is not Alice's.
+    // Bob's ship (on his roster) is unknown to Alice (D-049).
     let action = assemble(s.bob_home, &[s.bob_ship], Cargo::default());
-    reject(&mut s.w, ALICE, &action, 0, Rejection::NotOwner);
+    reject(&mut s.w, ALICE, &action, 0, Rejection::UnknownShip);
     // Alice's ship named at the wrong planet, and one already in a fleet.
     let wrong = assemble(s.free, &[s.haulers[0]], Cargo::default());
     reject(&mut s.w, ALICE, &wrong, 0, Rejection::ShipNotOnRoster);
@@ -419,7 +419,7 @@ fn send_rejects_an_unknown_fleet_or_target_another_players_fleet_and_one_not_sta
         BOB,
         &send(fleet, s.free, Mission::Move),
         0,
-        Rejection::NotOwner,
+        Rejection::UnknownFleet,
     );
     accept(&mut s.w, ALICE, &send(fleet, s.free, Mission::Move), 0);
     reject(
@@ -552,7 +552,7 @@ fn recall_rejects_unknown_foreign_stationed_arrived_and_already_recalled_fleets(
     reject(&mut s.w, ALICE, &ghost, 0, Rejection::UnknownFleet);
     reject(&mut s.w, ALICE, &recall, 0, Rejection::FleetNotInTransit);
     accept(&mut s.w, ALICE, &send(fleet, s.free, Mission::Colonize), 0);
-    reject(&mut s.w, BOB, &recall, 1, Rejection::NotOwner);
+    reject(&mut s.w, BOB, &recall, 1, Rejection::UnknownFleet);
     accept(&mut s.w, ALICE, &recall, 2 * 60_000);
     reject(
         &mut s.w,
@@ -663,7 +663,7 @@ fn disband_rejects_unknown_foreign_moving_and_loaded_fleets() {
         BOB,
         &Action::DisbandFleet { fleet: loaded },
         0,
-        Rejection::NotOwner,
+        Rejection::UnknownFleet,
     );
     reject(
         &mut s.w,
@@ -762,7 +762,7 @@ fn unload_rejects_unknown_foreign_moving_fleets_and_a_planet_not_the_players() {
         BOB,
         &Action::TriggerUnload { fleet },
         0,
-        Rejection::NotOwner,
+        Rejection::UnknownFleet,
     );
     accept(&mut s.w, ALICE, &send(fleet, s.free, Mission::Move), 0);
     reject(
@@ -818,7 +818,7 @@ fn fleet_commands_reject_a_player_who_has_not_joined() {
 #[test]
 fn fleet_commands_check_ownership_before_state() {
     // Bob's fleets, each in a state that would also be refused: another player always gets
-    // not_owner, never the state code (D-028's order; R1's carry).
+    // unknown_fleet, never the state code (D-028's order; D-049: a foreign fleet is unknown).
     let mut s = setup();
     let id = FleetId(s.w.next_id);
     accept(
@@ -840,7 +840,7 @@ fn fleet_commands_check_ownership_before_state() {
     ];
     for (action, why) in &checks {
         let applied = apply(&mut s.w, ALICE, action, 0);
-        assert_eq!(applied.outcome, Err(Rejection::NotOwner), "{why}");
+        assert_eq!(applied.outcome, Err(Rejection::UnknownFleet), "{why}");
     }
     accept(&mut s.w, BOB, &send(id, s.free, Mission::Move), 0);
     for (action, why) in [
@@ -854,12 +854,12 @@ fn fleet_commands_check_ownership_before_state() {
         ),
     ] {
         let applied = apply(&mut s.w, ALICE, &action, 1);
-        assert_eq!(applied.outcome, Err(Rejection::NotOwner), "{why}");
+        assert_eq!(applied.outcome, Err(Rejection::UnknownFleet), "{why}");
     }
-    // A ship of Bob's already in his fleet: not_owner before ship_not_on_roster.
+    // A ship of Bob's already in his fleet: unknown_ship before ship_not_on_roster (D-049).
     let action = assemble(s.bob_home, &[s.bob_ship], Cargo::default());
     let applied = apply(&mut s.w, ALICE, &action, 1);
-    assert_eq!(applied.outcome, Err(Rejection::NotOwner));
+    assert_eq!(applied.outcome, Err(Rejection::UnknownShip));
 }
 
 /// review-r1's gate LOW (P1.3's HIGH, now reachable end to end through commands): a fleet sent,
@@ -893,4 +893,103 @@ fn recall_return_disband_then_save_and_load_keeps_the_stale_arrival_harmless() {
     // The stale entry is skipped when it comes due: nothing arrives, nothing is colonized.
     assert_eq!(loaded.advance_to(lands + 1, &v0_rules()).unwrap(), []);
     assert_eq!(loaded.planets[&s.free].owner, None);
+}
+
+// --- Another player's fleet or ship is unknown (D-028 amended by D-049) ---
+
+/// The same action as Alice, naming Bob's fleet or ship and naming one that doesn't exist, with
+/// every other input the same: the two outcomes are identical, so no answer tells Alice that
+/// Bob's exists.
+fn indistinguishable(w: &World, t: i64, cases: &[(&str, Action, Action)]) {
+    for (why, foreign, unknown) in cases {
+        let a = apply(&mut w.clone(), ALICE, foreign, t);
+        let b = apply(&mut w.clone(), ALICE, unknown, t);
+        assert_eq!(a.outcome, b.outcome, "{why}");
+        assert!(a.outcome.is_err(), "{why}: refused");
+    }
+}
+
+#[test]
+fn another_players_fleet_answers_exactly_as_an_unknown_fleet_at_every_check() {
+    let mut s = setup();
+    let bobs = FleetId(s.w.next_id);
+    accept(
+        &mut s.w,
+        BOB,
+        &assemble(s.bob_home, &[s.bob_ship], tons(0, 10)),
+        0,
+    );
+    let ghost = FleetId(s.w.next_id + 1_000);
+    let no_planet = PlanetId(s.w.next_id + 2_000);
+    let cases = |f: FleetId| {
+        vec![
+            send(f, s.free, Mission::Move),
+            // The walk's first case: the target's existence is checked after the fleet's.
+            send(f, no_planet, Mission::Move),
+            send(f, s.bob_home, Mission::Move),
+            send(f, s.free, Mission::Colonize),
+            Action::RecallFleet { fleet: f },
+            Action::DisbandFleet { fleet: f },
+            Action::TriggerUnload { fleet: f },
+        ]
+    };
+    let pairs: Vec<_> = cases(bobs)
+        .into_iter()
+        .zip(cases(ghost))
+        .map(|(a, b)| ("stationed", a, b))
+        .collect();
+    indistinguishable(&s.w, 0, &pairs);
+    // In transit: the state checks Bob would meet must not show through either.
+    accept(&mut s.w, BOB, &send(bobs, s.free, Mission::Move), 0);
+    let pairs: Vec<_> = cases(bobs)
+        .into_iter()
+        .zip(cases(ghost))
+        .map(|(a, b)| ("in transit", a, b))
+        .collect();
+    indistinguishable(&s.w, 1, &pairs);
+}
+
+#[test]
+fn another_players_ship_answers_exactly_as_an_unknown_ship_at_every_check() {
+    let s = setup();
+    let ghost = ShipId(s.w.next_id + 1_000);
+    let no_planet = PlanetId(s.w.next_id + 2_000);
+    let invalid = Cargo {
+        ore_g: -1,
+        ingots_g: 0,
+    };
+    let cases = |ship: ShipId| {
+        vec![
+            assemble(s.home, &[ship], Cargo::default()),
+            // The walk's second case: invalid cargo was checked before ownership.
+            assemble(s.home, &[ship], invalid),
+            assemble(s.home, &[ship, s.haulers[0]], tons(1, 0)),
+            assemble(s.bob_home, &[ship], Cargo::default()),
+            // A foreign ship loading from a foreign planet: the ship is unknown first.
+            assemble(s.free, &[ship], tons(1, 0)),
+            assemble(no_planet, &[ship], Cargo::default()),
+        ]
+    };
+    let pairs: Vec<_> = cases(s.bob_ship)
+        .into_iter()
+        .zip(cases(ghost))
+        .map(|(a, b)| ("assemble", a, b))
+        .collect();
+    indistinguishable(&s.w, 0, &pairs);
+}
+
+/// The assemble split, pinned: Alice's own ships loading from a planet that isn't hers is still
+/// `not_owner` (planets are public); naming Bob's ship there is `unknown_ship`.
+#[test]
+fn assembles_not_owner_is_only_ever_the_planet() {
+    let mut s = setup();
+    let action = assemble(s.bob_home, &[s.haulers[0]], tons(1, 0));
+    let applied = apply(&mut s.w.clone(), ALICE, &action, 0);
+    // The hauler is on Alice's roster, not Bob's: the planet check comes first.
+    assert_eq!(applied.outcome, Err(Rejection::NotOwner));
+    let action = assemble(s.bob_home, &[s.bob_ship], tons(1, 0));
+    assert_eq!(
+        apply(&mut s.w, ALICE, &action, 0).outcome,
+        Err(Rejection::UnknownShip)
+    );
 }

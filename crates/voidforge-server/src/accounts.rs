@@ -19,21 +19,16 @@
 use std::sync::Arc;
 
 use axum::extract::{FromRef, FromRequestParts};
-use axum::http::header::RETRY_AFTER;
 use axum::http::request::Parts;
-use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use voidforge_api_types::error::{ErrorBody, ErrorCode};
+use voidforge_api_types::error::ErrorCode;
 use voidforge_host::{Action, Command, HostError, HostHandle, PlayerId, Rejection};
 use voidforge_store::accounts::{AccountError, AccountStore, PgAccounts};
 
+use crate::api::error::{ApiError, host_error};
+pub use crate::api::error::{BUSY_RETRY_AFTER_SECS, UNAVAILABLE_RETRY_AFTER_SECS};
 use crate::auth::{Principal, Refusal, TokenVerifier};
 use crate::codes::game_code;
-
-/// Seconds a client waits after `busy`: the inbox drains in moments.
-pub const BUSY_RETRY_AFTER_SECS: u64 = 1;
-/// Seconds a client waits after `unavailable`: the host or the database is down or restarting.
-pub const UNAVAILABLE_RETRY_AFTER_SECS: u64 = 5;
 
 /// The player a request acts as. Its ID is the public identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,33 +165,34 @@ where
     }
 }
 
+impl From<PlayerError> for ApiError {
+    fn from(e: PlayerError) -> Self {
+        let code = e.code();
+        match e {
+            // The one host-error mapping, shared with `POST /commands` (D-049).
+            PlayerError::Busy => host_error(HostError::Busy),
+            PlayerError::Stopped => host_error(HostError::Stopped),
+            PlayerError::Refused(Rejection::NoFreeHomeworld) => ApiError::new(
+                code,
+                "no homeworld is free, so this account can't join the game",
+            ),
+            // The store's error can name database internals; the body says only what happened.
+            PlayerError::Store(AccountError::Unstorable) => {
+                ApiError::new(code, "this account's identity can't be stored")
+            }
+            PlayerError::Store(_) => {
+                ApiError::new(code, "accounts can't be read right now; retry later")
+                    .retry_after(UNAVAILABLE_RETRY_AFTER_SECS)
+            }
+            refused @ PlayerError::Refused(_) => ApiError::new(code, refused.to_string()),
+            // Loud, as every other 500: the cause is logged and the body is generic (R1's INFO).
+            internal @ PlayerError::Internal(_) => ApiError::internal(&internal),
+        }
+    }
+}
+
 impl IntoResponse for PlayerError {
     fn into_response(self) -> Response {
-        let code = self.code();
-        let status =
-            StatusCode::from_u16(code.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let message = match &self {
-            Self::Refused(Rejection::NoFreeHomeworld) => {
-                "no homeworld is free, so this account can't join the game".to_owned()
-            }
-            // The store's error can name database internals; the body says only what happened.
-            Self::Store(AccountError::Unstorable) => {
-                "this account's identity can't be stored".to_owned()
-            }
-            Self::Store(_) => "accounts can't be read right now; retry later".to_owned(),
-            other => other.to_string(),
-        };
-        let mut response = (status, axum::Json(ErrorBody { code, message })).into_response();
-        let retry_after = match self {
-            Self::Busy => Some(BUSY_RETRY_AFTER_SECS),
-            Self::Store(AccountError::Unstorable) | Self::Refused(_) | Self::Internal(_) => None,
-            Self::Stopped | Self::Store(_) => Some(UNAVAILABLE_RETRY_AFTER_SECS),
-        };
-        if let Some(secs) = retry_after {
-            response
-                .headers_mut()
-                .insert(RETRY_AFTER, HeaderValue::from(secs));
-        }
-        response
+        ApiError::from(self).into_response()
     }
 }

@@ -57,6 +57,7 @@ mod paths {
             (status = 400, description = "invalid_query", body = ErrorBody),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
             (status = 404, description = "unknown_planet", body = ErrorBody),
+            (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited", body = ErrorBody),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
@@ -73,12 +74,15 @@ mod paths {
             ("near" = String, Query, pattern = "^-?[0-9]{1,19},-?[0-9]{1,19},-?[0-9]{1,19}$",
                 description = "The point, as x,y,z in distance units (each an i64; a value \
                     beyond i64 is invalid_query)"),
-            ("radius" = i64, Query, description = "The radius, in distance units"),
+            ("radius" = i64, Query, description = "The radius, in distance units: 0 or more \
+                (a negative radius is invalid_query). More than 1000 planets within it is \
+                invalid_query, never a truncated list: narrow the radius (D-049)"),
         ),
         responses(
             (status = 200, description = "The planets", body = PlanetsNearView),
             (status = 400, description = "invalid_query", body = ErrorBody),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited", body = ErrorBody),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
@@ -94,6 +98,7 @@ mod paths {
         responses(
             (status = 200, description = "The player", body = PlayerView),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited", body = ErrorBody),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
@@ -109,6 +114,7 @@ mod paths {
         responses(
             (status = 200, description = "The fleets", body = FleetsView),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited", body = ErrorBody),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
@@ -117,13 +123,15 @@ mod paths {
     )]
     pub fn get_fleets() {}
 
-    /// Every player ranked by score, rebuilt every 60 seconds.
+    /// Every player ranked by score, rebuilt every 60 seconds (P3.5; until then 503
+    /// `unavailable`).
     #[utoipa::path(
         get,
         path = "/leaderboard",
         responses(
             (status = 200, description = "The leaderboard", body = Leaderboard),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited", body = ErrorBody),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
@@ -131,6 +139,19 @@ mod paths {
         security(("bearer" = []))
     )]
     pub fn get_leaderboard() {}
+
+    /// This document: the API's contract. Public: it needs no token, so reading it never joins
+    /// anyone (D-049).
+    #[utoipa::path(
+        get,
+        path = "/openapi.json",
+        responses(
+            (status = 200, description = "The OpenAPI document", content_type = "application/json"),
+            (status = 429, description = "rate_limited", body = ErrorBody),
+            (status = 500, description = "internal", body = ErrorBody),
+        )
+    )]
+    pub fn get_openapi() {}
 }
 
 /// The bearer scheme: a dex ID token (P3.2).
@@ -190,6 +211,7 @@ impl Modify for Closed {
         paths::get_player,
         paths::get_fleets,
         paths::get_leaderboard,
+        paths::get_openapi,
     ),
     components(schemas(error::ErrorCode, event::Event)),
     modifiers(&Bearer, &Closed)
@@ -208,6 +230,14 @@ struct Doc;
 pub fn openapi() -> serde_json::Value {
     let mut doc = serde_json::to_value(Doc::openapi()).expect("the OpenAPI document serializes");
     bound_integers(&mut doc);
+    // `radius` is an i64 from 0 (D-049, dev-qa's L1): a negative radius is invalid_query. utoipa's
+    // bounds are f64s, which can't hold i64::MAX exactly, and a minimum of 0 would read as a u64
+    // to bound_integers, so the one parameter that needs it is set here.
+    let radius = doc["paths"]["/planets"]["get"]["parameters"]
+        .as_array_mut()
+        .and_then(|ps| ps.iter_mut().find(|p| p["name"] == "radius"))
+        .expect("GET /planets has a radius parameter");
+    radius["schema"]["minimum"] = serde_json::json!(0);
     doc
 }
 

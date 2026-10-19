@@ -354,6 +354,164 @@ fn near_is_valid_until_a_colony_fleet_lands_on_a_listed_planet() {
     assert_eq!(near.valid_until, Some(arrives_at_ms));
 }
 
+// --- What a viewer may see (D-049): planets are public, fleets and roster ships owner-only ---
+
+fn planet_for(
+    w: &World,
+    p: PlanetId,
+    viewer: PlayerId,
+    t: i64,
+) -> voidforge_core::view::PlanetView {
+    match w
+        .view_for(&Query::Planet { planet: p }, viewer, t, &v0_rules())
+        .unwrap()
+    {
+        View::Planet(v) => v,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_planets_roster_shows_each_viewer_only_their_own_ships() {
+    let (w, home) = busy_home();
+    let all = planet(&w, home, 0).roster;
+    assert!(
+        all.iter().any(|s| s.2 == BOB),
+        "the fixture has Bob's ship on Alice's home"
+    );
+    for viewer in [ALICE, BOB, CAROL] {
+        let seen = planet_for(&w, home, viewer, 0).roster;
+        let own: Vec<_> = all.iter().copied().filter(|s| s.2 == viewer).collect();
+        assert_eq!(seen, own, "{viewer:?}");
+    }
+    // Everything else about the planet is the same for every viewer.
+    let mut alice = planet_for(&w, home, ALICE, 0);
+    let mut bob = planet_for(&w, home, BOB, 0);
+    alice.roster.clear();
+    bob.roster.clear();
+    assert_eq!(alice, bob);
+}
+
+/// Bob's colony fleet is heading for a free planet. Bob's views end at its arrival; everyone
+/// else's don't show it, though the true validity still makes every view stale there.
+fn bob_colonizing() -> (World, PlanetId, i64) {
+    let mut b = WorldBuilder::new();
+    b.player(ALICE);
+    let bob_home = b.player(BOB);
+    let free = b.planet(None);
+    let ship = b.ship(BOB, ShipKind::ColonyShip, bob_home);
+    let fleet = b.fleet(&[ship], Cargo::default());
+    let mut w = b.build();
+    w.send_fleet(fleet, free, Mission::Colonize, &v0_rules())
+        .unwrap();
+    let FleetState::InTransit { arrives_at_ms, .. } = w.fleets[&fleet].state else {
+        unreachable!()
+    };
+    (w, free, arrives_at_ms)
+}
+
+#[test]
+fn another_players_inbound_fleet_is_hidden_from_a_planets_validity() {
+    let (w, free, arrives) = bob_colonizing();
+    assert_eq!(w.planets[&free].next_event, None);
+    assert_eq!(
+        planet(&w, free, 0).valid_until,
+        Some(arrives),
+        "the true validity"
+    );
+    assert_eq!(
+        planet_for(&w, free, BOB, 0).valid_until,
+        Some(arrives),
+        "Bob's own fleet"
+    );
+    assert_eq!(
+        planet_for(&w, free, ALICE, 0).valid_until,
+        None,
+        "hidden from Alice"
+    );
+    assert_eq!(w.planet_public_valid_until(free, ALICE), None);
+    // Staleness is the true validity's, for every viewer.
+    for viewer in [ALICE, BOB] {
+        assert_eq!(
+            w.view_for(
+                &Query::Planet { planet: free },
+                viewer,
+                arrives,
+                &v0_rules()
+            ),
+            Err(ViewError::Stale {
+                valid_until: arrives
+            })
+        );
+    }
+}
+
+#[test]
+fn another_players_inbound_fleet_is_hidden_from_planets_near() {
+    let (w, free, arrives) = bob_colonizing();
+    let q = Query::PlanetsNear {
+        center: w.planets[&free].position,
+        radius: 0,
+    };
+    let near = |viewer| match w.view_for(&q, viewer, 0, &v0_rules()).unwrap() {
+        View::PlanetsNear(n) => n.valid_until,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(near(BOB), Some(arrives));
+    assert_eq!(near(ALICE), None);
+    assert_eq!(
+        w.view_for(&q, ALICE, arrives, &v0_rules()),
+        Err(ViewError::Stale {
+            valid_until: arrives
+        })
+    );
+}
+
+#[test]
+fn another_players_inbound_fleet_is_hidden_from_a_players_validity() {
+    // Alice got there first: Bob's colony fleet is still heading for what is now her planet.
+    let (mut w, free, arrives) = bob_colonizing();
+    w.planets.get_mut(&free).unwrap().owner = Some(ALICE);
+    let player = |viewer, player| match w
+        .view_for(&Query::Player { player }, viewer, 0, &v0_rules())
+        .unwrap()
+    {
+        View::Player(p) => p.valid_until,
+        other => panic!("{other:?}"),
+    };
+    let View::Player(truth) = w
+        .view(&Query::Player { player: ALICE }, 0, &v0_rules())
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(truth.valid_until, Some(arrives), "the true validity");
+    assert_eq!(
+        player(ALICE, ALICE),
+        None,
+        "Bob's fleet is hidden from Alice"
+    );
+    assert_eq!(player(BOB, BOB), Some(arrives), "Bob's own fleet moving");
+    assert_eq!(
+        player(ALICE, BOB),
+        None,
+        "Bob's fleets are hidden from Alice's view of Bob"
+    );
+}
+
+#[test]
+fn a_fleets_query_for_another_viewer_is_unknown() {
+    let (w, _, _) = bob_colonizing();
+    assert_eq!(
+        w.view_for(&Query::Fleets { viewer: BOB }, ALICE, 0, &v0_rules()),
+        Err(ViewError::Unknown)
+    );
+    assert!(
+        w.view_for(&Query::Fleets { viewer: BOB }, BOB, 0, &v0_rules())
+            .is_ok()
+    );
+}
+
 // --- Score (Rules v0: planet 1,000; Drill 100, Refinery 150, Shipyard 500; Colony Ship 400,
 // Cargo Vessel 150; ore 1 per 10 t, ingots 2 per 10 t) ---
 

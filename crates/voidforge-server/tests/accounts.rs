@@ -1054,3 +1054,12 @@ async fn a_crash_before_the_join_is_durable_then_a_retry_joins_once(pool: PgPool
 async fn a_crash_after_the_join_is_durable_then_a_retry_joins_nothing_more(pool: PgPool) {
     crash_then_retry(pool, "append.after", true).await;
 }
+
+/// R1's INFO: an internal account failure is a loud 500, as every other: its cause goes to the
+/// log, and the body is the generic message, never the cause.
+#[test]
+fn an_internal_account_failure_is_the_generic_500() {
+    let e = voidforge_server::api::error::ApiError::from(PlayerError::Internal("secret cause"));
+    assert_eq!(e.code, ErrorCode::Internal);
+    assert_eq!(e.message, "something unexpected failed on the server");
+}

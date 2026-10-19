@@ -1,0 +1,9 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: first
+---
+{
+  "events": [],
+  "game_time": "2025-10-09T11:53:20.001Z",
+  "seq": 2
+}

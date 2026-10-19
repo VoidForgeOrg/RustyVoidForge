@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: r.body
+---
+{
+  "code": "duplicate_ship_ids",
+  "message": "the command names a ship more than once"
+}

@@ -49,7 +49,15 @@ pub use clock::{Clock, ManualClock, SystemClock};
 /// The command vocabulary this API already exposes (in [`Receipt`] and [`ReadModel`]), so the
 /// server can name it without depending on the core (decision log D-047).
 pub use voidforge_core::command::{Action, Command, Rejection};
+/// The read vocabulary the server maps to the wire: the views, and the read-only state enums
+/// and IDs they name. Names only; nothing here changes the live World (D-049).
+pub use voidforge_core::solver::FlowLabel;
+pub use voidforge_core::state::{
+    BuildingId, BuildingKind, Cargo, FleetId, FleetState, Mission, PlanetId, Position, ShipBuildId,
+    ShipBuildStatus, ShipId, ShipKind,
+};
 pub use voidforge_core::state::{DomainEvent, PlayerId, World};
+pub use voidforge_core::view;
 
 /// How a host runs.
 #[derive(Debug, Clone, PartialEq, Eq)]

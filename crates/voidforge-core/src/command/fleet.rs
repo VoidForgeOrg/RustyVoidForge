@@ -1,6 +1,11 @@
 //! Commands, part 2: the five fleet commands (Architectural Design, Commands and Fleets; Game
 //! Design, Player actions and Ships and fleets; decision log D-029). They follow D-028's check
 //! order, who → what → whose → state, and call D-027's engine-side send, recall and unload.
+//!
+//! Fleets and ships are visible only to their owner, so **another player's fleet or ship is
+//! unknown**: it fails the existence check itself, as `unknown_fleet` or `unknown_ship`, and every
+//! later check sees it exactly as one that doesn't exist (D-028 amended by D-049; no answer tells
+//! a player another's fleet or ship exists). A planet is public, so `not_owner` stays for planets.
 
 use crate::fleet::{distance, travel_time_ms};
 use crate::rules::Rules;
@@ -15,12 +20,12 @@ impl World {
     /// The first rule a fleet command breaks at world time. The player has joined.
     pub(super) fn check_fleet(&self, command: &Command, rules: &Rules) -> Result<(), Rejection> {
         let player = command.player;
+        // The player's own fleet, or unknown: another player's is never told apart (D-049).
         let fleet = |id: FleetId| -> Result<&Fleet, Rejection> {
-            let f = self.fleets.get(&id).ok_or(Rejection::UnknownFleet)?;
-            if f.owner != player {
-                return Err(Rejection::NotOwner);
-            }
-            Ok(f)
+            self.fleets
+                .get(&id)
+                .filter(|f| f.owner == player)
+                .ok_or(Rejection::UnknownFleet)
         };
         let stationed = |f: &Fleet| match f.state {
             FleetState::Stationed { at } => Ok(at),
@@ -33,7 +38,11 @@ impl World {
                 cargo,
             } => {
                 let p = self.planets.get(planet).ok_or(Rejection::UnknownPlanet)?;
-                if ships.iter().any(|s| !self.ships.contains_key(s)) {
+                // Another player's ship is unknown, at the same check as one that doesn't exist.
+                if ships
+                    .iter()
+                    .any(|s| self.ships.get(s).is_none_or(|x| x.owner != player))
+                {
                     return Err(Rejection::UnknownShip);
                 }
                 if ships.is_empty() {
@@ -41,9 +50,6 @@ impl World {
                 }
                 if cargo.ore_g < 0 || cargo.ingots_g < 0 {
                     return Err(Rejection::InvalidCargo);
-                }
-                if ships.iter().any(|s| self.ships[s].owner != player) {
-                    return Err(Rejection::NotOwner);
                 }
                 let loads = *cargo != Cargo::default();
                 if loads && p.owner != Some(player) {
@@ -80,11 +86,8 @@ impl World {
                 target,
                 mission,
             } => {
-                let f = self.fleets.get(id).ok_or(Rejection::UnknownFleet)?;
+                let f = fleet(*id)?;
                 let to = self.planets.get(target).ok_or(Rejection::UnknownPlanet)?;
-                if f.owner != player {
-                    return Err(Rejection::NotOwner);
-                }
                 let at = stationed(f)?;
                 if at == *target {
                     return Err(Rejection::SamePlanet);

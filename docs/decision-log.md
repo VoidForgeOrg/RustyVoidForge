@@ -419,6 +419,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `unknown_planet`, `unknown_building`, `unknown_ship_build`;
     - `not_owner`;
     - `no_free_slot`, `not_under_construction`, `not_operational`, `shipyard_has_builds`, `not_a_shipyard`, `shipyard_not_operational`.
+  - **Amended by D-049 (S1, the advisor; the lead's Addendum 3):** fleets and ships are visible only to their owner, so **another player's fleet or ship is unknown**. It fails the existence check itself, as `unknown_fleet` or `unknown_ship`, and **at every check a foreign one is indistinguishable from one that doesn't exist**. `not_owner` is now only ever about a planet.
 
     An entity that existed and is gone is `unknown_*`, since IDs are never reused. These codes are the API contract. P1.10 keeps the architecture's examples verbatim (`insufficient_stock`, `cargo_aboard`) and adds `unknown_fleet` to the `unknown_*` family, so the list reads as one vocabulary.
   - **Determinism**: `Economy { commands: n }` adds two unowned homeworld candidates and a script of n commands at whole hours, often the instant a build completes. Each is chosen against the state at its instant, half the time a fitting target issued mostly by its owner, otherwise a mix that is rejected. Both runs stop at every command instant (`determinism::stops`).
@@ -969,8 +970,9 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `IdempotencyKey::parse` carries D-037's rule: missing is 400 `missing_idempotency_key`, invalid is 400 `invalid_idempotency_key`.
     - 200 is `{"seq", "game_time", "events"}`. A repeated key returns the first response, at any age (D-037).
   - **The response's events are the command's own events only. This is a privacy requirement, not tidiness.** The log record also holds the events of advancing to the command's time, and those can be other players' owner-only information (a fleet arrival, D-030). P3.4 must never add them back. The record's `own_events` count (D-037) rebuilds the same list for a repeated key.
+  - **No answer tells a player that another player's fleet or ship exists** (D-049, S1): a foreign fleet or ship is refused exactly as an unknown one, byte for byte. The coarse creation volume visible through the shared sequential ID counter is accepted for the MVP.
   - **Events** are internally tagged by `type`: `building_completed`, `ship_completed`, `demolition_completed`, `fleet_arrived`, `planet_colonized`, `colonization_failed`, `cargo_unloaded`, `fleet_removed` and `fleet_returned`, with `_id` and `_type` names.
-  - **Views:** every view has `as_of` and `valid_until` (always present, null when nothing is scheduled). Every continuous value has its `rate_g_per_h`, every stock its `cap_g`, and every progress its exact `eta` (null while nothing flows).
+  - **Views:** every view has `as_of` and `valid_until` (always present, null when nothing is scheduled). **`valid_until` counts only the viewer's own fleets and the entity's own scheduled events** (D-049, the advisor's ruling): it means "valid until, unless another player's fleet arrives", so a view never tells one player when another's fleet lands. Every continuous value has its `rate_g_per_h`, every stock its `cap_g`, and every progress its exact `eta` (null while nothing flows).
     - The planet view is the architecture's example, extended:
       - `rate_g_per_h` on progress, which the every-continuous-value invariant requires;
       - `position`, `slots`, `ship_builds` and `roster`;
@@ -1166,3 +1168,83 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Carries moved: these earlier P3.4 carries now belong to P3.4s: D-044's stable epoch, D-046's `AuthArgs` and `refresh_forever`, and the `Players<PgAccounts>` half of D-047's. P3.4 keeps `Principal` and `Player` on every route.
 - For the P3.4s SPEC: a universe seeded before the epoch migration (today's `voidforge_dev`) has no epoch record. `serve` must not invent one, since a changed epoch moves game time (D-044); the SPEC decides the refusal and its next step.
 - Where it's recorded: the [Technical Plan's Phase 3 table](Voidforge%20Technical%20Plan.md#phase-3-api-and-auth).
+
+### D-049: Routes
+
+- Date and package: 2026-10-19, P3.4. Proposed by dev-build (`slices/34-p3-4-routes/proposal-routes.md`). The lead ruled on T1 to T8, approving all with additions (`ruling-lead.md`, and an addendum on the core viewer filter). The advisor ruled on S1 to S3, agreeing with all three: planet privacy is game intent.
+- Decision:
+  - **`voidforge_server::api`.** One route table, `routes()`, builds the router, and the parity tests read it. `AppState` holds the verifier, `Players`, the host, its clock and its epoch.
+    - **Mapping:** `api::wire` maps the core and the wire both ways, exhaustively, with no wildcard arm.
+    - **Times:** `api::time` formats them.
+    - **Errors:** `api::error` holds `ApiError`, the one host-error mapping, the refusing extractors and the panic layer.
+    - **Players:** every handler that acts as a player takes `Player`, never an ID from the body, query or path.
+  - **The host re-exports the read vocabulary** (T1): `voidforge_core::view` and the read-only state names the mapping needs. These are names only; nothing mutates. Both AGENTS.md files say so.
+  - **What a viewer may see** (S1 to S3, the advisor; Game Design amended):
+    - every planet's properties are public, including stocks, buildings, construction, Shipyard queues and slots;
+    - **roster ships are owner-only**: each caller sees only their own, on any planet;
+    - **`valid_until` counts only the caller's own fleets and the entity's own events**, so it means "valid until, unless another player's fleet arrives". That applies to the planet, planets-near and player views. A null whenever something is hidden would still leak, so it's not that.
+    - **In the core** (the lead's addendum): `World::view_for(query, viewer, t, rules)` projects through the unchanged `World::view`, so staleness is still judged by the true validity, which counts every fleet. It then filters the roster and replaces `valid_until` with the viewer's. `planet_public_valid_until` is public. `World::view` and its tests are unchanged, and no golden file or hash moves.
+  - **`POST /commands`:**
+    - the key comes through the store's `IdempotencyKey::new`: missing is 400 `missing_idempotency_key`; empty, too long, a space, non-ASCII or two headers is 400 `invalid_idempotency_key`;
+    - the body comes through `ApiJson`, with a 64 KiB limit. `join_game`, an unknown type or field, broken JSON, a wrong or missing content type, an integral float, an ID out of range or negative, and an oversized body are all 400 `malformed_body`. A repeated ship is 400 `duplicate_ship_ids`;
+    - accepted is 200 with **the receipt's own events only**. A repeated key is the first answer exactly, refusals included. Refused is 422 with the core's code, and `KeyConflict` is 422 `idempotency_key_conflict`;
+    - **one host-error mapping**, `api::error::host_error`, shared with `PlayerError`: busy is 503 `busy` with Retry-After 1, stopped 503 `unavailable` with Retry-After 5.
+  - **Views projected to now:**
+    - `t = max(clock − epoch, world time)`, through `view_for` on the published `Arc<World>`. No mutation, no append, no inbox.
+    - A `Stale` view waits up to 1 s for the host's next publish (`changed()`). Still stale is 503 `unavailable` with Retry-After 1; a projection never crosses an event.
+    - `GET /planets/{id}`: an unknown planet is **404** `unknown_planet` (an explicit status; the code's own is 422), and an ID that isn't a u64 is 400 `invalid_query`.
+    - `GET /planets?near&radius` (T4):
+      - each coordinate must fit the pattern and i64, or it's 400 `invalid_query`, and so is any missing or extra part;
+      - **a negative radius is 400 `invalid_query`**, and 0 is valid;
+      - **more than `MAX_NEAR_RESULTS` = 1,000 matches is 400 `invalid_query`, never a truncated list.** The cap bounds the response, not the scan: the scan is bounded by `MAX_PLANETS`, and P3.8 bounds frequency.
+      - **The extremes are safe:** the core's `distance` widens to i128 and returns `None` only past i64, which is beyond every radius, so excluding the planet is the right answer. A test pins radius i64::MAX, centres at i64::MIN and MAX, and a planet at exactly i64::MAX. No core change was needed.
+    - `GET /players/me` and `GET /players/me/fleets`: the caller's own.
+    - **`GET /leaderboard` until P3.5 (T5):** 503 `unavailable`, "the leaderboard isn't built yet", with **no** Retry-After so no client polls. The path and schema stay.
+  - **`GET /openapi.json` is public** (T2): no `Principal`, no `Player`, so reading it joins nobody. It's in the document as a path without security, and `openapi.json` is re-blessed.
+  - **The document now declares 422 `no_free_homeworld` on every GET route** that takes a player (D-047, owner-confirmed). Without it, T7's status parity would fail.
+  - **Every error is a D-045 body:**
+    - an unknown route, **or a known route with another method, is 404 `not_found`** (T3: the code list stays closed, so there's no 405);
+    - a panicking handler is 500 `internal` with a generic body. A small layer of our own runs each request as a task and answers a panic's `JoinError`, so no tower-http is needed.
+  - **Game times** (T6) use a days-from-civil formatter. A year outside 0000 to 9999, or an epoch plus time that overflows, is a checked error, a 500 `internal`. The tests cover:
+    - fixed vectors: 1970-01-01, 2000-02-29, 2100-03-01 and the day before it, and a time of day;
+    - both year edges and the overflows;
+    - every day from 1600 to 2400, each accepted by the contract's own `Timestamp` check and strictly increasing.
+  - **An inconsistent view is a 500, never a made-up value:** a building under construction without its progress is `MapError::MissingProgress`.
+  - **Parity** (T7):
+    - the route table equals the document's methods and paths;
+    - a route is public exactly when the document has no security;
+    - every route is served, not `not_found`;
+    - every test records each (route, status) it sees, and its harness checks the document declares them, so a handler can't answer a status the contract doesn't name.
+  - **`serve` is its own package, P3.4s** (T8; the advisor's D-048). P3.4's QA runs an in-process server over a seeded `voidforge_dev` with real dex.
+  - **Dependencies:**
+    - **axum gains its `query` feature:** two new crates, `serde_urlencoded` and `ryu`, which it uses.
+    - **insta `=1.46.1`** (dev; default features off, plus `json`) for the contract snapshots. It adds seven crates: insta, similar, tempfile, fastrand, rustix, errno and linux-raw-sys.
+- **Repair round 1** (folded in after QA PASS on 4169425 and R1's verdict):
+  - **S1, a core change** (the advisor ruled to change it; the lead's Addendum 3 took the core option over a server remap):
+    - another player's fleet or ship fails the existence check itself, as `unknown_fleet` or `unknown_ship` (`command/fleet.rs`). D-028 is amended, and D-045's privacy text gains the line.
+    - **Why not a server remap.** It couldn't be certain, and it wasn't byte-identical. Walking the core's order:
+      - `send_fleet` checked the target planet between the fleet's existence and its ownership, so a foreign fleet sent to an unknown planet answered `unknown_planet` while an unknown fleet answered `unknown_fleet`;
+      - `assemble_fleet` checked `no_ships` and `invalid_cargo` before ship ownership;
+      - assemble's `not_owner` had two sources, a foreign ship or a foreign planet to load from.
+    - Recall, disband and unload already checked existence, then ownership, then state.
+    - **Planet `not_owner` is unchanged.** It's now only ever the planet: assemble loading from a planet that isn't the player's.
+    - **Tests:**
+      - eight `fleet_commands` expectations change from `NotOwner` to `UnknownFleet` or `UnknownShip`;
+      - paired tests compare a foreign fleet or ship with an unknown one, with the same other inputs, for every fleet and ship action, stationed and in transit, including both cases from the walk;
+      - the assemble split is pinned;
+      - `another_players_fleet_or_ship_answers_byte_for_byte_as_an_unknown_one` compares the status, the headers and the body bytes over HTTP, fresh and for a repeated key.
+    - **Goldens:** `just bless` moves nothing, and `voidforge-replay golden` verifies all six (the goldens' only `not_owner` records are planet refusals).
+  - **L1** (dev-qa): the `radius` schema's minimum is 0, set in `openapi()` after the integer bounds, since utoipa's f64 bounds can't hold i64::MAX and bound_integers would read a minimum of 0 as a u64.
+    - It's re-blessed, and a contract test pins 0 to i64::MAX.
+    - This is a third deliberate place where the schema and serde disagree (−1 fits an i64), alongside D-045's two. It's a query parameter, and the server answers −1 as 400 `invalid_query`.
+  - **dev-qa's test gaps:** a clock behind the World's time answers every view at the World's time, never 500 (Q1); a non-ASCII key byte is 400 (Q2); the body limit's exact boundary (Q3).
+- Tests:
+  - **`crates/voidforge-server/tests/routes.rs`**, in the database stage: `database.sh` gains the `routes` binary. It runs the real router over HTTP, a real host recovered from Postgres, `Players` and a dex stand-in (shared with `tests/auth.rs` through `tests/common/dex.rs`), on a universe from testkit's `WorldBuilder` with fixed UUIDv7 players.
+  - **The privacy test** holds the host so that another player's event fires inside the caller's own command record, asserts that it's there, and asserts that it never reaches the answer, fresh or repeated.
+  - **The contract snapshots** are in `tests/snapshots/`.
+  - **The core:** `crates/voidforge-testkit/tests/views.rs` checks the roster and validity for an owner and a non-owner with a hidden inbound fleet, through the planet, near, player and fleets queries, and checks that staleness stays the true validity's.
+- Carried:
+  - **P3.4s:** `serve`, the durable epoch (D-044), recovery, bind, and clean shutdown. With it go D-046's serve-only carries (`serve` flattens `AuthArgs`, and `refresh_forever` runs beside the server) and D-047's (build `Players<PgAccounts>` in `serve`). P3.4 provides `api::router(AppState)` for it.
+  - **P3.5:** the leaderboard replaces the 503.
+  - **P3.8:** the rate limit, the 429 every path already declares.
+- Where it's enforced: `crates/voidforge-server/src/{api/, accounts.rs, lib.rs}`, `crates/voidforge-core/src/view.rs` (`view_for`), `crates/voidforge-host/src/lib.rs`, `crates/voidforge-api-types/src/lib.rs` and `openapi.json`, `crates/voidforge-server/tests/{routes.rs, common/, snapshots/}`, `crates/voidforge-testkit/tests/views.rs`, `.github/scripts/database.sh`, the Game Design (Universe and planets), the Architectural Design (Read side), D-045, `deny.toml`, the [version table](versions.md), and the core's, host's and server's AGENTS.md.

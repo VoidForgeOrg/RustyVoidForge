@@ -34,6 +34,7 @@ voidforge-worldgen.workspace = true
 # aws-lc-rs (P3.2, D-046), so no private key is committed. The account tests (P3.3, D-047) capture
 # every tracing and log event, sqlx's included, to prove the subject is never logged.
 aws-lc-rs.workspace = true
+insta.workspace = true
 log.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
