@@ -1325,7 +1325,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Tests added to `tests/serve.rs`:**
     - review-r2's probe as a regression: the final SELECT held behind a snapshots lock, then a second SIGTERM is exit 6 within 2 s;
     - the same hold with no second signal is exit 6 after 4 to 8 s;
-    - dev-qa's D1 as a sweep: SIGINT, then SIGTERM after 0, 2, 5, 10, 20, 40, 80, 200 and 1,000 ms, with the shutdown snapshot slowed to 2 s and a new record each round so a snapshot is due. Every delay is exit 6;
+    - dev-qa's D1 as a sweep: SIGINT, then SIGTERM after 0, 2, 5, 10, 20, 40, 80, 200 and 1,000 ms, with the shutdown snapshot slowed to 2 s and a new record each round so a snapshot is due. Every delay is exit 6 **within 1 s of the second signal**, inside the 2 s the snapshot holds the stop. (Without the timing, a join that ignored the signal survived the table: the stream kept the signal pending, and the next step's select exited 6 after the snapshot.);
     - dev-qa's Q2: the join bound, exit 6 between 9 and 13 s;
     - dev-qa's Q3: seed's default epoch lies between wall-clock reads taken before and after;
     - I4: two serves, where the second is exit 3 without recovering or binding, the first serves on and stops with exit 0, and a later serve starts.

@@ -1202,8 +1202,10 @@ async fn the_final_check_is_bounded_at_5_s(pool: PgPool) {
 /// exit, so a second signal at any moment of the shutdown is exit 6. Each round appends a record
 /// first, so the stop always has a snapshot to write, and that write is slowed to 2 s, so every
 /// delay here falls inside the stop. (Without a new record the newest snapshot is already at the
-/// head, nothing is written, and a stop takes under 100 ms.) The first signal is SIGINT and the
-/// second SIGTERM, which the kernel can't merge into one delivery.
+/// head, nothing is written, and a stop takes under 100 ms.) The exit must come within 1 s of the
+/// second signal, inside the 2 s the snapshot holds the stop: a step that ignored the signal would
+/// leave it pending for a later step, and exit 6 only after the snapshot. The first signal is SIGINT
+/// and the second SIGTERM, which the kernel can't merge into one delivery.
 #[sqlx::test(migrations = false)]
 #[ignore = "needs Postgres: just db-test"]
 async fn a_second_signal_at_any_moment_of_the_shutdown_exits_6(pool: PgPool) {
@@ -1220,7 +1222,9 @@ async fn a_second_signal_at_any_moment_of_the_shutdown_exits_6(pool: PgPool) {
         s.signal("INT");
         std::thread::sleep(Duration::from_millis(delay_ms));
         s.signal("TERM");
-        let (code, stderr) = s.exit(Duration::from_secs(5));
+        // At once: well inside the 2 s the slowed snapshot holds the stop, so a step that
+        // ignores the signal (and leaves it pending for a later step) fails here.
+        let (code, stderr) = s.exit(Duration::from_secs(1));
         assert_eq!(
             code, 6,
             "second signal {delay_ms} ms after the first:\n{stderr}"
