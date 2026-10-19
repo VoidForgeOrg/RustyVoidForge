@@ -184,9 +184,9 @@ impl From<PlayerError> for ApiError {
                 ApiError::new(code, "accounts can't be read right now; retry later")
                     .retry_after(UNAVAILABLE_RETRY_AFTER_SECS)
             }
-            other @ (PlayerError::Refused(_) | PlayerError::Internal(_)) => {
-                ApiError::new(code, other.to_string())
-            }
+            refused @ PlayerError::Refused(_) => ApiError::new(code, refused.to_string()),
+            // Loud, as every other 500: the cause is logged and the body is generic (R1's INFO).
+            internal @ PlayerError::Internal(_) => ApiError::internal(&internal),
         }
     }
 }
