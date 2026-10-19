@@ -87,6 +87,20 @@ fn seed_refuses_an_epoch_outside_the_window_before_connecting() {
             "{stdout}"
         );
     }
+    // Before the rules file is even read: a missing one would be an input error (4).
+    let out = Command::new(BIN)
+        .args(["seed", "--seed", "1", "--players", "1"])
+        .args([
+            "--rules",
+            "/nonexistent/rules.toml",
+            "--epoch-unix-ms",
+            "-1",
+        ])
+        .env("DATABASE_URL", "mysql://u:secret-password@127.0.0.1/none")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
 }
 
 /// `serve` without a database: its help lists the exit codes; no `--database-url` is a usage

@@ -949,3 +949,125 @@ async fn the_host_dying_while_serving_exits_6_and_a_restart_recovers(pool: PgPoo
     s.signal("INT");
     assert_eq!(s.exit(PATIENCE).0, 0);
 }
+
+/// A database migrated but never seeded holds no universe either: exit 3, "seed it first".
+#[sqlx::test(migrator = "voidforge_store::MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_migrated_but_unseeded_database_is_refused(pool: PgPool) {
+    let dex = DexServer::start();
+    let out = Command::new(BIN)
+        .args([
+            "serve",
+            "--database-url",
+            &url(&pool),
+            "--rules",
+            &rules_path(),
+        ])
+        .args(["--bind", "127.0.0.1:0", "--issuer", &dex.issuer])
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("no universe; seed it first"), "{stderr}");
+}
+
+/// An epoch row without a universe (only possible by hand) counts as used: `seed` refuses rather
+/// than half-seeds, and writes nothing.
+#[sqlx::test(migrator = "voidforge_store::MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn seed_refuses_a_database_holding_only_an_epoch(pool: PgPool) {
+    sqlx::query("INSERT INTO universe (epoch_unix_ms) VALUES ($1)")
+        .bind(EPOCH)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(seed(&url(&pool), EPOCH + 1), 3);
+    assert_eq!(epoch_row(&pool).await, Some(EPOCH));
+    let snapshots: i64 = sqlx::query_scalar("SELECT count(*) FROM snapshots")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(snapshots, 0);
+}
+
+/// Another rules version than the universe's is a refusal (3), not an input error: Rules v0-fast
+/// is version 1, and this universe was seeded under version 0.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn another_rules_version_is_refused(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let fast = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/v0-fast.toml");
+    let out = Command::new(BIN)
+        .args([
+            "serve",
+            "--database-url",
+            &url,
+            "--rules",
+            fast.to_str().unwrap(),
+        ])
+        .args(["--bind", "127.0.0.1:0", "--issuer", &dex.issuer])
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("rules version"), "{stderr}");
+}
+
+/// A final snapshot that fails to write (a raising trigger on `snapshots`) isn't an error to the
+/// host's join, only a counter; `serve` reads Postgres, finds no snapshot at the head, and exits 6.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_final_snapshot_that_fails_is_an_unclean_stop(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    let s = serve(&url, &dex.issuer, &[]);
+    assert_eq!(
+        call("GET", s.url("/players/me"), Some(token), None).status,
+        200
+    );
+    sqlx::query(
+        "CREATE FUNCTION refuse_snapshot() RETURNS trigger LANGUAGE plpgsql AS
+           $$ BEGIN RAISE EXCEPTION 'the test refuses this snapshot'; END $$",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER refuse_snapshot BEFORE INSERT ON snapshots
+           FOR EACH ROW EXECUTE FUNCTION refuse_snapshot()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    s.signal("INT");
+    let (code, stderr) = s.exit(PATIENCE);
+    assert_eq!(code, 6, "{stderr}");
+    assert!(
+        stderr.contains("the test refuses this snapshot"),
+        "the failure fired:\n{stderr}"
+    );
+    assert!(stderr.contains("is not at the log head"), "{stderr}");
+    let (snapshot, head) = snapshot_and_head(&pool).await;
+    assert!(snapshot < head);
+}
+
+/// The store refuses an epoch outside the window itself, before connecting: the URL here leads
+/// nowhere, and the answer is still the epoch.
+#[tokio::test]
+async fn bootstrap_refuses_an_epoch_outside_the_window_before_connecting() {
+    let rules = voidforge_rules::parse(&std::fs::read_to_string(rules_path()).unwrap()).unwrap();
+    let world = voidforge_worldgen::generate(7, 1, &rules).unwrap();
+    let build = voidforge_store::snapshot::EngineBuild::new("serve-test").unwrap();
+    let snap = voidforge_store::snapshot::encode(&world, &build).unwrap();
+    for epoch in [-1, EPOCH_END] {
+        let e = voidforge_store::bootstrap("postgres://u@127.0.0.1:1/none", &snap, epoch)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(e, voidforge_store::BootstrapError::EpochOutOfRange(x) if x == epoch),
+            "{e}"
+        );
+    }
+}
