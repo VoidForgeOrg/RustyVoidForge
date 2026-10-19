@@ -81,7 +81,7 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | serde_json | =1.0.154 (std) | core and testkit, dev-dependency only; store from P2.3, the log's JSON columns; api-types from P3.1 | P1.3 | D-022, D-036, D-045 |
 | sqlx | =0.9.0 (postgres, runtime-tokio, macros, migrate; default features off) | store | P2.1 | D-034 |
 | toml | =1.1.8 (std, parse, serde) | rules | P1.2 | D-020 |
-| tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest | P2.3 | D-036 |
+| tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest. The server adds net, rt-multi-thread and signal for `serve` (P3.4s, D-050); signal brings one crate, signal-hook-registry 1.4.8 (MIT OR Apache-2.0) | P2.3 | D-036, D-050 |
 | clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line | P2.7 | D-041 |
 | utoipa | =6.0.0 (macros; default features off) | api-types, the OpenAPI document | P3.1 | D-045 |
 | axum | =0.8.9 (http1, tokio, json, query; default features off) | server: the token extractor, the routes (query since P3.4, D-049); the tests' local servers | P3.2 | D-046, D-049 |

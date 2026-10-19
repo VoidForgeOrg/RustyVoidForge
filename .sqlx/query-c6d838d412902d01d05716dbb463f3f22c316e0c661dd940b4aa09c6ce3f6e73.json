@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO universe (epoch_unix_ms) VALUES ($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c6d838d412902d01d05716dbb463f3f22c316e0c661dd940b4aa09c6ce3f6e73"
+}

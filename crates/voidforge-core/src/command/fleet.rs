@@ -7,7 +7,7 @@
 //! later check sees it exactly as one that doesn't exist (D-028 amended by D-049; no answer tells
 //! a player another's fleet or ship exists). A planet is public, so `not_owner` stays for planets.
 
-use crate::fleet::{distance, travel_time_ms};
+use crate::fleet::{MAX_TRAVEL_MS, distance, travel_time_ms};
 use crate::rules::Rules;
 use crate::state::{
     Cargo, EngineError, Fleet, FleetId, FleetState, Mission, PlanetId, ShipKind, ShipLocation,
@@ -113,13 +113,14 @@ impl World {
                     Mission::Move => {}
                 }
                 // The arrival must be a real instant after now: never a zero travel time, nor
-                // one past the end of time, so no command can poison the engine (D-029).
+                // one past the end of time, so no command can poison the engine (D-029); and no
+                // trip longer than the travel horizon (D-050).
                 let travel = self
                     .fleet_speed(*id, rules)
                     .ok()
                     .zip(distance(self.planets[&at].position, to.position))
                     .and_then(|(speed, d)| travel_time_ms(d, speed))
-                    .filter(|&ms| ms > 0)
+                    .filter(|&ms| ms > 0 && ms <= MAX_TRAVEL_MS)
                     .and_then(|ms| self.time_ms.checked_add(ms));
                 if travel.is_none() {
                     return Err(Rejection::UnreachableTarget);
@@ -128,12 +129,15 @@ impl World {
             }
             Action::RecallFleet { fleet: id } => match fleet(*id)?.state {
                 // The return, now plus the time traveled, must be a real instant: near the end
-                // of time it may not be, and a player's command must never poison (D-029).
+                // of time it may not be, and a player's command must never poison (D-029). The
+                // return can't outlast the outbound leg, which Send bounds by the travel horizon,
+                // but it's checked here too, so the invariant is local (D-050).
                 FleetState::InTransit { departed_at_ms, .. } => {
                     let now = self.time_ms;
                     // Checked: a departure far in the past can make either step overflow (D-032).
                     match now
                         .checked_sub(departed_at_ms)
+                        .filter(|&traveled| traveled <= MAX_TRAVEL_MS)
                         .and_then(|traveled| traveled.checked_add(now))
                     {
                         Some(_) => Ok(()),

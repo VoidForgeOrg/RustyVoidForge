@@ -66,7 +66,7 @@ async fn universe(url: &str, homeworlds: u32) {
     let world = voidforge_worldgen::generate(SEED, homeworlds, &v0_rules()).unwrap();
     assert_eq!(world.homeworld_candidates.len(), homeworlds as usize);
     let snap = snapshot::encode(&world, &build()).unwrap();
-    voidforge_store::bootstrap(url, &snap).await.unwrap();
+    voidforge_store::bootstrap(url, &snap, EPOCH).await.unwrap();
 }
 
 // --- Fault injection, in the test's wrappers only ---

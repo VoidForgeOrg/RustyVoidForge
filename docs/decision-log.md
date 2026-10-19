@@ -443,8 +443,8 @@ Each entry records its date, the package that made it, the decision, the reasons
       - Transport: `no_cargo_vessel`, `target_not_owned`;
       - Move: nothing further.
 
-      Then `unreachable_target` (zero travel time, or an arrival outside 64 bits), so a player's command never poisons the world. Of the five fleet commands, only Send and Recall compute a time from player input; Assemble and Trigger unload bound every amount by stock, capacity or free storage, and Disband moves only IDs (review-r2's audit, confirmed). Effect: D-027's `send_fleet`.
-    - **Recall fleet**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_in_transit` (stationed), `already_recalled` (returning), then `unreachable_target` (the return, now plus the time traveled, past the end of time; review-r2's repair, so a recall too can never poison). Effect: D-027's `recall_fleet`, including its departure-instant rule; its own checked error stays as the engine's defense.
+      Then `unreachable_target` (zero travel time, or an arrival outside 64 bits; **amended by D-050:** or a trip longer than the 1,000-year travel horizon), so a player's command never poisons the world. Of the five fleet commands, only Send and Recall compute a time from player input; Assemble and Trigger unload bound every amount by stock, capacity or free storage, and Disband moves only IDs (review-r2's audit, confirmed). Effect: D-027's `send_fleet`.
+    - **Recall fleet**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_in_transit` (stationed), `already_recalled` (returning), then `unreachable_target` (the return, now plus the time traveled, past the end of time; review-r2's repair, so a recall too can never poison; **amended by D-050:** or a time traveled longer than the travel horizon). Effect: D-027's `recall_fleet`, including its departure-instant rule; its own checked error stays as the engine's defense.
       - The Commands table's recall row omits "the player's"; it is read as brevity, not permission, because fleets are visible only to their owner and every other fleet row says so.
       - A recall at the arrival instant is `fleet_not_in_transit`, because events at t run first.
     - **Disband fleet**: `not_joined`; `unknown_fleet`; `not_owner`; `fleet_not_stationed`, `cargo_aboard`. Effect: the ships join the station planet's roster and the fleet is removed (any stale entry stays stale, D-022). It works at any planet. The design's "Move to an owned planet and unload first" follows from `cargo_aboard` and Trigger unload's rule.
@@ -1248,3 +1248,107 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **P3.5:** the leaderboard replaces the 503.
   - **P3.8:** the rate limit, the 429 every path already declares.
 - Where it's enforced: `crates/voidforge-server/src/{api/, accounts.rs, lib.rs}`, `crates/voidforge-core/src/view.rs` (`view_for`), `crates/voidforge-host/src/lib.rs`, `crates/voidforge-api-types/src/lib.rs` and `openapi.json`, `crates/voidforge-server/tests/{routes.rs, common/, snapshots/}`, `crates/voidforge-testkit/tests/views.rs`, `.github/scripts/database.sh`, the Game Design (Universe and planets), the Architectural Design (Read side), D-045, `deny.toml`, the [version table](versions.md), and the core's, host's and server's AGENTS.md.
+
+### D-050: `serve`, the durable epoch and the travel horizon
+
+- Date and package: 2026-10-19, P3.4s. Proposed by dev-build (`slices/35-p3-4s-serve/proposal-serve.md`). Lead ruling on T1 to T9, approved with four amendments (`ruling-lead.md`). Advisor rulings on S1 to S3 (`ruling-advisor.md`): the travel horizon and the missing-epoch refusal are game intent.
+- Decision:
+  - **The durable epoch** (D-044's carry, D-048):
+    - Migration `0004_universe.sql` adds a one-row table, `universe (id boolean PRIMARY KEY DEFAULT true CHECK (id), epoch_unix_ms bigint NOT NULL, created_at)`. The constraint `universe_epoch_in_window` repeats the code's window, so the database holds nothing the code would refuse.
+    - `voidforge_store::bootstrap(url, snapshot, epoch)` writes it in the seq-0 snapshot's transaction, with `universe` in the same `EXCLUSIVE` lock, so a universe never exists without its epoch. A `universe` row counts as "used".
+    - `seed --epoch-unix-ms` is optional. The default is the wall clock, read once. The printed result and the JSON give the epoch in ms and in RFC 3339 form.
+    - `serve` reads it through `voidforge_store::open_universe` and **never takes it from a flag or the clock**.
+  - **The epoch window: [1970-01-01, 2100-01-01)**, that is [0, 4,102,444,800,000) ms (`EPOCH_MIN_UNIX_MS`, `EPOCH_END_UNIX_MS`, `epoch_in_window`).
+    - `seed` refuses an epoch outside it before anything is read, generated or connected (exit 3).
+    - `serve` refuses a recorded one (exit 3), separately from the CHECK.
+    - **It closes the P3.4 QA's I2 completely.** A stamp is max(wall − epoch, last stamp), and every earlier stamp came from an earlier wall clock, so epoch + stamp ≤ max(wall now, epoch). A `game_time` can be formatted whenever the epoch and the system clock are within years 0000 to 9999. I2 needed an epoch within a second of 9999-12-31.
+    - The QA's `wall_time` carry: that column takes the wall clock, never the epoch. A test pins the record path at the window's last millisecond: game time is held at 0, `wall_time` is the real clock, and `as_of` is the epoch, formatted.
+  - **The travel horizon** (advisor S2, option A; **a core change**, amending D-029):
+    - `voidforge_core::fleet::MAX_TRAVEL_MS` is 1,000 Julian years (31,557,600,000,000 ms). Send refuses a longer trip as `unreachable_target`.
+    - Recall refuses a time traveled longer than the horizon with the same code. A sent trip can't reach that, but the invariant is checked locally.
+    - It closes the P3.4 QA's I1 for every time a player chooses. Rules v0's longest trip is about 173 h (a 1,000-unit cube at 10 units/h), so it never constrains play.
+    - Core tests pin both edges: exactly the horizon is accepted and one ms past it is refused (Send at a 1 ms-per-unit speed, and under Rules v0 at 240 ms per unit), and the same for Recall. `just bless` moves no golden.
+    - The Game Design's Travel and recall section says so, in one sentence.
+    - **Residue, accepted** (advisor): a solver `valid_until` past 9999 under extreme custom rules is still a 500 (D-049 T6). It can't be reached under Rules v0. If a rules change makes it reachable, it comes back as a contract question.
+  - **`voidforge-server serve`** (`voidforge_server::serve`):
+    - **Configuration:**
+      - `--database-url` / `VOIDFORGE_DATABASE_URL`: required, never printed, and **deliberately not `DATABASE_URL`**, since a stray one set for sqlx's tooling could point `serve` at the owner's database;
+      - `--rules` / `VOIDFORGE_RULES`, whose version must be the universe's;
+      - `--bind` / `VOIDFORGE_BIND`, default `127.0.0.1:8080` (P3.6 sets `0.0.0.0:8080`);
+      - `--drain-secs` / `VOIDFORGE_DRAIN_SECS`, from 0 to 60, default 5;
+      - D-046's `AuthArgs`, flattened.
+    - **`seed` stays on `DATABASE_URL`** (the lead, T7). Unlike `serve`, `seed` *can* write to an empty database. So the owner's empty `voidforge` is protected only by `just seed` naming `voidforge_dev`, not by `seed`'s refusal of a non-empty database.
+    - **Startup:**
+      1. The settings and the rules file are checked.
+      2. **A database without a universe is refused before anything is migrated** (the lead's T2 amendment): no `snapshots` table, or an empty one, is exit 3 ("seed it first") and the database is untouched. `serve` never creates a schema; `seed` does.
+      3. Otherwise the migrations run (they only add, D-034) and the epoch is read.
+      4. **No recorded epoch is exit 3 with the next step, "re-seed it (for voidforge_dev: just seed-reset)"** (advisor S1). There's no command to record an epoch by hand, because a hand-entered epoch is an invented one, and a changed epoch moves game time (D-044). Only dev and test databases predate the migration.
+      5. `voidforge_host::recover` (D-038), then `spawn` on the system clock.
+      6. `refresh_forever` runs beside the server. **With dex down at startup the server starts, and tokens get 503 `unavailable` with Retry-After until the keys load, never an accept** (D-046, confirmed). An info line says so.
+      7. The bind, then one line on stdout: `ready: listening on <addr>, epoch <RFC 3339>, seq <head>`.
+    - **Shutdown** on the first SIGINT or SIGTERM, or when the host stops on its own:
+      1. Stop accepting, and drain in-flight requests for `--drain-secs`.
+      2. Shut the runtime down. The router, its `AppState` and any connection the drain cut off go with it, and so does every `HostHandle`. `serve` keeps none past the drain (it watches the host through one handle until then). So the host stops and writes its clean-shutdown snapshot.
+      3. Join the host, bounded at 10 s, so a surviving handle is exit 6, never a hang.
+      4. **Read Postgres: exit 0 only if the newest snapshot is at the log head.** `HostTask::join` doesn't report a failed shutdown snapshot (it's only a counter), and the database is the truth anyway.
+    - **Unclean stops are exit 6:**
+      - a second signal, which exits at once;
+      - a drain timeout (the host still stops and snapshots once the cut-off requests are gone);
+      - the host stopping on its own, the host not stopping within its bound, or no snapshot at the head.
+      - Recovery then replays the log from the last snapshot: every acknowledged command's record is durable (D-036).
+    - **A departure from the P3.4 QA's I4, for the process only** (the lead, T5): a serving process whose host has died exits 6 rather than answer 503 to every write forever, so compose's restart runs recovery. The in-process router behaves as before.
+    - **Exit codes**, in D-041's style and listed in `serve --help`:
+      - 0: clean;
+      - 2: usage, including `AuthArgs` out of range;
+      - 3: refused (no universe, no recorded epoch, an epoch out of the window, or another rules version);
+      - 4: input or database error (connecting, migrating, recovery, the bind);
+      - 5: telemetry;
+      - 6: unclean.
+
+      `seed`'s 3 gains "the epoch is out of range".
+    - **Readiness** (advisor S3): there's no new route. Compose checks the public `GET /openapi.json`, which answers only once the router serves, after recovery. Clients treat 503 `unavailable` as "not ready yet", as D-046 already gives while dex's keys load.
+    - Logs at info: the build, the rules version, the epoch, the recovered seqs, the issuer, the bind address, the signal, the drain and the final snapshot. Never the database URL, a token or a subject.
+  - **`just serve`** (`.github/scripts/serve.sh`) serves `voidforge_dev` only, and `exec`s the binary so Ctrl-C reaches it.
+  - `PgAccounts::lazy_url` builds the accounts pool on the runtime that uses it.
+  - **Dependencies:** tokio gains `net`, `rt-multi-thread` and `signal` on the server's own dependency only. `signal` adds one crate, **signal-hook-registry 1.4.8** (MIT OR Apache-2.0), which joins `deny.toml`'s crate allowlist. There's no other new crate.
+- **Repair round 1** (QA PASS and review-r2 REPAIR REQUIRED on 6707d85, folded with the lead's addition; `repair-assignment.md`):
+  - **M1 (review-r2, MEDIUM) and D1 (dev-qa): a second signal was lost after the join and between the phases.**
+    - In 6707d85, the shutdown ran on two runtimes, each with its own signal stream. A signal between the first runtime's end and the second's start was swallowed: dev-qa measured exit 0 for a second signal 5 to 40 ms after the drain.
+    - The final snapshot check was awaited after the join's select had chosen its branch, so neither the signal nor a bound applied. review-r2 held that SELECT behind a lock: the process lived 11 s past a second SIGTERM, then exited 0.
+    - **The fix:** one **control** runtime (current-thread) owns the only signal stream, the universe's lock and every shutdown step. The **server** runtime (multi-thread) runs the API and its connections, and it shuts down in the background (`shutdown_background`, allowed from async code). Its connection tasks, and the host handles they hold, go with it. Every step from the first signal to the exit is selected against that one stream: the drain, the join (bounded at 10 s) and **the final check, now bounded at 5 s** (`CHECK_BOUND`). A second signal at any of them is exit 6 at once.
+    - My brief had called the transition window "microseconds" without measuring it. That was wrong.
+  - **One serve per universe** (dev-qa's I4; the lead's addition): `voidforge_store::lock_universe` takes `pg_try_advisory_lock(SERVE_LOCK_KEY)` on a connection of its own, held for the process's life. Postgres frees it when the connection closes, on a clean stop or a crash. An advisory lock is scoped to its database, and a database holds one universe. A second `serve` refuses with exit 3 ("another serve already holds this universe") after the universe checks and before recovering or binding.
+  - **D2 (dev-qa; review-r2's L1):** `serve.sh` hard-coded `target/debug`, so with `CARGO_TARGET_DIR` set it failed with exit 127 (or ran a stale binary). It now runs `exec cargo run`. Cargo finds the binary wherever it builds, and on Unix it execs it in its own place: checked by effect, since with `CARGO_TARGET_DIR` set, the launcher's pid became the binary and a SIGINT to it stopped cleanly with exit 0.
+  - **L1 (dev-qa; review-r2's L2):** `serve --help` now names every exit-6 cause (a join past 10 s, no snapshot at the head, a check past 5 s) and the new exit-3 cause.
+  - **I5 (dev-qa), for P3.6:** compose execs the binary, never `just`. `just` exits 130 on Ctrl-C, forwards a group SIGTERM so serve sees it twice (an unclean stop), and doesn't forward a SIGINT sent to its own pid.
+  - `voidforge_host` re-exports `Rules`, a name only, so `serve` can pass a parsed rules file between its runtimes without depending on the core.
+  - **Tests added to `tests/serve.rs`:**
+    - review-r2's probe as a regression: the final SELECT held behind a snapshots lock, then a second SIGTERM is exit 6 within 2 s;
+    - the same hold with no second signal is exit 6 after 4 to 8 s;
+    - dev-qa's D1 as a sweep: SIGINT, then SIGTERM after 0, 2, 5, 10, 20, 40, 80, 200 and 1,000 ms, with the shutdown snapshot slowed to 2 s and a new record each round so a snapshot is due. Every delay is exit 6 **within 1 s of the second signal**, inside the 2 s the snapshot holds the stop. (Without the timing, a join that ignored the signal survived the table: the stream kept the signal pending, and the next step's select exited 6 after the snapshot.);
+    - dev-qa's Q2: the join bound, exit 6 between 9 and 13 s;
+    - dev-qa's Q3: seed's default epoch lies between wall-clock reads taken before and after;
+    - I4: two serves, where the second is exit 3 without recovering or binding, the first serves on and stops with exit 0, and a later serve starts.
+    - dev-qa's Q1 (a second signal during the join) is inside the sweep, whose later delays land in the slowed snapshot.
+- Tests:
+  - **`crates/voidforge-server/tests/serve.rs`**, in the database stage (`database.sh` gains `binary(=serve)`). It runs the real binary over a seeded `_sqlx_test_*` database and a dex stand-in, both on threads of their own, with real signals (`kill -s`). Every wait is bounded, and a failing test kills its child.
+    - **SIGINT and SIGTERM restarts:** exit 0, the snapshot at the head, the epoch row unchanged. The next start prints the same epoch and seq, with nothing left to replay; a repeated key gets its first answer; and game time continues.
+    - **The refusals:**
+      - an empty database: exit 3, and still 0 tables;
+      - no recorded epoch: exit 3 with the next step, and nothing written;
+      - epochs out of the window: at seed, exit 3 and 0 tables; at serve, past a dropped CHECK, exit 3.
+      - The CHECK itself is probed by effect: SQLSTATE 23514 with the constraint's name, and 23505 for a second row.
+    - **The window's last millisecond** serves, as above.
+    - **dex down at startup:** 503 with Retry-After and `/openapi.json` 200, then 200 once the stand-in comes up on that port.
+    - **A request in flight at shutdown**, made certain with no hook in the code: the test holds `LOCK TABLE log_records`, and `pg_stat_activity` shows the host's INSERT waiting on it. Released within the drain, the request is answered, its record is durable and the stop is clean. Held past `--drain-secs 1`, the connection is cut, the exit is 6, the host still snapshots once released, and a retry with the same key after a restart appends nothing.
+    - **A second signal** during a 60 s drain: exit 6 within 5 s. The unacknowledged command is absent, and a restart applies the retry once.
+    - **SIGKILL:** no shutdown snapshot; the restart replays to the head, and the acknowledged command is in the log.
+    - **The host dying** (the lead's T8 correction): a `BEFORE INSERT` trigger that raises, because the local and CI role is a superuser and bypasses a revoked privilege. The command is 503, the process exits 6, and stderr carries the trigger's message, so the failure is proven to have fired. Without the trigger, a restart recovers.
+  - **`tests/cli.rs`:**
+    - `serve --help` lists the exit codes;
+    - no `--database-url` is exit 2 even with `DATABASE_URL` set;
+    - `--drain-secs 61` and a leeway of 301 are exit 2 before any connection;
+    - a bad or unreachable URL is exit 4 and never printed;
+    - `seed`'s out-of-range epoch is exit 3 even with a URL that isn't Postgres, so it's checked before connecting.
+  - **The core:** `crates/voidforge-testkit/tests/fleet_commands.rs` pins the horizon's value and both edges for Send and Recall.
+- Where it's enforced: `crates/voidforge-core/src/{fleet.rs, command.rs, command/fleet.rs}`, `crates/voidforge-store/{migrations/0004_universe.sql, src/lib.rs, src/accounts.rs}`, `crates/voidforge-server/src/{serve.rs, main.rs, lib.rs}`, `crates/voidforge-server/tests/{serve.rs, cli.rs, accounts.rs, routes.rs}`, `crates/voidforge-testkit/tests/fleet_commands.rs`, `.sqlx/`, `.github/scripts/{database.sh, serve.sh}`, `justfile`, `deny.toml`, `crates/voidforge-host/src/lib.rs` (the `Rules` re-export), the host's AGENTS.md, the Game Design (Travel and recall), the Architectural Design (Persistence, Operations), D-029, the [version table](versions.md), and the server's and store's AGENTS.md.

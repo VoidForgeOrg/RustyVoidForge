@@ -251,7 +251,9 @@ struct Api {
 async fn api(pool: &PgPool, (w, ids): (World, Ids), config: impl FnOnce(&mut HostConfig)) -> Api {
     let url = url(pool);
     let snap = snapshot::encode(&w, &build()).unwrap();
-    voidforge_store::bootstrap(&url, &snap).await.unwrap();
+    voidforge_store::bootstrap(&url, &snap, EPOCH)
+        .await
+        .unwrap();
     for (player, sub) in [(ALICE, ALICE_SUB), (BOB, BOB_SUB)] {
         sqlx::query("INSERT INTO accounts (player_id, issuer, subject) VALUES ($1::uuid, $2, $3)")
             .bind(voidforge_store::log::player_uuid(player))

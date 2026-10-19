@@ -315,6 +315,9 @@ allow = [
     { crate = "unicode-general-category" },
     { crate = "uuid-simd" },
     { crate = "vsimd" },
+    # tokio's signal feature, for serve's SIGINT and SIGTERM (P3.4s, decision log D-050):
+    # signal-hook-registry, with errno and libc already in the graph.
+    { crate = "signal-hook-registry" },
 ]
 # Duplicates allowed by name and version, each with its reason (decision log D-017).
 skip = [

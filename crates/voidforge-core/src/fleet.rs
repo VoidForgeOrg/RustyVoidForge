@@ -15,6 +15,12 @@ use crate::state::{
     StateError, World,
 };
 
+/// The longest trip a fleet may be sent on, and so the longest return: 1,000 Julian years of
+/// 365.25 days. A longer one is `unreachable_target` (Game Design, Travel and recall; decision log
+/// D-050, amending D-029). Rules v0's longest trip is about 173 hours, so it never constrains
+/// play; it keeps every time a player chooses within what the wire can name (years 0000 to 9999).
+pub const MAX_TRAVEL_MS: i64 = 31_557_600_000_000;
+
 /// The integer square root of the summed squared coordinate differences, in distance units
 /// (D-021), rounded down; `None` if it leaves 64 bits.
 pub fn distance(a: Position, b: Position) -> Option<i64> {

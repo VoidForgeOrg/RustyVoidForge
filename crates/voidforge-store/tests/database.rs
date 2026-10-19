@@ -210,14 +210,20 @@ async fn migrations_apply_cleanly_to_an_empty_database(pool: PgPool) {
     migrate(&pool).await.expect("migrations apply");
     assert_eq!(
         tables(&pool).await,
-        s(&["_sqlx_migrations", "accounts", "log_records", "snapshots"])
+        s(&[
+            "_sqlx_migrations",
+            "accounts",
+            "log_records",
+            "snapshots",
+            "universe"
+        ])
     );
     let applied = applied(&pool).await;
     let versions: Vec<(i64, bool)> = applied.iter().map(|(v, ok, _, _)| (*v, *ok)).collect();
-    assert_eq!(versions, vec![(1, true), (2, true), (3, true)]);
+    assert_eq!(versions, vec![(1, true), (2, true), (3, true), (4, true)]);
     assert_eq!(
         MIGRATOR.iter().count(),
-        3,
+        4,
         "every embedded migration was applied"
     );
 }
@@ -231,6 +237,7 @@ async fn rerunning_migrations_is_a_no_op(pool: PgPool) {
         columns(&pool, "log_records").await,
         columns(&pool, "snapshots").await,
         columns(&pool, "accounts").await,
+        columns(&pool, "universe").await,
     ]
     .concat();
     migrate(&pool).await.expect("second run");
@@ -243,6 +250,7 @@ async fn rerunning_migrations_is_a_no_op(pool: PgPool) {
         columns(&pool, "log_records").await,
         columns(&pool, "snapshots").await,
         columns(&pool, "accounts").await,
+        columns(&pool, "universe").await,
     ]
     .concat();
     assert_eq!(again, schema);
@@ -395,6 +403,36 @@ async fn accounts_columns_match_decision_9(pool: PgPool) {
                 "CHECK ((COALESCE((uuid_extract_version(player_id))::integer, 0) = 7))"
             ),
             ("accounts_subject_check", "CHECK ((subject <> ''::text))"),
+        ])
+    );
+}
+
+/// The universe's one row: its epoch inside the window [1970-01-01, 2100-01-01) (D-050).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn universe_columns_match_the_architecture(pool: PgPool) {
+    assert_eq!(
+        columns(&pool, "universe").await,
+        vec![
+            col("id", "boolean", true, Some("true")),
+            col("epoch_unix_ms", "bigint", true, None),
+            col(
+                "created_at",
+                "timestamp with time zone",
+                true,
+                Some("now()")
+            ),
+        ]
+    );
+    assert_eq!(
+        constraints(&pool, "universe").await,
+        pairs(&[
+            (
+                "universe_epoch_in_window",
+                "CHECK (((epoch_unix_ms >= 0) AND (epoch_unix_ms < '4102444800000'::bigint)))"
+            ),
+            ("universe_id_check", "CHECK (id)"),
+            ("universe_pkey", "PRIMARY KEY (id)"),
         ])
     );
 }

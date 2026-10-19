@@ -1,7 +1,7 @@
 # Voidforge task runner (Technical Plan, Tech stack and CI/CD). The lint, supply-chain and test
 # recipes run the same commands as the CI jobs of the same name, so a red check reproduces here.
 # db-test and migrate arrived with P2.1 (D-034), bless with P2.6 (D-040), replay with P2.7 (D-041), seed and seed-reset with
-# P2.9 (D-043), openapi with P3.1 (D-045), dex-test with P3.2 (D-046). Recipes appear with the packages that implement them: e2e (P3.6) does not exist yet (decision log D-014).
+# P2.9 (D-043), openapi with P3.1 (D-045), dex-test with P3.2 (D-046), serve with P3.4s (D-050). Recipes appear with the packages that implement them: e2e (P3.6) does not exist yet (decision log D-014).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -87,6 +87,11 @@ seed:
 # Drops and recreates voidforge_dev (and only it), then seeds. The only reset.
 seed-reset:
     .github/scripts/seed.sh reset
+
+# Serves the API over voidforge_dev, never voidforge (decision log D-050), on localhost:8080 with
+# the local dex. Ctrl-C stops it with a final snapshot. RULES=fast uses rules/v0-fast.toml.
+serve:
+    .github/scripts/serve.sh
 
 # Records every golden scenario through the host into tests/golden/ (decision log D-040). Golden
 # files change only this way, and a reviewer checks every change: call it out in the PR body.

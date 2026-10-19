@@ -8,6 +8,7 @@
 use std::collections::BTreeSet;
 
 use voidforge_core::command::{Action, Applied, Command, Rejection};
+use voidforge_core::fleet::MAX_TRAVEL_MS;
 use voidforge_core::quantity::{MS_PER_HOUR, Quantity};
 use voidforge_core::rules::GRAMS_PER_TON;
 use voidforge_core::state::{
@@ -992,4 +993,117 @@ fn assembles_not_owner_is_only_ever_the_planet() {
         apply(&mut s.w, ALICE, &action, 0).outcome,
         Err(Rejection::UnknownShip)
     );
+}
+
+// --- The travel horizon (D-050, amending D-029) ---
+
+/// The horizon's value: 1,000 Julian years. Pinned as the contract's number, not read back from
+/// the constant it guards.
+#[test]
+fn the_travel_horizon_is_a_thousand_julian_years() {
+    assert_eq!(MAX_TRAVEL_MS, 1_000 * 36_525 * 86_400_000 / 100);
+    assert_eq!(MAX_TRAVEL_MS, 31_557_600_000_000);
+}
+
+/// Alice's homeworld at the origin with one Cargo Vessel (15,000 du/h, so 240 ms per distance
+/// unit) assembled into a fleet, and a free planet `d` distance units away along x.
+fn far_target(d: i64) -> (World, FleetId, PlanetId) {
+    let mut b = WorldBuilder::new();
+    let home = b.player(ALICE);
+    let far = b.planet(None);
+    b.position(home, Position { x: 0, y: 0, z: 0 });
+    b.position(far, Position { x: d, y: 0, z: 0 });
+    let ship = b.ship(ALICE, ShipKind::CargoVessel, home);
+    let fleet = b.fleet(&[ship], Cargo::default());
+    (b.build(), fleet, far)
+}
+
+/// Under Rules v0: a trip of exactly the horizon is sent; one distance unit more (240 ms past
+/// it) is unreachable, and never poisons.
+#[test]
+fn send_accepts_a_trip_of_exactly_the_horizon_and_refuses_a_longer_one() {
+    let per_du = 240;
+    assert_eq!(MAX_TRAVEL_MS % per_du, 0);
+    let d = MAX_TRAVEL_MS / per_du;
+    let (mut w, fleet, far) = far_target(d);
+    accept(&mut w, ALICE, &send(fleet, far, Mission::Move), 0);
+    assert_eq!(arrival(&w, fleet), MAX_TRAVEL_MS);
+    let (mut w, fleet, far) = far_target(d + 1);
+    reject(
+        &mut w,
+        ALICE,
+        &send(fleet, far, Mission::Move),
+        0,
+        Rejection::UnreachableTarget,
+    );
+    assert!(!w.is_poisoned());
+}
+
+/// To the millisecond: with a speed of 3,600,000 du/h a distance unit takes exactly 1 ms, so the
+/// horizon itself is accepted and the horizon plus 1 ms is refused.
+#[test]
+fn send_refuses_a_trip_one_millisecond_past_the_horizon() {
+    let mut rules = v0_rules();
+    rules.ships.cargo_vessel.speed_du_per_h = 3_600_000;
+    let world = |d: i64| {
+        let mut b = WorldBuilder::with_rules(rules.clone());
+        let home = b.player(ALICE);
+        let far = b.planet(None);
+        b.position(home, Position { x: 0, y: 0, z: 0 });
+        b.position(far, Position { x: d, y: 0, z: 0 });
+        let ship = b.ship(ALICE, ShipKind::CargoVessel, home);
+        let fleet = b.fleet(&[ship], Cargo::default());
+        (b.build(), fleet, far)
+    };
+    let command = |fleet, far| Command {
+        player: ALICE,
+        action: send(fleet, far, Mission::Move),
+    };
+    let (mut w, fleet, far) = world(MAX_TRAVEL_MS);
+    let applied = w.apply(&command(fleet, far), 0, &rules).unwrap();
+    assert!(applied.outcome.is_ok(), "{:?}", applied.outcome);
+    assert_eq!(arrival(&w, fleet), MAX_TRAVEL_MS);
+    let (mut w, fleet, far) = world(MAX_TRAVEL_MS + 1);
+    let applied = w.apply(&command(fleet, far), 0, &rules).unwrap();
+    assert_eq!(applied.outcome, Err(Rejection::UnreachableTarget));
+    assert!(matches!(
+        w.fleets[&fleet].state,
+        FleetState::Stationed { .. }
+    ));
+    assert!(!w.is_poisoned());
+}
+
+/// Recall's return lasts as long as the time traveled, which a sent trip can't push past the
+/// horizon; but a fleet already in transit for longer (built directly: say, a send accepted
+/// before the horizon existed) is checked locally. Exactly the horizon in is recalled; 1 ms more
+/// is unreachable, and never poisons.
+#[test]
+fn recall_after_exactly_the_horizon_is_accepted_and_one_millisecond_more_is_unreachable() {
+    let world = || {
+        let mut b = WorldBuilder::new();
+        let home = b.player(ALICE);
+        let far = b.planet(None);
+        let ship = b.ship(ALICE, ShipKind::CargoVessel, home);
+        let fleet = b.fleet(&[ship], Cargo::default());
+        b.send(fleet, far, Mission::Move, 3 * MAX_TRAVEL_MS);
+        (b.build(), fleet, home)
+    };
+    let (mut w, fleet, home) = world();
+    accept(&mut w, ALICE, &Action::RecallFleet { fleet }, MAX_TRAVEL_MS);
+    assert_eq!(
+        w.fleets[&fleet].state,
+        FleetState::Returning {
+            origin: home,
+            arrives_at_ms: 2 * MAX_TRAVEL_MS
+        }
+    );
+    let (mut w, fleet, _) = world();
+    reject(
+        &mut w,
+        ALICE,
+        &Action::RecallFleet { fleet },
+        MAX_TRAVEL_MS + 1,
+        Rejection::UnreachableTarget,
+    );
+    assert!(!w.is_poisoned());
 }
