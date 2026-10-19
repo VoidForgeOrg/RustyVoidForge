@@ -564,6 +564,8 @@ async fn an_accepted_command_answers_its_own_events_only_and_a_repeat_the_same(p
             .any(|e| matches!(e, voidforge_host::DomainEvent::BuildingCompleted { .. })),
         "the test must put Alice's event in Bob's record: {bobs:?}"
     );
+    // Later, the repeat still answers the first stamp: its game time is the receipt's, not now.
+    api.clock.set(EPOCH + done + 60_000);
     let again = api.command(BOB_SUB, "bob-1", &body).await;
     assert_eq!((again.status, &again.body), (200, &first));
     assert_eq!(

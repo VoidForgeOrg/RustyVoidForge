@@ -96,6 +96,10 @@ mod tests {
         assert!(timestamp(i64::MIN, -1).is_err());
         assert!(timestamp(i64::MAX, 0).is_err());
         assert!(timestamp(i64::MIN, 0).is_err());
+        // The one overflow a wrapping sum would turn into a valid date: i64::MAX + i64::MAX
+        // wraps to -2 ms, 1969-12-31T23:59:59.998Z. Only the checked sum refuses it.
+        assert_eq!(i64::MAX.wrapping_add(i64::MAX), -2);
+        assert!(timestamp(i64::MAX, i64::MAX).is_err());
     }
 
     /// Every day across a wide range: each formats, the contract accepts it, and consecutive
