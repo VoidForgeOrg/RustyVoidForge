@@ -570,6 +570,57 @@ async fn two_issuers_with_one_subject_are_two_players(pool: PgPool) {
     assert_ne!(players[&a.id], players[&b.id], "two homeworlds");
 }
 
+/// The subject match is exact: subjects that differ only in case are two players (dev-qa's L2).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn subjects_that_differ_in_case_are_two_players(pool: PgPool) {
+    let url = url(&pool);
+    universe(&url, 4).await;
+    let s = start(&url, Faults::default(), HostConfig::new(EPOCH, build())).await;
+    let upper = s.player(&principal(ISSUER, "Alice")).await.unwrap();
+    let lower = s.player(&principal(ISSUER, "alice")).await.unwrap();
+    s.stop().await.unwrap();
+    assert_ne!(upper, lower);
+    let e = effects(&url).await;
+    assert_eq!(e.rows, 2);
+    assert_eq!(e.joins, BTreeMap::from([(upper.id, 1), (lower.id, 1)]));
+}
+
+/// A database refusal keeps nothing of the row (dev-qa's L1 and D2). An empty issuer breaks the
+/// table's check, and Postgres's DETAIL would quote the row, subject included. The error keeps
+/// only its SQLSTATE and constraint, in `Display` and `Debug`, and the body is generic.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_database_refusal_carries_nothing_of_the_row(pool: PgPool) {
+    const SUBJECT: &str = "Cg1zdWJqZWN0LXJlZGFjdGVk";
+    let url = url(&pool);
+    universe(&url, 4).await;
+    let s = start(&url, Faults::default(), HostConfig::new(EPOCH, build())).await;
+    let err = s.player(&principal("", SUBJECT)).await.unwrap_err();
+    s.stop().await.unwrap();
+    let PlayerError::Store(AccountError::Database(failure)) = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(failure.sqlstate.as_deref(), Some("23514"));
+    assert_eq!(failure.constraint.as_deref(), Some("accounts_issuer_check"));
+    for shown in [format!("{err:?}"), err.to_string()] {
+        assert!(!shown.contains(SUBJECT), "{shown}");
+        assert!(!shown.contains("Failing row"), "{shown}");
+    }
+    let response = err.into_response();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let body: voidforge_api_types::error::ErrorBody = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body.code, ErrorCode::Unavailable);
+    assert_eq!(
+        body.message,
+        "accounts can't be read right now; retry later"
+    );
+    assert_eq!(effects(&url).await.rows, 0);
+}
+
 /// An account with no homeworld (a crash after the row, before the join) is repaired by that
 /// user's next call, under the same ID.
 #[sqlx::test(migrator = "MIGRATOR")]

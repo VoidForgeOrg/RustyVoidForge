@@ -105,6 +105,8 @@ impl<A: AccountStore> Players<A> {
                 |e| tracing::warn!(issuer = %principal.issuer, error = %e, "account lookup failed"),
             )?;
         let player = Player { id };
+        // One snapshot for both checks: a second read could see this player's own join land
+        // between them, and answer a joined player with `no_free_homeworld` (dev-qa's I1).
         let read = self.host.read();
         if read.world.players.contains_key(&id) {
             return Ok(player);

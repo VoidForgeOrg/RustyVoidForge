@@ -17,9 +17,9 @@ use crate::log::{parse_player_uuid, player_uuid};
 #[derive(Debug, thiserror::Error)]
 pub enum AccountError {
     /// The database could not be reached, or refused the write (a check constraint, or a player
-    /// ID that collides with another account's).
+    /// ID that collides with another account's). Redacted: see [`DbFailure`].
     #[error("accounts database: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(DbFailure),
     /// The insert yielded to an existing row, and then no row was there: it was deleted in
     /// between. Never answered with a fresh ID.
     #[error("the account row vanished between the insert and the read")]
@@ -31,6 +31,61 @@ pub enum AccountError {
     /// A stored player ID is not a UUID: the table's check makes this unreachable.
     #[error("a stored player ID is not a UUID: {0:?}")]
     Corrupt(String),
+}
+
+impl From<sqlx::Error> for AccountError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Database(DbFailure::from(e))
+    }
+}
+
+/// A database failure with nothing of the row in it. Postgres's message and DETAIL can quote the
+/// values a statement wrote ("Failing row contains (…)"), the subject among them, so an error the
+/// server refused keeps only its SQLSTATE and constraint name, in `Display` and `Debug` alike
+/// (D-047, dev-qa's L1). Any other failure (a connection, a pool timeout) keeps sqlx's text, which
+/// carries no row data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbFailure {
+    /// The SQLSTATE of an error the server returned (`23514` for a check violation).
+    pub sqlstate: Option<String>,
+    /// The constraint it names, if any.
+    pub constraint: Option<String>,
+    /// What failed, when the server didn't return the error.
+    pub other: Option<String>,
+}
+
+impl From<sqlx::Error> for DbFailure {
+    fn from(e: sqlx::Error) -> Self {
+        match e {
+            sqlx::Error::Database(db) => Self {
+                sqlstate: db.code().map(|c| c.into_owned()),
+                constraint: db.constraint().map(str::to_owned),
+                other: None,
+            },
+            other => Self {
+                sqlstate: None,
+                constraint: None,
+                other: Some(other.to_string()),
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for DbFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(other) = &self.other {
+            return f.write_str(other);
+        }
+        f.write_str("the database refused the statement")?;
+        if let Some(code) = &self.sqlstate {
+            write!(f, " (SQLSTATE {code}")?;
+            if let Some(c) = &self.constraint {
+                write!(f, ", constraint {c}")?;
+            }
+            f.write_str(")")?;
+        }
+        Ok(())
+    }
 }
 
 /// Where accounts live. The server's account path takes any implementation, so the crash tests
