@@ -2644,6 +2644,7 @@ dependencies = [
  "axum",
  "clap",
  "insta",
+ "jsonschema",
  "jsonwebtoken",
  "log",
  "reqwest",

@@ -1343,3 +1343,72 @@ async fn a_second_serve_on_the_same_universe_is_refused(pool: PgPool) {
     again.signal("INT");
     assert_eq!(again.exit(PATIENCE).0, 0);
 }
+
+// --- The leaderboard job inside serve (P3.5, D-051) ---
+
+/// The board exists from the first request (the first build runs before `ready:`), and with
+/// `--leaderboard-secs 1` its `as_of` advances within a few seconds.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_board_is_there_at_ready_and_its_as_of_advances(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    let s = serve(&url, &dex.issuer, &["--leaderboard-secs", "1"]);
+    let first = call("GET", s.url("/leaderboard"), Some(token.clone()), None);
+    assert_eq!(first.status, 200, "{:?}", first.body);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let now = call("GET", s.url("/leaderboard"), Some(token.clone()), None);
+        assert_eq!(now.status, 200);
+        if now.body["as_of"].as_str() > first.body["as_of"].as_str() {
+            assert!(
+                now.body["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e["rank"] == 1),
+                "alice joined, so she's on it: {:?}",
+                now.body
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "the as_of never advanced");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    s.signal("INT");
+    assert_eq!(s.exit(PATIENCE).0, 0);
+}
+
+/// The lead's T3 condition, explicit: the job holds a host handle while it waits (here, asleep for
+/// an hour between builds), and the host's join still completes within its bound, because the
+/// shutdown drops the job's task with the server runtime. A job holding its handle elsewhere would
+/// keep the host alive: exit 6 after the 10 s join bound.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_host_joins_with_the_job_mid_wait(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let s = serve(&url, &dex.issuer, &["--leaderboard-secs", "3600"]);
+    assert_eq!(
+        call(
+            "GET",
+            s.url("/players/me"),
+            Some(dex.token(ALICE_SUB)),
+            None
+        )
+        .status,
+        200
+    );
+    s.signal("INT");
+    let sent = Instant::now();
+    let (code, stderr) = s.exit(PATIENCE);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stderr.contains("the final snapshot is at the log head"),
+        "{stderr}"
+    );
+    assert!(
+        sent.elapsed() < Duration::from_secs(5),
+        "joined well inside the 10 s bound: {:?}",
+        sent.elapsed()
+    );
+}

@@ -36,6 +36,8 @@ voidforge-worldgen.workspace = true
 # every tracing and log event, sqlx's included, to prove the subject is never logged.
 aws-lc-rs.workspace = true
 insta.workspace = true
+# The leaderboard's published bytes are validated against the document's schema (P3.5, D-051).
+jsonschema.workspace = true
 log.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

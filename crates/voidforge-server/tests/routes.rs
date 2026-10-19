@@ -241,6 +241,8 @@ struct Api {
     clock: ManualClock,
     host: HostHandle,
     faults: Arc<Faults>,
+    /// Where the leaderboard is published (P3.5): tests build at the manual clock and publish.
+    board: voidforge_server::leaderboard::Publish,
     ids: Ids,
     pool: PgPool,
     /// Every (method, route, status) seen, for the parity rule.
@@ -323,12 +325,14 @@ async fn api(pool: &PgPool, (w, ids): (World, Ids), config: impl FnOnce(&mut Hos
         host.clone(),
     ));
     let c = clock.clone();
+    let (board, leaderboard) = voidforge_server::leaderboard::channel();
     let state = AppState {
         verifier,
         players,
         host: host.clone(),
         now_unix_ms: Arc::new(move || voidforge_host::Clock::now_unix_ms(&c)),
         epoch_unix_ms: EPOCH,
+        leaderboard,
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -343,6 +347,7 @@ async fn api(pool: &PgPool, (w, ids): (World, Ids), config: impl FnOnce(&mut Hos
         clock,
         host,
         faults,
+        board,
         ids,
         pool: pool.clone(),
         seen: Mutex::new(BTreeSet::new()),
@@ -1185,14 +1190,15 @@ async fn a_stale_read_model_waits_for_the_host_or_answers_503(pool: PgPool) {
     );
 }
 
-/// `/leaderboard` before P3.5: 503 `unavailable`, without Retry-After, so no client polls.
+/// `/leaderboard` before its first build: 503 `unavailable` with Retry-After 1, because the job
+/// retries every second until a build succeeds (D-051, T5).
 #[sqlx::test(migrator = "MIGRATOR")]
 #[ignore = "needs Postgres: just db-test"]
 async fn the_leaderboard_is_not_built_yet(pool: PgPool) {
     let api = api(&pool, world(0, 0), |_| {}).await;
     let r = api.get("/leaderboard", ALICE_SUB).await;
     assert_error(&r, 503, "unavailable");
-    assert_eq!(r.retry_after, None);
+    assert_eq!(r.retry_after.as_deref(), Some("1"));
     insta::assert_json_snapshot!("leaderboard_not_built", r.body);
 }
 
@@ -1452,4 +1458,187 @@ fn the_statuses_each_route_may_give_are_declared() {
         }
     }
     insta::assert_json_snapshot!("declared_statuses", declared);
+}
+
+// --- The leaderboard (P3.5, D-051) ---
+
+impl Api {
+    /// Builds the board at the manual clock, as the job does, and publishes it.
+    async fn build_board(&self) -> Result<i64, voidforge_server::leaderboard::BuildError> {
+        let c = self.clock.clone();
+        let now = move || voidforge_host::Clock::now_unix_ms(&c);
+        let built =
+            voidforge_server::leaderboard::build_now(&mut self.host.clone(), &now, EPOCH).await?;
+        let t = built.t;
+        self.board.send_replace(Some(Arc::new(built)));
+        Ok(t)
+    }
+
+    /// `/leaderboard` as `alice`, checked: 200, deserialized into the contract's type, and
+    /// valid against the document's schema.
+    async fn board(&self) -> voidforge_api_types::view::Leaderboard {
+        let r = self.get("/leaderboard", ALICE_SUB).await;
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        leaderboard_schema()
+            .validate(&r.body)
+            .unwrap_or_else(|e| panic!("the board fits the schema: {e}"));
+        serde_json::from_value(r.body.clone()).expect("the board is the contract's type")
+    }
+}
+
+/// The document's `Leaderboard` schema, compiled as the contract tests compile theirs.
+fn leaderboard_schema() -> jsonschema::Validator {
+    let doc: Value = serde_json::from_str(&voidforge_api_types::openapi_json()).unwrap();
+    let root = json!({
+        "allOf": [{"$ref": "#/components/schemas/Leaderboard"}],
+        "components": doc["components"],
+    });
+    jsonschema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .should_validate_formats(true)
+        .build(&root)
+        .unwrap()
+}
+
+/// New principals, each joining onto a free homeworld candidate: identical fresh homeworlds, so
+/// identical scores (ties).
+const NEWCOMERS: [&str; 3] = [
+    "CgVjYXJvbBIFbG9jYWw",
+    "CgRkYXZlEgVsb2NhbA",
+    "CgRlcmluEgVsb2NhbA",
+];
+
+/// The board's score for each player equals that player's own `/players/me` at the same time,
+/// for every player; ranks are competition ranks over the scores; the order is (score desc, ID
+/// asc). Ties: three newcomers on identical homeworlds. Partial credit: Alice's drill under
+/// construction, Bob's ships. Then the clock passes Alice's drill completing: the next build's
+/// `as_of` advances, and the board still equals every `/players/me`.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_board_equals_every_players_own_score_at_the_same_time(pool: PgPool) {
+    let api = api(&pool, world(3, 0), |_| {}).await;
+    let subs: Vec<&str> = [ALICE_SUB, BOB_SUB].into_iter().chain(NEWCOMERS).collect();
+    for sub in &subs {
+        assert_eq!(api.get("/players/me", sub).await.status, 200);
+    }
+    let mut as_of = None;
+    for at in [EPOCH + 60_000, EPOCH + 5 * 3_600_000] {
+        api.clock.set(at);
+        let t = api.build_board().await.unwrap();
+        let board = api.board().await;
+        assert_eq!(board.entries.len(), subs.len(), "every joined player");
+        for sub in &subs {
+            let me = api.get("/players/me", sub).await;
+            assert_eq!(me.status, 200);
+            let id = me.body["player_id"].as_str().unwrap();
+            let entry = board
+                .entries
+                .iter()
+                .find(|e| serde_json::to_value(&e.player_id).unwrap() == id)
+                .unwrap_or_else(|| panic!("{id} is on the board"));
+            assert_eq!(json!(entry.score), me.body["score"], "{id} at t {t}");
+            assert_eq!(me.body["as_of"], json!(board.as_of), "the same time");
+        }
+        for e in &board.entries {
+            let ahead = board.entries.iter().filter(|o| o.score > e.score).count();
+            assert_eq!(e.rank as usize, ahead + 1);
+        }
+        for w in board.entries.windows(2) {
+            let (a, b) = (&w[0], &w[1]);
+            let ids = (
+                serde_json::to_value(&a.player_id).unwrap(),
+                serde_json::to_value(&b.player_id).unwrap(),
+            );
+            assert!(
+                a.score > b.score || (a.score == b.score && ids.0.as_str() < ids.1.as_str()),
+                "{a:?} before {b:?}"
+            );
+        }
+        let tied = board
+            .entries
+            .iter()
+            .filter(|e| board.entries.iter().filter(|o| o.score == e.score).count() >= 3)
+            .count();
+        assert!(tied >= 3, "the newcomers tie: {:?}", board.entries);
+        if let Some(previous) = as_of.replace(board.as_of.clone()) {
+            assert!(
+                serde_json::to_value(&board.as_of).unwrap().as_str()
+                    > serde_json::to_value(&previous).unwrap().as_str(),
+                "the as_of advances"
+            );
+        }
+    }
+}
+
+/// A failed build keeps the previous board: with the host's append held past a due event (Bob's
+/// arrival), the read model is stale, the build fails after its 1 s wait, and the route still
+/// serves the previous board, as_of and all. Released, the next build succeeds and advances.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_failed_build_keeps_the_previous_board(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    assert_eq!(api.get("/players/me", ALICE_SUB).await.status, 200);
+    api.build_board().await.unwrap();
+    let before = api.board().await;
+    api.faults.hold.store(true, Ordering::SeqCst);
+    api.clock.set(EPOCH + BOB_ARRIVES + 1);
+    api.faults.entered(1).await;
+    let failed = tokio::time::timeout(Duration::from_secs(5), api.build_board())
+        .await
+        .expect("the build gives up after its 1 s wait");
+    assert_eq!(
+        failed,
+        Err(voidforge_server::leaderboard::BuildError::Stale)
+    );
+    assert_eq!(api.board().await, before, "the previous board, unchanged");
+    api.faults.release();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if api.build_board().await.is_ok() {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "never rebuilt");
+    }
+    let after = api.board().await;
+    assert!(
+        serde_json::to_value(&after.as_of).unwrap().as_str()
+            > serde_json::to_value(&before.as_of).unwrap().as_str()
+    );
+}
+
+/// The job itself, on the manual clock: it waits, then builds and publishes, again and again,
+/// and the route's as_of follows.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_job_rebuilds_on_its_interval(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    assert_eq!(api.get("/players/me", ALICE_SUB).await.status, 200);
+    api.build_board().await.unwrap();
+    let c = api.clock.clone();
+    let job = tokio::spawn(voidforge_server::leaderboard::run(
+        api.host.clone(),
+        Arc::new(move || voidforge_host::Clock::now_unix_ms(&c)),
+        EPOCH,
+        Duration::from_millis(50),
+        api.board.clone(),
+    ));
+    let mut seen = vec![api.board().await.as_of];
+    for step in 1..=3 {
+        api.clock.set(EPOCH + step * 1_000);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let b = api.board().await;
+            if &b.as_of != seen.last().unwrap() {
+                seen.push(b.as_of);
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the job never rebuilt"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    job.abort();
+    assert_eq!(seen.len(), 4);
 }
