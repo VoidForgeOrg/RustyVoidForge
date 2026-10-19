@@ -319,6 +319,14 @@ Table `snapshots`:
 | `payload` | bytea | Serialized `World`, including the queue and derived fields |
 | `created_at` | timestamptz | When it was taken |
 
+Table `universe` (one row):
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `epoch_unix_ms` | bigint | The universe epoch: wall-clock Unix ms of game time 0, from 1970-01-01 up to 2100-01-01 |
+| `created_at` | timestamptz | When it was recorded |
+
+- The epoch is recorded once, in the transaction that writes the first snapshot, so a universe never exists without it, and it never changes: a changed epoch would move game time for every player. The server reads it at startup and refuses a universe without one (D-050).
 - An `advance` record stores events that fired with no command, so the log is a complete history of events and commands. Replay recomputes them and checks they match; it never applies them. An advance that fires no events isn't recorded; replay reproduces it, because the next logged step reaches the same state (D-036).
 - Snapshots are taken between steps on a schedule and at shutdown. A restore uses the snapshot as is, so a restored engine is byte-identical to one that never stopped.
 - Recovery loads the newest snapshot with a matching build, replays later records, checks their recorded events, then advances to now.
@@ -406,7 +414,7 @@ One engine per universe is enough for the MVP: events are sparse, and each one r
 - Observability: inbox depth, event lag (now minus the oldest due entry), step latency, append latency, snapshot age, and each snapshot's state hash, all exported through OpenTelemetry: the numbers as metrics, the hash as an attribute on the snapshot span.
 - Tracing: OpenTelemetry spans follow each command from the API layer through the inbox wait, the engine step and the log append, carrying its `seq`, type and player ID. Steps that only process scheduled events get spans of their own, and everything exports over OTLP to any collector.
 - Instrumentation lives in the shell only. The core stays free of clocks and I/O: it returns step statistics, such as events processed and planets re-solved, as plain data that the shell records.
-- Deploys: stop accepting commands, snapshot, start the new build from that snapshot, resume. A rules-only change needs no deploy when the rules table is loaded as data: append a `rules_change` record.
+- Deploys: stop accepting commands, snapshot, start the new build from that snapshot, resume. `voidforge-server serve` does the first two on SIGINT or SIGTERM: it drains in-flight requests for a bounded time, stops the host, and exits 0 only when the final snapshot is at the log head (D-050). A rules-only change needs no deploy when the rules table is loaded as data: append a `rules_change` record.
 
 ## Design decisions
 

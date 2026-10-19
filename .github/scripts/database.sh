@@ -109,8 +109,8 @@ DATABASE_URL="$cli_url" cargo sqlx prepare --workspace --check -- --all-targets
 
 echo "--- store, host and server tests against Postgres"
 # Only the Postgres binaries (store's database, host's, replay's and the server's postgres, host's
-# crash, the server's accounts and routes): the other ignored tests are the determinism suites' two-process
+# crash, the server's accounts, routes and serve): the other ignored tests are the determinism suites' two-process
 # runs, the crash harnesses' children and the nightly run.
 SQLX_OFFLINE=true cargo nextest run --workspace --run-ignored only --no-fail-fast --locked \
-    -E 'binary(=database) | binary(=postgres) | (binary(=crash) & test(=every_retried_command_ends_with_exactly_one_outcome_on_postgres)) | (binary(=accounts) & !test(=accounts_child)) | binary(=routes)'
+    -E 'binary(=database) | binary(=postgres) | (binary(=crash) & test(=every_retried_command_ends_with_exactly_one_outcome_on_postgres)) | (binary(=accounts) & !test(=accounts_child)) | binary(=routes) | binary(=serve)'
 
