@@ -154,6 +154,7 @@ allow = [
     # (P1.3, decision log D-022), with what it pulls in.
     { crate = "serde_json" },
     { crate = "serde_urlencoded" },
+    { crate = "ryu" },
     { crate = "zmij" },
     # voidforge-rules parsing (P1.2, decision log D-020): serde and toml with what they pull in.
     { crate = "serde" },

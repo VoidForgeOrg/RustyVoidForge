@@ -1215,7 +1215,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - every test records each (route, status) it sees, and its harness checks the document declares them, so a handler can't answer a status the contract doesn't name.
   - **`serve` is its own package, P3.4s** (T8; the advisor's D-048). P3.4's QA runs an in-process server over a seeded `voidforge_dev` with real dex.
   - **Dependencies:**
-    - **axum gains its `query` feature:** one new crate, `serde_urlencoded`.
+    - **axum gains its `query` feature:** two new crates, `serde_urlencoded` and `ryu`, which it uses.
     - **insta `=1.46.1`** (dev; default features off, plus `json`) for the contract snapshots. It adds seven crates: insta, similar, tempfile, fastrand, rustix, errno and linux-raw-sys.
 - Tests:
   - **`crates/voidforge-server/tests/routes.rs`**, in the database stage: `database.sh` gains the `routes` binary. It runs the real router over HTTP, a real host recovered from Postgres, `Players` and a dex stand-in (shared with `tests/auth.rs` through `tests/common/dex.rs`), on a universe from testkit's `WorldBuilder` with fixed UUIDv7 players.
@@ -1223,7 +1223,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **The contract snapshots** are in `tests/snapshots/`.
   - **The core:** `crates/voidforge-testkit/tests/views.rs` checks the roster and validity for an owner and a non-owner with a hidden inbound fleet, through the planet, near, player and fleets queries, and checks that staleness stays the true validity's.
 - Carried:
-  - **P3.4s:** `serve`, the durable epoch (D-044), recovery, bind, `refresh_forever`, and clean shutdown.
+  - **P3.4s:** `serve`, the durable epoch (D-044), recovery, bind, and clean shutdown. With it go D-046's serve-only carries (`serve` flattens `AuthArgs`, and `refresh_forever` runs beside the server) and D-047's (build `Players<PgAccounts>` in `serve`). P3.4 provides `api::router(AppState)` for it.
   - **P3.5:** the leaderboard replaces the 503.
   - **P3.8:** the rate limit, the 429 every path already declares.
 - Where it's enforced: `crates/voidforge-server/src/{api/, accounts.rs, lib.rs}`, `crates/voidforge-core/src/view.rs` (`view_for`), `crates/voidforge-host/src/lib.rs`, `crates/voidforge-api-types/src/lib.rs` and `openapi.json`, `crates/voidforge-server/tests/{routes.rs, common/, snapshots/}`, `crates/voidforge-testkit/tests/views.rs`, `.github/scripts/database.sh`, the Game Design (Universe and planets), the Architectural Design (Read side), D-045, `deny.toml`, the [version table](versions.md), and the core's, host's and server's AGENTS.md.

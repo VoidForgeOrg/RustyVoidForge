@@ -108,14 +108,23 @@ pub fn routes() -> Vec<Route> {
 
 /// The API.
 pub fn router(state: AppState) -> Router {
-    routes()
-        .into_iter()
-        .fold(Router::new(), |r, route| r.route(route.path, route.handler))
+    layered(
+        routes()
+            .into_iter()
+            .fold(Router::new(), |r, route| r.route(route.path, route.handler)),
+    )
+    .with_state(state)
+}
+
+/// The layers every route sits behind: `not_found` for an unknown route or method, the body
+/// limit, and a panic answered 500. Public so a test can put a panicking route behind exactly
+/// these.
+pub fn layered<S: Clone + Send + Sync + 'static>(routes: Router<S>) -> Router<S> {
+    routes
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::not_found)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(error::catch_panic))
-        .with_state(state)
 }
 
 // --- POST /commands ---

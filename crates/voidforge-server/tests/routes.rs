@@ -665,9 +665,11 @@ async fn every_malformed_body_is_400_and_applies_nothing(pool: PgPool) {
     let api = api(&pool, world(0, 0), |_| {}).await;
     let token = api.token(ALICE_SUB);
     let home = api.ids.alice_home.0;
+    // A valid command, padded with JSON whitespace past the 64 KiB limit: only the limit
+    // refuses it.
     let big = format!(
-        r#"{{"type":"build_building","payload":{{"planet_id":{home},"building_type":"drill","x":"{}"}}}}"#,
-        "x".repeat(70 * 1024)
+        r#"{{"type":"build_building","payload":{{"planet_id":{home},"building_type":"drill"}}}}{}"#,
+        " ".repeat(70 * 1024)
     );
     let cases: Vec<(&str, String)> = vec![
         ("join_game", r#"{"type":"join_game"}"#.to_owned()),
@@ -1217,6 +1219,28 @@ async fn the_router_and_the_document_have_the_same_routes(pool: PgPool) {
             r.method
         );
     }
+}
+
+/// A panicking handler, behind the router's own layers, answers 500 `internal` with a generic
+/// body, never a dropped connection or the panic's text.
+#[tokio::test]
+async fn a_panicking_handler_answers_500_internal() {
+    let app = voidforge_server::api::layered(axum::Router::new().route(
+        "/boom",
+        axum::routing::get(|| async {
+            panic!("secret detail");
+            #[allow(unreachable_code)]
+            ""
+        }),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let r = reqwest::get(format!("{base}/boom")).await.unwrap();
+    assert_eq!(r.status().as_u16(), 500);
+    let body: Value = r.json().await.unwrap();
+    assert_eq!(body["code"], "internal");
+    assert!(!body.to_string().contains("secret"), "{body}");
 }
 
 /// The statuses this suite saw, per route, are summed here only as documentation; each test's
