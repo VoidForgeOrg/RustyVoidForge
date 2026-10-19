@@ -54,7 +54,15 @@ fn rules_path() -> String {
 /// `seed` with a small universe and `epoch`; its exit code.
 fn seed(url: &str, epoch: i64) -> i32 {
     let out = Command::new(BIN)
-        .args(["seed", "--seed", "7", "--players", "10", "--rules", &rules_path()])
+        .args([
+            "seed",
+            "--seed",
+            "7",
+            "--players",
+            "10",
+            "--rules",
+            &rules_path(),
+        ])
         .args(["--epoch-unix-ms", &epoch.to_string(), "--json"])
         .env("DATABASE_URL", url)
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -172,7 +180,12 @@ fn request(
     })
 }
 
-fn call(method: &'static str, url: String, token: Option<String>, key: Option<&'static str>) -> Reply {
+fn call(
+    method: &'static str,
+    url: String,
+    token: Option<String>,
+    key: Option<&'static str>,
+) -> Reply {
     request(method, url, token, key).join().unwrap().unwrap()
 }
 
@@ -189,7 +202,14 @@ struct Serve {
 fn serve(url: &str, issuer: &str, extra: &[&str]) -> Serve {
     let mut child = Command::new(BIN)
         .args(["serve", "--database-url", url, "--rules", &rules_path()])
-        .args(["--bind", "127.0.0.1:0", "--issuer", issuer, "--audience", "voidforge-cli"])
+        .args([
+            "--bind",
+            "127.0.0.1:0",
+            "--issuer",
+            issuer,
+            "--audience",
+            "voidforge-cli",
+        ])
         .args(extra)
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
         .env_remove("DATABASE_URL")
@@ -281,7 +301,11 @@ impl Serve {
     fn logged(&self, text: &str) {
         let deadline = Instant::now() + PATIENCE;
         while !self.stderr().contains(text) {
-            assert!(Instant::now() < deadline, "never logged {text:?}:\n{}", self.stderr());
+            assert!(
+                Instant::now() < deadline,
+                "never logged {text:?}:\n{}",
+                self.stderr()
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -300,7 +324,10 @@ impl Serve {
             if Instant::now() > deadline {
                 let _ = self.child.kill();
                 let _ = self.child.wait();
-                panic!("serve didn't exit within {within:?}; stderr:\n{}", self.stderr());
+                panic!(
+                    "serve didn't exit within {within:?}; stderr:\n{}",
+                    self.stderr()
+                );
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -367,7 +394,10 @@ async fn append_waits_on_a_lock(pool: &PgPool) {
         if waiting > 0 {
             return;
         }
-        assert!(Instant::now() < deadline, "the append never waited on the lock");
+        assert!(
+            Instant::now() < deadline,
+            "the append never waited on the lock"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
@@ -411,7 +441,10 @@ async fn restart_cycle(pool: &PgPool, signal: &str) {
     s.signal(signal);
     let (code, stderr) = s.exit(PATIENCE);
     assert_eq!(code, 0, "{stderr}");
-    assert!(stderr.contains(&format!("signal=\"SIG{signal}\"")), "{stderr}");
+    assert!(
+        stderr.contains(&format!("signal=\"SIG{signal}\"")),
+        "{stderr}"
+    );
     let (snapshot, head) = snapshot_and_head(pool).await;
     assert!(head >= 2, "the join and the command are records");
     assert_eq!(snapshot, head, "the final snapshot is at the log head");
@@ -430,10 +463,16 @@ async fn restart_cycle(pool: &PgPool, signal: &str) {
     .fetch_one(pool)
     .await
     .unwrap();
-    assert_eq!(recovered, 0, "recovered from the shutdown snapshot: no tail to replay");
+    assert_eq!(
+        recovered, 0,
+        "recovered from the shutdown snapshot: no tail to replay"
+    );
     // A repeated key gets its first answer; a new command's game time is later.
     let again = call("POST", s.url("/commands"), Some(token.clone()), Some("k-1"));
-    assert_eq!(again.body, first.body, "the key's first answer, across the restart");
+    assert_eq!(
+        again.body, first.body,
+        "the key's first answer, across the restart"
+    );
     let later = call("POST", s.url("/commands"), Some(token), Some("k-2"));
     assert_eq!(later.status, 422);
     let times: Vec<i64> = sqlx::query_scalar("SELECT game_time FROM log_records ORDER BY seq")
@@ -441,13 +480,15 @@ async fn restart_cycle(pool: &PgPool, signal: &str) {
         .await
         .unwrap();
     assert!(times.windows(2).all(|w| w[0] <= w[1]), "{times:?}");
-    let later_time: i64 = sqlx::query_scalar(
-        "SELECT game_time FROM log_records WHERE idempotency_key = 'k-2'",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    assert!(later_time > last_time, "game time continues: {later_time} after {last_time}");
+    let later_time: i64 =
+        sqlx::query_scalar("SELECT game_time FROM log_records WHERE idempotency_key = 'k-2'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        later_time > last_time,
+        "game time continues: {later_time} after {last_time}"
+    );
     s.signal("TERM");
     assert_eq!(s.exit(PATIENCE).0, 0);
 }
@@ -460,7 +501,13 @@ async fn an_empty_database_is_refused_and_left_without_tables(pool: PgPool) {
     let dex = DexServer::start();
     assert_eq!(tables(&pool).await, 0);
     let out = Command::new(BIN)
-        .args(["serve", "--database-url", &url(&pool), "--rules", &rules_path()])
+        .args([
+            "serve",
+            "--database-url",
+            &url(&pool),
+            "--rules",
+            &rules_path(),
+        ])
         .args(["--bind", "127.0.0.1:0", "--issuer", &dex.issuer])
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
         .output()
@@ -478,7 +525,10 @@ async fn an_empty_database_is_refused_and_left_without_tables(pool: PgPool) {
 #[ignore = "needs Postgres: just db-test"]
 async fn a_universe_without_a_recorded_epoch_is_refused(pool: PgPool) {
     let (url, dex) = seeded(&pool).await;
-    sqlx::query("DELETE FROM universe").execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM universe")
+        .execute(&pool)
+        .await
+        .unwrap();
     let before = snapshot_and_head(&pool).await;
     let out = Command::new(BIN)
         .args(["serve", "--database-url", &url, "--rules", &rules_path()])
@@ -488,7 +538,10 @@ async fn a_universe_without_a_recorded_epoch_is_refused(pool: PgPool) {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(3), "{stderr}");
-    assert!(stderr.contains("seeded before its epoch was recorded"), "{stderr}");
+    assert!(
+        stderr.contains("seeded before its epoch was recorded"),
+        "{stderr}"
+    );
     assert!(stderr.contains("just seed-reset"), "{stderr}");
     assert_eq!(snapshot_and_head(&pool).await, before);
     assert_eq!(epoch_row(&pool).await, None, "no epoch was invented");
@@ -514,7 +567,12 @@ async fn seed_refuses_an_epoch_outside_the_window(pool: PgPool) {
 #[ignore = "needs Postgres: just db-test"]
 async fn serve_refuses_a_recorded_epoch_outside_the_window_and_the_check_holds_it(pool: PgPool) {
     let (url, dex) = seeded(&pool).await;
-    for (epoch, ok) in [(-1, false), (EPOCH_END, false), (0, true), (EPOCH_END - 1, true)] {
+    for (epoch, ok) in [
+        (-1, false),
+        (EPOCH_END, false),
+        (0, true),
+        (EPOCH_END - 1, true),
+    ] {
         let r = sqlx::query("UPDATE universe SET epoch_unix_ms = $1")
             .bind(epoch)
             .execute(&pool)
@@ -554,7 +612,10 @@ async fn serve_refuses_a_recorded_epoch_outside_the_window_and_the_check_holds_i
             .unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(3), "{epoch}: {stderr}");
-        assert!(stderr.contains("outside 1970-01-01 to 2100-01-01"), "{stderr}");
+        assert!(
+            stderr.contains("outside 1970-01-01 to 2100-01-01"),
+            "{stderr}"
+        );
     }
 }
 
@@ -580,7 +641,10 @@ async fn an_epoch_at_the_windows_end_serves_and_its_records_are_durable(pool: Pg
         .fetch_all(&pool)
         .await
         .unwrap();
-    assert!(!times.is_empty() && times.iter().all(|&t| t == 0), "{times:?}");
+    assert!(
+        !times.is_empty() && times.iter().all(|&t| t == 0),
+        "{times:?}"
+    );
     let wall_ok: bool = sqlx::query_scalar(
         "SELECT bool_and(wall_time BETWEEN now() - interval '1 hour' AND now()) FROM log_records",
     )
@@ -628,7 +692,11 @@ async fn dex_down_at_startup_answers_503_until_the_keys_load(pool: PgPool) {
         if r.status == 200 {
             break;
         }
-        assert_eq!(r.status, 503, "never anything but 503 before the keys load: {:?}", r.body);
+        assert_eq!(
+            r.status, 503,
+            "never anything but 503 before the keys load: {:?}",
+            r.body
+        );
         assert!(Instant::now() < deadline, "the keys never loaded");
         std::thread::sleep(Duration::from_millis(250));
     }
@@ -645,7 +713,10 @@ async fn a_request_in_flight_at_shutdown_finishes_within_the_drain(pool: PgPool)
     let (url, dex) = seeded(&pool).await;
     let token = dex.token(ALICE_SUB);
     let s = serve(&url, &dex.issuer, &[]);
-    assert_eq!(call("GET", s.url("/players/me"), Some(token.clone()), None).status, 200);
+    assert_eq!(
+        call("GET", s.url("/players/me"), Some(token.clone()), None).status,
+        200
+    );
     let (_, head) = snapshot_and_head(&pool).await;
     let mut lock = pool.begin().await.unwrap();
     sqlx::query("LOCK TABLE log_records IN EXCLUSIVE MODE")
@@ -657,7 +728,10 @@ async fn a_request_in_flight_at_shutdown_finishes_within_the_drain(pool: PgPool)
     s.signal("TERM");
     s.logged("shutting down");
     lock.commit().await.unwrap();
-    let reply = in_flight.join().unwrap().expect("answered within the drain");
+    let reply = in_flight
+        .join()
+        .unwrap()
+        .expect("answered within the drain");
     assert_eq!(reply.status, 422, "{:?}", reply.body);
     let (code, stderr) = s.exit(PATIENCE);
     assert_eq!(code, 0, "{stderr}");
@@ -675,14 +749,22 @@ async fn a_request_held_past_the_drain_is_cut_off_and_the_stop_is_unclean(pool: 
     let (url, dex) = seeded(&pool).await;
     let token = dex.token(ALICE_SUB);
     let s = serve(&url, &dex.issuer, &["--drain-secs", "1"]);
-    assert_eq!(call("GET", s.url("/players/me"), Some(token.clone()), None).status, 200);
+    assert_eq!(
+        call("GET", s.url("/players/me"), Some(token.clone()), None).status,
+        200
+    );
     let (_, head) = snapshot_and_head(&pool).await;
     let mut lock = pool.begin().await.unwrap();
     sqlx::query("LOCK TABLE log_records IN EXCLUSIVE MODE")
         .execute(&mut *lock)
         .await
         .unwrap();
-    let in_flight = request("POST", s.url("/commands"), Some(token.clone()), Some("held"));
+    let in_flight = request(
+        "POST",
+        s.url("/commands"),
+        Some(token.clone()),
+        Some("held"),
+    );
     append_waits_on_a_lock(&pool).await;
     s.signal("TERM");
     s.logged("cutting them off");
@@ -696,12 +778,19 @@ async fn a_request_held_past_the_drain_is_cut_off_and_the_stop_is_unclean(pool: 
     );
     let (snapshot, now_head) = snapshot_and_head(&pool).await;
     assert_eq!(now_head, head + 1, "the append the host was in completed");
-    assert_eq!(snapshot, now_head, "the host stopped and wrote its snapshot anyway");
+    assert_eq!(
+        snapshot, now_head,
+        "the host stopped and wrote its snapshot anyway"
+    );
     let s = serve(&url, &dex.issuer, &[]);
     assert_eq!(s.seq(), now_head);
     let retry = call("POST", s.url("/commands"), Some(token), Some("held"));
     assert_eq!(retry.status, 422);
-    assert_eq!(snapshot_and_head(&pool).await.1, now_head, "the retry appended nothing");
+    assert_eq!(
+        snapshot_and_head(&pool).await.1,
+        now_head,
+        "the retry appended nothing"
+    );
     s.signal("INT");
     assert_eq!(s.exit(PATIENCE).0, 0);
 }
@@ -713,14 +802,22 @@ async fn a_second_signal_exits_at_once_and_recovery_holds(pool: PgPool) {
     let (url, dex) = seeded(&pool).await;
     let token = dex.token(ALICE_SUB);
     let s = serve(&url, &dex.issuer, &["--drain-secs", "60"]);
-    assert_eq!(call("GET", s.url("/players/me"), Some(token.clone()), None).status, 200);
+    assert_eq!(
+        call("GET", s.url("/players/me"), Some(token.clone()), None).status,
+        200
+    );
     let (_, head) = snapshot_and_head(&pool).await;
     let mut lock = pool.begin().await.unwrap();
     sqlx::query("LOCK TABLE log_records IN EXCLUSIVE MODE")
         .execute(&mut *lock)
         .await
         .unwrap();
-    let in_flight = request("POST", s.url("/commands"), Some(token.clone()), Some("second"));
+    let in_flight = request(
+        "POST",
+        s.url("/commands"),
+        Some(token.clone()),
+        Some("second"),
+    );
     append_waits_on_a_lock(&pool).await;
     s.signal("INT");
     s.logged("shutting down");
@@ -728,19 +825,29 @@ async fn a_second_signal_exits_at_once_and_recovery_holds(pool: PgPool) {
     s.signal("INT");
     let (code, stderr) = s.exit(Duration::from_secs(5));
     assert_eq!(code, 6, "{stderr}");
-    assert!(started.elapsed() < Duration::from_secs(5), "at once, not after the 60 s drain");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "at once, not after the 60 s drain"
+    );
     assert!(stderr.contains("second signal"), "{stderr}");
     lock.rollback().await.unwrap();
     let _ = in_flight.join().unwrap();
     // The process is gone, so its append's transaction is too: the command is absent.
     let (snapshot, now_head) = snapshot_and_head(&pool).await;
-    assert_eq!(now_head, head, "the unacknowledged command was never written");
+    assert_eq!(
+        now_head, head,
+        "the unacknowledged command was never written"
+    );
     let s = serve(&url, &dex.issuer, &[]);
     assert_eq!(s.seq(), now_head);
     assert!(snapshot <= now_head);
     let retry = call("POST", s.url("/commands"), Some(token), Some("second"));
     assert_eq!(retry.status, 422);
-    assert_eq!(snapshot_and_head(&pool).await.1, now_head + 1, "applied once, now");
+    assert_eq!(
+        snapshot_and_head(&pool).await.1,
+        now_head + 1,
+        "applied once, now"
+    );
     s.signal("INT");
     assert_eq!(s.exit(PATIENCE).0, 0);
 }
@@ -755,7 +862,12 @@ async fn after_sigkill_serve_recovers_from_the_log(pool: PgPool) {
     let s = serve(&url, &dex.issuer, &[]);
     let me = call("GET", s.url("/players/me"), Some(token.clone()), None);
     assert_eq!(me.status, 200);
-    let first = call("POST", s.url("/commands"), Some(token.clone()), Some("kill-1"));
+    let first = call(
+        "POST",
+        s.url("/commands"),
+        Some(token.clone()),
+        Some("kill-1"),
+    );
     assert_eq!(first.status, 422);
     s.kill();
     let (snapshot, head) = snapshot_and_head(&pool).await;
@@ -768,7 +880,10 @@ async fn after_sigkill_serve_recovers_from_the_log(pool: PgPool) {
     assert_eq!(after["player_id"], me.body["player_id"]);
     assert_eq!(after["homeworld_id"], me.body["homeworld_id"]);
     let again = call("POST", s.url("/commands"), Some(token), Some("kill-1"));
-    assert_eq!(again.body, first.body, "the acknowledged command is in the log");
+    assert_eq!(
+        again.body, first.body,
+        "the acknowledged command is in the log"
+    );
     s.signal("TERM");
     assert_eq!(s.exit(PATIENCE).0, 0);
 }
@@ -783,7 +898,10 @@ async fn the_host_dying_while_serving_exits_6_and_a_restart_recovers(pool: PgPoo
     let (url, dex) = seeded(&pool).await;
     let token = dex.token(ALICE_SUB);
     let s = serve(&url, &dex.issuer, &[]);
-    assert_eq!(call("GET", s.url("/players/me"), Some(token.clone()), None).status, 200);
+    assert_eq!(
+        call("GET", s.url("/players/me"), Some(token.clone()), None).status,
+        200
+    );
     let (_, head) = snapshot_and_head(&pool).await;
     sqlx::query(
         "CREATE FUNCTION refuse_append() RETURNS trigger LANGUAGE plpgsql AS
@@ -799,20 +917,35 @@ async fn the_host_dying_while_serving_exits_6_and_a_restart_recovers(pool: PgPoo
     .execute(&pool)
     .await
     .unwrap();
-    let r = call("POST", s.url("/commands"), Some(token.clone()), Some("dies"));
+    let r = call(
+        "POST",
+        s.url("/commands"),
+        Some(token.clone()),
+        Some("dies"),
+    );
     assert_eq!(r.status, 503, "{:?}", r.body);
     let (code, stderr) = s.exit(PATIENCE);
     assert_eq!(code, 6, "{stderr}");
-    assert!(stderr.contains("the test refuses this append"), "the failure fired:\n{stderr}");
+    assert!(
+        stderr.contains("the test refuses this append"),
+        "the failure fired:\n{stderr}"
+    );
     assert!(stderr.contains("the host stopped on its own"), "{stderr}");
-    assert_eq!(snapshot_and_head(&pool).await.1, head, "nothing was written");
+    assert_eq!(
+        snapshot_and_head(&pool).await.1,
+        head,
+        "nothing was written"
+    );
     sqlx::query("DROP TRIGGER refuse_append ON log_records")
         .execute(&pool)
         .await
         .unwrap();
     let s = serve(&url, &dex.issuer, &[]);
     assert_eq!(s.seq(), head);
-    assert_eq!(call("POST", s.url("/commands"), Some(token), Some("dies")).status, 422);
+    assert_eq!(
+        call("POST", s.url("/commands"), Some(token), Some("dies")).status,
+        422
+    );
     s.signal("INT");
     assert_eq!(s.exit(PATIENCE).0, 0);
 }

@@ -82,7 +82,10 @@ fn seed_refuses_an_epoch_outside_the_window_before_connecting() {
             .unwrap();
         let stdout = String::from_utf8(out.stdout).unwrap();
         assert_eq!(out.status.code(), Some(3), "{epoch}: {stdout}");
-        assert!(stdout.contains("outside 1970-01-01 to 2100-01-01"), "{stdout}");
+        assert!(
+            stdout.contains("outside 1970-01-01 to 2100-01-01"),
+            "{stdout}"
+        );
     }
 }
 
@@ -91,7 +94,10 @@ fn seed_refuses_an_epoch_outside_the_window_before_connecting() {
 /// usage errors before any connection; a bad URL is an input error and is never printed.
 #[test]
 fn serve_usage_settings_and_a_bad_url() {
-    let help = Command::new(BIN).args(["serve", "--help"]).output().unwrap();
+    let help = Command::new(BIN)
+        .args(["serve", "--help"])
+        .output()
+        .unwrap();
     let help = String::from_utf8(help.stdout).unwrap();
     assert!(help.contains("Exit codes: 0 stopped cleanly"), "{help}");
     assert!(help.contains("6 stopped uncleanly"), "{help}");
@@ -100,9 +106,12 @@ fn serve_usage_settings_and_a_bad_url() {
     let serve = |args: &[&str], url: Option<&str>| {
         let mut c = Command::new(BIN);
         c.arg("serve").args(["--rules", &rules()]).args(args);
-        c.env("DATABASE_URL", "postgres://u:secret-password@127.0.0.1/voidforge")
-            .env_remove("VOIDFORGE_DATABASE_URL")
-            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+        c.env(
+            "DATABASE_URL",
+            "postgres://u:secret-password@127.0.0.1/voidforge",
+        )
+        .env_remove("VOIDFORGE_DATABASE_URL")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT");
         if let Some(url) = url {
             c.args(["--database-url", url]);
         }
