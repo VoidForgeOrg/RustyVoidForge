@@ -737,6 +737,89 @@ async fn every_malformed_body_is_400_and_applies_nothing(pool: PgPool) {
     assert_eq!(api.records().await, 0, "nothing was applied");
 }
 
+/// The body limit's exact boundary (dev-qa's Q3): a command padded to exactly 64 KiB is read
+/// (and refused by the game, 422), one byte more is 400 `malformed_body`.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_body_limit_is_exactly_64_kib(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    let token = api.token(ALICE_SUB);
+    let command = r#"{"type":"recall_fleet","payload":{"fleet_id":424242}}"#;
+    let padded = |len: usize| format!("{command}{}", " ".repeat(len - command.len()));
+    let limit = voidforge_server::api::MAX_BODY_BYTES;
+    let at = api
+        .send(
+            Method::POST,
+            "/commands",
+            Some(&token),
+            &[("idempotency-key", "at")],
+            Some(&padded(limit)),
+        )
+        .await;
+    assert_error(&at, 422, "unknown_fleet");
+    let over = api
+        .send(
+            Method::POST,
+            "/commands",
+            Some(&token),
+            &[("idempotency-key", "over")],
+            Some(&padded(limit + 1)),
+        )
+        .await;
+    assert_error(&over, 400, "malformed_body");
+}
+
+/// A key byte that isn't ASCII is 400 `invalid_idempotency_key`, never read as lossy text, and
+/// nothing is applied (dev-qa's Q2).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_non_ascii_key_byte_is_invalid(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    let r = api
+        .http
+        .post(format!("{}/commands", api.base))
+        .bearer_auth(api.token(ALICE_SUB))
+        .header("content-type", "application/json")
+        .header(
+            "idempotency-key",
+            reqwest::header::HeaderValue::from_bytes(b"caf\xe9").unwrap(),
+        )
+        .body(build_drill(api.ids.alice_home).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400);
+    let body: Value = r.json().await.unwrap();
+    assert_eq!(body["code"], "invalid_idempotency_key");
+    assert_eq!(api.records().await, 0);
+}
+
+/// A wall clock behind the World's time (an NTP step back, or recovery on a slower clock) still
+/// answers every view at the World's time, never 500 (dev-qa's Q1).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_clock_behind_the_world_answers_at_the_worlds_time(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    api.clock.set(EPOCH + 5_000);
+    assert_eq!(
+        api.command(ALICE_SUB, "at-5s", &build_drill(api.ids.alice_home))
+            .await
+            .status,
+        200
+    );
+    api.clock.set(EPOCH);
+    for path in [
+        format!("/planets/{}", api.ids.alice_home.0),
+        "/players/me".to_owned(),
+        "/players/me/fleets".to_owned(),
+        "/planets?near=0,0,0&radius=10".to_owned(),
+    ] {
+        let r = api.get(&path, ALICE_SUB).await;
+        assert_eq!(r.status, 200, "{path}: {r:?}");
+        assert_eq!(r.body["as_of"], json!("2025-10-09T08:53:25.000Z"), "{path}");
+    }
+}
+
 /// A full inbox: 503 `busy`, Retry-After 1. A stopped host: 503 `unavailable`, Retry-After 5.
 #[sqlx::test(migrator = "MIGRATOR")]
 #[ignore = "needs Postgres: just db-test"]
