@@ -1023,3 +1023,93 @@ Each entry records its date, the package that made it, the decision, the reasons
   - dev-qa's 11 drift mutants, of which 4 were caught before, are now all caught.
   - The integral float is named as the second deliberate difference, above.
 - Where it's enforced: `crates/voidforge-api-types/` (`src/`, `openapi.json`, `tests/contract.rs`, `tests/openapi_file.rs`), `crates/voidforge-server/tests/api_codes.rs`, `justfile` (`openapi`), `deny.toml`, the [version table](versions.md), the Architectural Design's Read side and API.
+
+### D-046: Token checks
+
+- Date and package: 2026-10-19, P3.2. Proposed by dev-build (`slices/32-p3-2-token-checks/proposal-token-checks.md`). Lead ruling with five amendments (`ruling-lead.md`). None of it is game intent.
+- Decision:
+  - **`voidforge_server::auth`.** The server crate gains a library target. It's still one of D-003's binary crates and still not in `[workspace.dependencies]`; only its own tests use the library.
+    - Two web-isolation guardrail fixtures relied on the server having no library ("cargo ignores a path dependency on a binary-only crate"). They now use voidforge-replay, which is still binary-only, to keep testing that behaviour.
+    - An api-types → server path dependency would now be a cycle, because the server depends on api-types.
+    - Through `voidforge_server::auth`, a request's `Authorization: Bearer <dex ID token>` becomes a verified `Principal { issuer, subject }`, through an axum extractor over `Arc<TokenVerifier>`, or a refusal. P3.3 maps the principal to a player, and P3.4 puts it on every route. No placeholder route is added to the binary.
+  - **The order, and nothing ever turns into an accept:**
+    1. **The header, before any key state** (amendment 2):
+       - no `Authorization` header is 401 `missing_token`;
+       - anything but exactly one well-formed `Bearer <token>` of JWT characters, at most 8 KiB, is 401 `invalid_token`. That covers another scheme, an empty token, two headers, extra spaces and non-ASCII, and holds even while keys are unavailable. The scheme is case-insensitive.
+    2. **The token's header:** `alg` must be **RS256**, before any key is touched, so never `none`, HS* (no confusion with a public key used as a secret), ES* or PS*. A `kid` of 1 to 128 printable ASCII bytes is required; we never try every key.
+    3. **The key, by `kid`.** When no key set is usable, or an unknown `kid`'s refresh fails, the answer is **503 `unavailable` with `Retry-After`**: the token may be valid and can't be checked now.
+       - `Retry-After` is the seconds until the next fetch may run, from 1 to 30 (amendment 3).
+       - A fresh set without the `kid` is 401: it's unknown.
+    4. **The signature**, then **the claims**, checked by us rather than by jsonwebtoken (its claim checks are off, so the edges are explicit):
+       - `iss` equals the configured issuer exactly;
+       - **every** `aud` value (a string or an array, never empty) is in the allowlist. A token minted for anyone else too is refused; jsonwebtoken's own check would accept any overlap;
+       - `exp` is required, with the leeway;
+       - `nbf`, if present, is checked with the leeway;
+       - `iat` is required, and not past now plus the leeway;
+       - `sub` is 1 to 255 bytes, the accounts table's `subject`.
+       - Numeric claims are non-negative integers within u64. Negative, float, string and beyond-u64 values don't decode, so the token is invalid. The comparisons saturate, so `exp` at u64::MAX is a far-future token, not a wrap.
+  - **The key cache:**
+    - Discovery comes from the issuer alone: the document's `issuer` must equal the configured one exactly, or the fetch fails. A mismatch is never trusted.
+    - Only JWKs with `kty` RSA, `alg` RS256 or absent, `use` sig or absent, a well-formed `kid`, and an `n` and `e` that make a key are loaded. A set with none is a failed fetch.
+    - Each fetch has a 5 s timeout, a 64 KiB body cap, and no redirects.
+    - Refresh runs single-flight, so concurrent requests share one fetch. On an unknown `kid` it runs **at most once per floor** (10 s), and a `kid` that isn't well-formed never triggers one.
+    - It refreshes periodically, every 15 min (`refresh_forever`), which also drops keys dex no longer publishes.
+    - A failed fetch keeps the last good keys. Keys older than 24 h without a successful fetch are dropped, which means 503.
+    - At startup with dex down, the server starts, and the refresher retries from 1 s doubling to 30 s.
+    - **The accepted cost:** a token signed with a key dex rotated in within the floor of a previous fetch gets 401 until the next allowed fetch, at most 10 s.
+  - **Responses:**
+    - The body is D-045's `ErrorBody`. The message never names the check, and the token's text never appears in a body or a log.
+    - The failing check is logged at debug level.
+    - `WWW-Authenticate: Bearer realm="voidforge"` comes with `missing_token`, plus `, error="invalid_token"` with `invalid_token` (RFC 6750).
+    - The signature check is aws-lc's, and the early refusals depend only on public header bytes.
+  - **Configuration** (`AuthArgs`, clap with env fallbacks; P3.4's `serve` flattens it):
+
+    | Setting | Env | Default | Bound at startup (amendment 4) |
+    | --- | --- | --- | --- |
+    | `--issuer` | `VOIDFORGE_ISSUER` | `http://localhost:5556/dex` | an http(s) URL |
+    | `--audience` | `VOIDFORGE_AUDIENCES` | `voidforge-web,voidforge-cli` | at least one, none empty |
+    | `--token-leeway-secs` | `VOIDFORGE_TOKEN_LEEWAY_SECS` | 30 | at most 300 |
+    | `--jwks-refresh-secs` | `VOIDFORGE_JWKS_REFRESH_SECS` | 900 | 60 to 86,400 |
+    | `--jwks-min-refresh-secs` | `VOIDFORGE_JWKS_MIN_REFRESH_SECS` | 10 | 1 to 3,600, at most the refresh |
+    | `--jwks-max-stale-secs` | `VOIDFORGE_JWKS_MAX_STALE_SECS` | 86,400 | from the refresh to 604,800 |
+
+    A setting out of range is a `ConfigError`, and the server refuses to start.
+  - **Dependencies** (measured before committing):
+    - **jsonwebtoken `=11.1.0`** on **aws_lc_rs** (default features off, so no PEM), **axum `=0.8.9`** (http1, tokio, json) and **reqwest `=0.13.5`** (adds json; no TLS). Together they add 18 crates, with no duplicate in the graph, and `cargo deny` advisories are ok.
+    - **The rust_crypto backend was rejected:** 44 crates, 6 duplicate families, and RUSTSEC-2023-0071 (the `rsa` crate's Marvin timing attack) would have needed an advisory ignore.
+    - **aws-lc-rs `=1.18.2`** is also a dev-dependency: the tests generate their RSA keys at run time, so no private key is committed.
+    - **ISC and BSD-3-Clause** join `deny.toml`'s license allow list (D-008): aws-lc-rs, aws-lc-sys and untrusted. reqwest joins the server's AGENTS.md allowlist (docs first).
+    - **What aws-lc-sys needs to build** (amendment 1): a C compiler. It builds with the system compiler (clang on macOS), with no cmake installed: measured at 19 s on macOS. CI's Linux runners build it in the `lint`, `test` and `database` jobs.
+  - **Tests:**
+    - **`tests/auth.rs`** (in `test`, over real HTTP) runs a local dex stand-in (discovery and keys, a fetch counter, failure on demand) and a test app guarded by the extractor. It covers the cases in the slice's proof map, including:
+      - rotation through an unknown `kid`;
+      - the floor under a flood of random `kid`s;
+      - single-flight under 20 concurrent requests;
+      - the periodic refresh dropping a key;
+      - dex down at start and later;
+      - stale keys;
+      - a discovery issuer mismatch;
+      - unusable and oversized key sets;
+      - the configuration bounds.
+
+      Every 401 is checked for its code and `WWW-Authenticate`, for an echoed token, and for any check named in the body.
+    - **`tests/dex.rs`** checks the real dex, `#[ignore]`d and run by **`just dex-test`**: discovery and keys load (any dex config), and a password-grant token for alice verifies while a tampered copy doesn't. The second test needs `DEX_CONFIG=config.ci.yaml just up`. **QA runs it** (amendment 5).
+- **Repair round 1** (QA PASS and review-r1 CLEAR on 4427641, with no accept path found; the follow-ups were folded in):
+  - **The floor counts from when a fetch finishes** (review-r1's R1-1). It was stamped when a fetch started, so with a dex slower than the floor, every queued unknown-`kid` request made its own fetch: review-r1 measured 53 fetches for 53 requests. Now the floor, and whether that fetch succeeded, are recorded when it ends.
+    - A request that waited for the lock looks at the cache again before fetching.
+    - Inside the floor, an unknown `kid` is 401 after a successful fetch and 503 after a failed one, so a down dex gets one fetch per floor too (dev-qa's Q9).
+    - The second look matters (corrected in repair round 2: round 1 called it equivalent, and dev-qa showed otherwise). In dev-qa's schedule, a waiter that gets the lock just past the floor would fetch again for a key another request had just fetched: one extra fetch, still within one per floor, and seconds of delay. `a_waiter_finds_a_key_another_request_just_fetched` pins it.
+  - **`crit` is refused** before any key is touched (RFC 7515 §4.1.11: a critical extension this verifier doesn't understand must be refused, and it understands none; dex never sets one).
+  - **The clock is never a sentinel** (R1-2): a system clock before 1970 is a 503 `unavailable`, logged loudly, not a time of 0.
+  - **The clock is read after the key lookup** (repair round 2, dev-qa's F1). Round 1 read it before, and the lookup can wait on the lock and on fetches (5 s each), so `exp`, `nbf` and `iat` were judged against the request's arrival. A token expiring during a 4 s wait was accepted. `expiry_is_judged_after_the_wait_for_keys` pins it.
+  - **The configured issuer is taken verbatim** (R1-3), trailing slash and all, so a mismatch with discovery or with `iss` fails loudly at the exact match instead of being trimmed away.
+  - **Decided, not missed** (dev-qa's I2): `iat` has no maximum age, because `exp` bounds a token's lifetime. `exp` at u64::MAX is a far-future token.
+  - **Tests added:** dev-qa's Q8 to Q11 (a malformed `kid` never fetches; a down dex gets one fetch per floor; an audience in another case or with a trailing space is refused; discovery's issuer with a trailing slash is another issuer); review-r1's slow-dex case (20 waiting requests, one fetch); `crit`; and the clock conversion.
+  - **A web → server guardrail fixture is restored** (dev-qa's Q2). With the server's library, cargo resolves the dependency, and the checker reports the declaration, the resolved path and every crate the server reaches. The fixture lists them exactly, so it changes when the server's dependencies do.
+- **Carried obligations:**
+  - **P5** (deployment):
+    - add a TLS feature to reqwest for an `https` issuer (until then, an https issuer means 503, never an accept);
+    - confirm aws-lc-sys builds in the cargo-chef image, and on musl if the image uses it.
+  - **P3.6:** bring `tests/dex.rs` into CI with the e2e job's dex.
+  - **P3.4:** put the extractor on every route, and run `refresh_forever` beside the server.
+- Where it's enforced: `crates/voidforge-server/src/{lib.rs, auth.rs}`, `crates/voidforge-server/tests/{auth.rs, dex.rs}`, `crates/voidforge-server/AGENTS.md`, `justfile` (`dex-test`), `deny.toml`, the [version table](versions.md).
