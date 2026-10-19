@@ -342,13 +342,6 @@ impl TokenVerifier {
             .kid
             .filter(|k| well_formed_kid(k))
             .ok_or(refuse(Check::KeyId))?;
-        // A clock before 1970 is an error, never a time of 0.
-        let Some(now) = unix_secs(SystemTime::now()) else {
-            tracing::error!("the system clock is before 1970: tokens can't be checked");
-            return Err(Refusal::Unavailable {
-                retry_after_secs: MAX_RETRY_SECS,
-            });
-        };
         let key = match self.key(&kid).await {
             Lookup::Found(key) => key,
             Lookup::Unknown => return Err(refuse(Check::UnknownKey)),
@@ -360,6 +353,15 @@ impl TokenVerifier {
         };
         let data = jsonwebtoken::decode::<Claims>(token, &key, &self.validation)
             .map_err(|_| refuse(Check::Signature))?;
+        // The time is read after the key lookup, which may wait on the lock and on fetches:
+        // `exp`, `nbf` and `iat` are judged as of now, not as of the request's arrival (repair
+        // round 2, dev-qa's F1). A clock before 1970 is an error, never a time of 0.
+        let Some(now) = unix_secs(SystemTime::now()) else {
+            tracing::error!("the system clock is before 1970: tokens can't be checked");
+            return Err(Refusal::Unavailable {
+                retry_after_secs: MAX_RETRY_SECS,
+            });
+        };
         self.claims(data.claims, now).map_err(refuse)
     }
 
@@ -411,7 +413,8 @@ impl TokenVerifier {
     /// The key for `kid`: from the cache, or after a refresh. Fetches run one at a time, and at
     /// most once per `min_refresh`, counted from when the last one **finished**, so a slow dex
     /// can't let queued requests each fetch (repair round 1, review-r1's R1-1). A request that
-    /// waited for another's fetch looks at the cache again before fetching itself.
+    /// waited for another's fetch looks at the cache again before fetching itself: past the floor
+    /// it would otherwise fetch a key that's already cached (dev-qa's schedule, repair round 2).
     async fn key(&self, kid: &str) -> Lookup {
         if let Some(key) = self.cached(kid) {
             return Lookup::Found(key);

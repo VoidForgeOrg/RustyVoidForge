@@ -889,3 +889,63 @@ async fn a_critical_header_is_refused() {
         .invalid(&token, "crit while dex is down");
     assert_eq!(h.fetches(), 0);
 }
+
+// --- Repair round 2 (dev-qa's F1 and F2) ---
+
+fn bearer_headers(token: &str) -> axum::http::HeaderMap {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+    headers
+}
+
+/// F1: the time is read after the key lookup. A token valid when the request arrived, which
+/// expires while the verifier waits 4 s for dex's keys, is refused.
+#[tokio::test]
+async fn expiry_is_judged_after_the_wait_for_keys() {
+    let key = TestKey::new("k1");
+    let h = Harness::default(&[&key]).await;
+    h.dex.delay_ms.store(4000, Ordering::SeqCst);
+    let mut c = claims(&h.issuer);
+    c["exp"] = json!(now() - 30 + 2); // valid for 2 more seconds, counting the leeway
+    let token = key.sign(&c);
+    h.token(&token)
+        .await
+        .invalid(&token, "expired while waiting for keys");
+}
+
+/// F2: the second look at the cache under the lock matters. A fetches (2 s) a set that newly
+/// holds kK; H (an unknown kid, whose task then blocks the thread 1.5 s) and B (kK, whose first
+/// look missed it) queue behind it. B gets the lock past the floor: without a second look it
+/// would fetch again for a key already cached.
+#[tokio::test]
+async fn a_waiter_finds_a_key_another_request_just_fetched() {
+    let k0 = TestKey::new("k0");
+    let kk = TestKey::new("kK");
+    let h = Harness::new(&[&k0], Duration::from_secs(1), Duration::from_secs(86_400)).await;
+    h.token(&k0.sign(&claims(&h.issuer))).await.accepted();
+    h.dex.keys.lock().unwrap().push(kk.jwk.clone());
+    h.dex.delay_ms.store(2000, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let before = h.fetches();
+    let tk = kk.sign(&claims(&h.issuer));
+    let stranger = TestKey::new("unknown-x");
+    let tx = stranger.sign(&claims(&h.issuer));
+    let (va, vh, vb) = (h.verifier.clone(), h.verifier.clone(), h.verifier.clone());
+    let (ta, tb) = (tk.clone(), tk.clone());
+    let a = tokio::spawn(async move { va.verify(&bearer_headers(&ta)).await.is_ok() });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let hh = tokio::spawn(async move {
+        let r = vh.verify(&bearer_headers(&tx)).await.is_ok();
+        std::thread::sleep(Duration::from_millis(1500)); // a busy thread
+        r
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let b = tokio::spawn(async move { vb.verify(&bearer_headers(&tb)).await.is_ok() });
+    let (ra, rh, rb) = (a.await.unwrap(), hh.await.unwrap(), b.await.unwrap());
+    assert_eq!(
+        (ra, rh, rb),
+        (true, false, true),
+        "A and B accepted, H refused"
+    );
+    assert_eq!(h.fetches() - before, 1, "B found kK on its second look");
+}
