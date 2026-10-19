@@ -79,6 +79,8 @@ struct Faults {
     hold: AtomicBool,
     gate: Semaphore,
     entered: watch::Sender<u64>,
+    /// Account lookups that returned.
+    lookups: watch::Sender<u64>,
     /// In a child: abort at this kill point.
     kill: Option<String>,
 }
@@ -96,6 +98,7 @@ impl Faults {
             hold: AtomicBool::new(false),
             gate: Semaphore::new(0),
             entered: watch::Sender::new(0),
+            lookups: watch::Sender::new(0),
             kill: point,
         }
     }
@@ -106,6 +109,14 @@ impl Faults {
             std::io::stdout().flush().unwrap();
             std::process::abort();
         }
+    }
+
+    async fn looked_up(&self, n: u64) {
+        let mut rx = self.lookups.subscribe();
+        tokio::time::timeout(PATIENCE, rx.wait_for(|e| *e >= n))
+            .await
+            .expect("every call finished its account lookup")
+            .unwrap();
     }
 
     async fn entered(&self, n: u64) {
@@ -200,6 +211,7 @@ impl AccountStore for FaultyAccounts {
     ) -> Result<PlayerId, AccountError> {
         self.faults.kill_at("account.before");
         let id = self.inner.lookup_or_create(issuer, subject, fresh).await?;
+        self.faults.lookups.send_modify(|n| *n += 1);
         self.faults.kill_at("account.after");
         Ok(id)
     }
@@ -379,9 +391,8 @@ async fn the_same_principal_again_is_the_same_player_and_writes_nothing(pool: Pg
     s.stop().await.unwrap();
 }
 
-/// Many first calls at once, for each of several principals: one row, one homeworld and one ID
-/// per principal. Repeated, so the race between the read-model check and the join is exercised:
-/// the core's `already_joined` must turn up, and must count as joined.
+/// Many first calls at once, for each of several principals, racing freely: one row, one
+/// homeworld and one ID per principal, and no refusal but `already_joined`.
 #[sqlx::test(migrator = "MIGRATOR")]
 #[ignore = "needs Postgres: just db-test"]
 async fn concurrent_first_calls_end_with_one_account_and_one_homeworld(pool: PgPool) {
@@ -411,13 +422,51 @@ async fn concurrent_first_calls_end_with_one_account_and_one_homeworld(pool: PgP
     let e = effects(&url).await;
     assert_eq!(e.rows, PRINCIPALS as i64);
     assert_eq!(e.joins, ids.iter().map(|id| (*id, 1)).collect());
-    let raced = e.refusals.get("already_joined").copied().unwrap_or(0);
     assert!(
-        raced > 0,
-        "the race never reached the core, so already_joined went untested: {e:?}"
+        e.refusals.keys().all(|r| *r == "already_joined"),
+        "no other refusal: {e:?}"
     );
-    assert_eq!(e.refusals.len(), 1, "no other refusal: {e:?}");
     assert_eq!(recovered_players(&url).await.len(), PRINCIPALS);
+}
+
+/// The race made certain: the first join is held inside its append until every other call has
+/// passed the read-model check and submitted its own join. The core refuses each of those with
+/// `already_joined`, and every caller gets the one player.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn joins_racing_past_the_read_model_are_already_joined_and_count_as_joined(pool: PgPool) {
+    const CALLS: u64 = 32;
+    let url = url(&pool);
+    universe(&url, 4).await;
+    let s = start(&url, Faults::default(), HostConfig::new(EPOCH, build())).await;
+    s.faults.hold.store(true, Ordering::SeqCst);
+    let p = principal(ISSUER, "alice");
+    let mut calls = tokio::task::JoinSet::new();
+    for _ in 0..CALLS {
+        let (players, p) = (s.players.clone(), p.clone());
+        calls.spawn(async move { players.player(&p).await });
+    }
+    // A call submits in the same poll its lookup returns in, so once every lookup has returned,
+    // the other joins are in the inbox behind the held one.
+    s.faults.entered(1).await;
+    s.faults.looked_up(CALLS).await;
+    s.faults.hold.store(false, Ordering::SeqCst);
+    s.faults.gate.add_permits(1);
+    let answers = tokio::time::timeout(PATIENCE, calls.join_all())
+        .await
+        .expect("every call answers");
+    let ids: std::collections::BTreeSet<PlayerId> =
+        answers.iter().map(|a| a.as_ref().unwrap().id).collect();
+    assert_eq!(ids.len(), 1, "{answers:?}");
+    s.stop().await.unwrap();
+    let e = effects(&url).await;
+    assert_eq!(e.rows, 1);
+    assert_eq!(e.joins.values().copied().collect::<Vec<_>>(), vec![1]);
+    assert_eq!(
+        e.refusals,
+        BTreeMap::from([("already_joined", CALLS as usize - 1)]),
+        "every join behind the held one reached the core"
+    );
 }
 
 /// A full universe: the next principal is refused with `no_free_homeworld`, keeps its row, and
@@ -449,8 +498,9 @@ async fn a_full_universe_refuses_keeps_the_account_and_appends_nothing(pool: PgP
     assert_eq!(recovered_players(&url).await.len(), 2);
 }
 
-/// Racing for the last homeworlds: some refusals come from the core's receipt, not the read
-/// model, and every one is a refusal, never a join.
+/// Racing for the last homeworlds: the first join is held until every call has passed the
+/// read-model check, so the refusals come from the core's receipts, and each is a refusal, never
+/// a join.
 #[sqlx::test(migrator = "MIGRATOR")]
 #[ignore = "needs Postgres: just db-test"]
 async fn racing_for_the_last_homeworlds_refuses_the_rest_through_the_core(pool: PgPool) {
@@ -459,11 +509,16 @@ async fn racing_for_the_last_homeworlds_refuses_the_rest_through_the_core(pool: 
     let url = url(&pool);
     universe(&url, HOMEWORLDS as u32).await;
     let s = start(&url, Faults::default(), HostConfig::new(EPOCH, build())).await;
+    s.faults.hold.store(true, Ordering::SeqCst);
     let mut calls = tokio::task::JoinSet::new();
     for n in 0..PRINCIPALS {
         let (players, p) = (s.players.clone(), principal(ISSUER, &format!("late-{n}")));
         calls.spawn(async move { players.player(&p).await });
     }
+    s.faults.entered(1).await;
+    s.faults.looked_up(PRINCIPALS as u64).await;
+    s.faults.hold.store(false, Ordering::SeqCst);
+    s.faults.gate.add_permits(1);
     let answers = tokio::time::timeout(PATIENCE, calls.join_all())
         .await
         .expect("every call answers");
@@ -484,9 +539,10 @@ async fn racing_for_the_last_homeworlds_refuses_the_rest_through_the_core(pool: 
     let e = effects(&url).await;
     assert_eq!(e.rows, PRINCIPALS as i64);
     assert_eq!(e.joins, joined.iter().map(|id| (*id, 1)).collect());
-    assert!(
-        e.refusals.get("no_free_homeworld").copied().unwrap_or(0) > 0,
-        "no refusal came from the core, so the receipt's refusal went untested: {e:?}"
+    assert_eq!(
+        e.refusals,
+        BTreeMap::from([("no_free_homeworld", PRINCIPALS - HOMEWORLDS)]),
+        "every refusal came from the core's receipt"
     );
     let players = recovered_players(&url).await;
     assert_eq!(players.keys().copied().collect::<Vec<_>>(), {
