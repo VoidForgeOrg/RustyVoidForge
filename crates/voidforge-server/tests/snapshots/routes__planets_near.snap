@@ -1,0 +1,40 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: near.body
+---
+{
+  "as_of": "2025-10-09T08:53:20.000Z",
+  "planets": [
+    {
+      "distance": 500,
+      "owner": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+      "planet_id": 1,
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      }
+    },
+    {
+      "distance": 500,
+      "owner": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e10",
+      "planet_id": 4,
+      "position": {
+        "x": 1000,
+        "y": 0,
+        "z": 0
+      }
+    },
+    {
+      "distance": 0,
+      "owner": null,
+      "planet_id": 7,
+      "position": {
+        "x": 500,
+        "y": 0,
+        "z": 0
+      }
+    }
+  ],
+  "valid_until": null
+}

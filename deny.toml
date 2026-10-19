@@ -270,6 +270,13 @@ allow = [
     # and the bots through voidforge-api-types.
     { crate = "utoipa" },
     { crate = "uuid" },
+    { crate = "tempfile" },
+    { crate = "similar" },
+    { crate = "rustix" },
+    { crate = "linux-raw-sys" },
+    { crate = "insta" },
+    { crate = "fastrand" },
+    { crate = "errno" },
     { crate = "utoipa-gen" },
     # jsonschema, a dev-dependency of voidforge-api-types that validates examples against the OpenAPI
     # schemas (P3.1, decision log D-045; boon until repair round 1, which needed exact integer

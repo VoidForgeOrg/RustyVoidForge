@@ -1,0 +1,14 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: alice.body
+---
+{
+  "as_of": "2025-10-09T08:53:20.000Z",
+  "homeworld_id": 1,
+  "planet_ids": [
+    1
+  ],
+  "player_id": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+  "score": 1750,
+  "valid_until": "2025-10-09T11:53:20.000Z"
+}

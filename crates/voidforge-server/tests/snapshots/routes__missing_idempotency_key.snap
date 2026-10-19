@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: missing.body
+---
+{
+  "code": "missing_idempotency_key",
+  "message": "POST /commands needs an Idempotency-Key header"
+}

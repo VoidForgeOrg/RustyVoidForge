@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: r.body
+---
+{
+  "code": "unavailable",
+  "message": "the leaderboard isn't built yet"
+}

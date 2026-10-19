@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: "api.send(Method::GET, \"/players/me\", None, &[], None).await.body"
+---
+{
+  "code": "missing_token",
+  "message": "an Authorization: Bearer token is required"
+}

@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: r.body
+---
+{
+  "code": "busy",
+  "message": "the engine is busy; retry shortly"
+}

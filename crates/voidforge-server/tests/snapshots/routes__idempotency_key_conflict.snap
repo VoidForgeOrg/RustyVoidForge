@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: r.body
+---
+{
+  "code": "idempotency_key_conflict",
+  "message": "this Idempotency-Key was used for a different command"
+}

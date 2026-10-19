@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: "api.send(Method::GET, \"/nothing\", None, &[], None).await.body"
+---
+{
+  "code": "not_found",
+  "message": "no such route or method"
+}

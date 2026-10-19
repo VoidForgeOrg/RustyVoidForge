@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: first.body
+---
+{
+  "code": "not_owner",
+  "message": "the planet is not the player's"
+}

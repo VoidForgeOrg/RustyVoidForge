@@ -1,0 +1,8 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: r.body
+---
+{
+  "code": "unknown_planet",
+  "message": "no planet has that ID"
+}
