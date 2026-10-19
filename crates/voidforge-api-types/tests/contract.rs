@@ -483,11 +483,25 @@ fn the_document_has_every_endpoint() {
         ("get", "/players/me"),
         ("get", "/players/me/fleets"),
         ("get", "/leaderboard"),
+        ("get", "/openapi.json"),
     ]
     .into_iter()
     .map(|(m, p)| (m.to_owned(), p.to_owned()))
     .collect();
     assert_eq!(paths, expected);
+    // The contract is public (D-049, T2); every other path needs a dex token.
+    for (method, path) in &paths {
+        let security = &doc["paths"][path][method]["security"];
+        if path == "/openapi.json" {
+            assert!(security.is_null(), "{path} is public: {security}");
+        } else {
+            assert_eq!(
+                security[0]["bearer"],
+                serde_json::json!([]),
+                "{method} {path}"
+            );
+        }
+    }
     assert_eq!(
         doc["components"]["securitySchemes"]["bearer"]["scheme"],
         "bearer"

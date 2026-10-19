@@ -1846,6 +1846,16 @@
             },
             "description": "missing_token, invalid_token"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "no_free_homeworld: the account could not join, because no homeworld is free (D-047)"
+          },
           "429": {
             "content": {
               "application/json": {
@@ -1882,7 +1892,44 @@
             "bearer": []
           }
         ],
-        "summary": "Every player ranked by score, rebuilt every 60 seconds.",
+        "summary": "Every player ranked by score, rebuilt every 60 seconds (P3.5; until then 503\n`unavailable`).",
+        "tags": [
+          "paths"
+        ]
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "get_openapi",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {}
+            },
+            "description": "The OpenAPI document"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "rate_limited"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "internal"
+          }
+        },
+        "summary": "This document: the API's contract. Public: it needs no token, so reading it never joins\nanyone (D-049).",
         "tags": [
           "paths"
         ]
@@ -1903,7 +1950,7 @@
             }
           },
           {
-            "description": "The radius, in distance units",
+            "description": "The radius, in distance units: 0 or more (a negative radius is invalid_query). More than 1000 planets within it is invalid_query, never a truncated list: narrow the radius (D-049)",
             "in": "query",
             "name": "radius",
             "required": true,
@@ -1945,6 +1992,16 @@
               }
             },
             "description": "missing_token, invalid_token"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "no_free_homeworld: the account could not join, because no homeworld is free (D-047)"
           },
           "429": {
             "content": {
@@ -2046,6 +2103,16 @@
             },
             "description": "unknown_planet"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "no_free_homeworld: the account could not join, because no homeworld is free (D-047)"
+          },
           "429": {
             "content": {
               "application/json": {
@@ -2112,6 +2179,16 @@
             },
             "description": "missing_token, invalid_token"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "no_free_homeworld: the account could not join, because no homeworld is free (D-047)"
+          },
           "429": {
             "content": {
               "application/json": {
@@ -2177,6 +2254,16 @@
               }
             },
             "description": "missing_token, invalid_token"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "no_free_homeworld: the account could not join, because no homeworld is free (D-047)"
           },
           "429": {
             "content": {
