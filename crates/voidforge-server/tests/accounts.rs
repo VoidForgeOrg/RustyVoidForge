@@ -852,6 +852,41 @@ async fn the_subject_is_never_logged_at_any_level(pool: PgPool) {
     }
 }
 
+/// The lead's amendment, by effect: a known principal costs one read and no write. sqlx logs
+/// each statement it runs, so the capture counts the account INSERTs issued: one per new
+/// principal, none for a repeat.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_known_principal_is_one_read_and_no_insert(pool: PgPool) {
+    let capture = Capture::default();
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish(),
+    )
+    .unwrap();
+    let url = url(&pool);
+    universe(&url, 4).await;
+    let s = start(&url, Faults::default(), HostConfig::new(EPOCH, build())).await;
+    let inserts = || {
+        String::from_utf8_lossy(&capture.0.lock().unwrap())
+            .matches("db.statement=\"\\n\\nINSERT INTO accounts")
+            .count()
+    };
+    let alice = principal(ISSUER, "alice");
+    s.player(&alice).await.unwrap();
+    assert_eq!(inserts(), 1, "a new principal is inserted once");
+    for _ in 0..5 {
+        s.player(&alice).await.unwrap();
+    }
+    assert_eq!(inserts(), 1, "a known principal is never inserted again");
+    s.player(&principal(ISSUER, "bob")).await.unwrap();
+    assert_eq!(inserts(), 2);
+    s.stop().await.unwrap();
+}
+
 // --- Crashes between the row and the join ---
 
 const CHILD: &str = "VOIDFORGE_ACCOUNTS_CHILD";
