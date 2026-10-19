@@ -268,6 +268,7 @@ allow = [
     # The API types (P3.1, decision log D-045): utoipa with its macros. It reaches the web client
     # and the bots through voidforge-api-types.
     { crate = "utoipa" },
+    { crate = "uuid" },
     { crate = "utoipa-gen" },
     # jsonschema, a dev-dependency of voidforge-api-types that validates examples against the OpenAPI
     # schemas (P3.1, decision log D-045; boon until repair round 1, which needed exact integer
@@ -320,7 +321,7 @@ skip = [
     { crate = "hashbrown@0.16.1", reason = "sqlx-core's hashlink uses hashbrown 0.16; indexmap uses 0.17; voidforge-store only" },
     { crate = "rand@0.10.3", reason = "sqlx-postgres (SCRAM nonces) uses rand 0.10, opentelemetry_sdk 0.9; normal edges reach 0.10 only from voidforge-store" },
     { crate = "rand_core@0.10.1", reason = "under sqlx-postgres's rand 0.10; normal edges reach it only from voidforge-store" },
-    { crate = "getrandom@0.4.3", reason = "under sqlx-postgres's rand 0.10; normal edges reach it only from voidforge-store" },
+    { crate = "getrandom@0.4.3", reason = "under sqlx-postgres's rand 0.10 (voidforge-store) and uuid's v7 generator (voidforge-server, D-047)" },
 ]
 
 [sources]

@@ -204,6 +204,7 @@ fn bootstrap(
                     "the database already holds a universe; it is never overwritten".to_owned(),
                 )
             }
+            BootstrapError::HasAccounts { .. } => (Exit::Refused, e.to_string()),
             // The URL holds a password: the error never echoes it.
             BootstrapError::Url => input("--database-url is not a Postgres URL".to_owned()),
             other => input(other.to_string()),

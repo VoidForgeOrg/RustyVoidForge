@@ -8,7 +8,7 @@ Binary. P2.9 added its first subcommand, `seed`, the universe bootstrap ([D-043]
 
 - Workspace: `voidforge-host`, `voidforge-store`, `voidforge-rules`, `voidforge-worldgen`, `voidforge-api-types`, `voidforge-telemetry`.
 - External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): The API stack from the Tech stack: tokio, axum, tower-http, jsonwebtoken (on the aws-lc-rs backend), reqwest (to fetch dex's signing keys; no TLS until P5), uuid (v7), utoipa, tower_governor, clap and anyhow (D-046).
-- Never: voidforge-core directly. Engine state changes only through the host. (Its tests take core as a dev-dependency only: the database-stage tests build a Join game command for the host, and `tests/api_codes.rs` checks the API's game codes against the core's reason codes, D-045.)
+- Never: voidforge-core directly. Engine state changes only through the host, and the server names core types (`Command`, `Action`, `Rejection`, `PlayerId`, `World`) through the host's re-exports (D-047). (Its tests take core as a dev-dependency only: the database-stage tests build a Join game command for the host, and `tests/api_codes.rs` checks the API's game codes against the core's reason codes, D-045.)
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
 ## Invariants
@@ -18,7 +18,11 @@ Binary. P2.9 added its first subcommand, `seed`, the universe bootstrap ([D-043]
 - Tokens are checked against dex's cached signing keys, issuer, the audience allowlist and expiry. Anything else gets 401 (`voidforge_server::auth`, D-046). The header is checked before any key state; RS256 only. When dex's keys can't be loaded, a well-formed token gets 503 with Retry-After, never an accept. No token text in bodies or logs.
 - All writes go through `POST /commands` with a required `Idempotency-Key` header. The player comes from the token, never from the body.
 - Status mapping: 200 accepted, 400, 401, 422 for a rule violation with its reason code, 503 with Retry-After when the inbox is full, and 429 for the rate limit (P3.8).
-- An `accounts` row maps issuer and subject to a player UUIDv7. The first authenticated call creates it and issues Join game, exactly once.
+- An `accounts` row maps issuer and subject to a player UUIDv7. The first authenticated call creates it and issues Join game, exactly once (`voidforge_server::accounts`, D-047):
+  - The row comes first, then the join. Each call looks the row up (inserting only when missing), then joins if the read model does not show the player. A crash between the two is repaired by that user's next call.
+  - The join has no idempotency key: D-037 would keep a rejection under it permanently. The core's `already_joined` refusal, under the single writer, is the deduplicator, and an `already_joined` receipt counts as joined.
+  - A refused join is 422 with the core's code (`no_free_homeworld`), and the row stays. A full universe is answered from the read model, without appending a record. A refused account gets that 422 on every route that takes a player, reads included: there is no spectator mode.
+  - The subject is personal data. It is never logged at any level, and never appears in an error body, a panic message or a `Debug` output; the player UUID is the public identity.
 - The leaderboard is rebuilt every 60 seconds from the read model and served with its `as_of`.
 
 ## Tests
@@ -30,10 +34,11 @@ cargo nextest run -p voidforge-server
 ```
 
 - `tests/cli.rs` covers the cap, the exit codes, and that the URL is never printed.
-- `tests/postgres.rs` (database stage) covers the pinned seed hash on fresh databases, the refusal on a non-empty database, and recovery after seed.
+- `tests/postgres.rs` (database stage) covers the pinned seed hash on fresh databases, the refusal on a non-empty or accounts-only database, and recovery after seed.
 - `tests/auth.rs` covers the token checks over real HTTP, against a local dex stand-in with keys generated at run time (D-046): every refusal's code and headers, rotation, the refresh floor, single-flight, dex down, stale keys, and the configuration bounds.
 - `tests/dex.rs` (`just dex-test`, by hand) checks the real dex. It needs `DEX_CONFIG=config.ci.yaml just up` for the password-grant token.
 - `tests/api_codes.rs` checks that the API's 422 codes are the core's reason codes (D-045).
+- `tests/accounts.rs` (database stage) drives the account path through the real host and Postgres: one row and one homeworld per principal across repeats, concurrency, a full universe, a stopped or busy host, restarts and four kill points, every error's answer, and the subject never logged at TRACE, sqlx included (D-047). `tests/postgres.rs` also covers seed's refusal of an accounts-only database, under a race.
 
 P2.9: on an empty database, the bootstrap always yields the same state hash. P3.2 to P3.5 and P3.8: token, account, route (insta contract snapshots), leaderboard and rate-limit tests.
 

@@ -26,6 +26,7 @@ Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `H
 - The host publishes an immutable read model after every step, and reads never go through the command path.
 - Recovery loads the newest snapshot with a matching build, replays later records, checks their recorded events, then advances to now.
 - Instrumentation lives here and in the other shell crates, never in the core.
+- The host re-exports the command vocabulary its own API already exposes in `Receipt` and `ReadModel`: `Command`, `Action`, `Rejection`, `DomainEvent`, `PlayerId` and `World`. The server names these types through the host and never depends on core. The read model's World is shared behind an `Arc`, so a reader cannot change the live World ([D-047](../../docs/decision-log.md#d-047-accounts-principal-to-player-and-join-game-exactly-once)).
 
 ## Tests
 

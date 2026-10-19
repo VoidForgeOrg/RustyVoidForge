@@ -107,10 +107,10 @@ echo "ok: $files migrations applied to an empty database; the second run applied
 echo "--- sqlx offline metadata check"
 DATABASE_URL="$cli_url" cargo sqlx prepare --workspace --check -- --all-targets
 
-echo "--- store and host tests against Postgres"
-# Only the Postgres binaries (store's database, host's and replay's postgres, host's crash): the
-# other ignored tests are the determinism suites' two-process runs, the crash harness's child and
-# its nightly run.
+echo "--- store, host and server tests against Postgres"
+# Only the Postgres binaries (store's database, host's, replay's and the server's postgres, host's
+# crash, the server's accounts): the other ignored tests are the determinism suites' two-process
+# runs, the crash harnesses' children and the nightly run.
 SQLX_OFFLINE=true cargo nextest run --workspace --run-ignored only --no-fail-fast --locked \
-    -E 'binary(=database) | binary(=postgres) | (binary(=crash) & test(=every_retried_command_ends_with_exactly_one_outcome_on_postgres))'
+    -E 'binary(=database) | binary(=postgres) | (binary(=crash) & test(=every_retried_command_ends_with_exactly_one_outcome_on_postgres)) | (binary(=accounts) & !test(=accounts_child))'
 

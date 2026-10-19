@@ -9,6 +9,7 @@
 //! offline verification ([`verify`]), which the host's tests and the replay tool share (D-040,
 //! D-041).
 
+pub mod accounts;
 pub mod canonical;
 pub mod golden;
 pub mod log;
@@ -61,15 +62,27 @@ pub enum BootstrapError {
         /// The existing seq-0 snapshot's state hash, if there is one.
         seq0_state_hash: Option<Vec<u8>>,
     },
+    /// The database has no universe but has accounts: the universe was lost, not never made.
+    /// Seeding would give those players a fresh start under old identities, so the accounts must
+    /// be cleared by hand first (D-047).
+    #[error(
+        "the database has no universe but has {count} accounts; clear them by hand before seeding"
+    )]
+    HasAccounts {
+        /// How many accounts exist.
+        count: i64,
+    },
 }
 
 /// Bootstraps a universe (Technical Plan P2.9; decision log D-043): connects to `url`, applies
-/// the migrations, and writes `snapshot` at seq 0, in one transaction that holds both
-/// tables locked and refuses unless the database is empty. A universe is never overwritten.
+/// the migrations, and writes `snapshot` at seq 0, in one transaction that holds the three
+/// tables locked and refuses unless the database is empty. A universe is never overwritten, and
+/// an accounts-only database is not empty (D-047).
 ///
 /// # Errors
-/// [`BootstrapError::NotEmpty`] if any snapshot or log record exists; otherwise the connection,
-/// migration or write failure.
+/// [`BootstrapError::NotEmpty`] if any snapshot or log record exists;
+/// [`BootstrapError::HasAccounts`] if only accounts exist; otherwise the connection, migration
+/// or write failure.
 pub async fn bootstrap(url: &str, snapshot: &snapshot::Snapshot) -> Result<(), BootstrapError> {
     let row = log::SnapshotRow::new(0, snapshot);
     let options: sqlx::postgres::PgConnectOptions = url.parse().map_err(|_| BootstrapError::Url)?;
@@ -81,8 +94,9 @@ pub async fn bootstrap(url: &str, snapshot: &snapshot::Snapshot) -> Result<(), B
     let rules_version = i32::try_from(row.rules_version)
         .map_err(|_| BootstrapError::RulesVersion(row.rules_version))?;
     let mut tx = pool.begin().await?;
-    // Two seeds at once cannot both find the database empty.
-    sqlx::query!("LOCK TABLE snapshots, log_records IN EXCLUSIVE MODE")
+    // Two seeds at once cannot both find the database empty, and no account can appear between
+    // the check and the commit.
+    sqlx::query!("LOCK TABLE snapshots, log_records, accounts IN EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await?;
     let used = sqlx::query_scalar!(
@@ -95,6 +109,12 @@ pub async fn bootstrap(url: &str, snapshot: &snapshot::Snapshot) -> Result<(), B
             .fetch_optional(&mut *tx)
             .await?;
         return Err(BootstrapError::NotEmpty { seq0_state_hash });
+    }
+    let count = sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM accounts"#)
+        .fetch_one(&mut *tx)
+        .await?;
+    if count > 0 {
+        return Err(BootstrapError::HasAccounts { count });
     }
     sqlx::query!(
         r#"INSERT INTO snapshots (seq, game_time, rules_version, engine_build, state_hash, payload)

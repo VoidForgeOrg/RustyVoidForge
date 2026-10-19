@@ -45,6 +45,8 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["json"] }
 aws-lc-rs = "=1.18.2"
 utoipa = { version = "=6.0.0", default-features = false, features = ["macros"] }
 jsonschema = { version = "=0.59.0", default-features = false }
+log = { version = "=0.4.34", default-features = false, features = ["std"] }
+uuid = { version = "=1.28.0", default-features = false, features = ["std", "v7"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

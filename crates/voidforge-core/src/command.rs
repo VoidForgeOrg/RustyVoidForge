@@ -359,8 +359,10 @@ impl World {
         }
     }
 
-    /// The first homeworld candidate, in list order, that nobody owns.
-    fn free_homeworld(&self) -> Option<PlanetId> {
+    /// The first homeworld candidate, in list order, that nobody owns: the planet Join game
+    /// would take. `None` means Join game is refused with `no_free_homeworld`.
+    #[must_use]
+    pub fn free_homeworld(&self) -> Option<PlanetId> {
         self.homeworld_candidates
             .iter()
             .copied()
