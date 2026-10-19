@@ -1642,3 +1642,53 @@ async fn the_job_rebuilds_on_its_interval(pool: PgPool) {
     job.abort();
     assert_eq!(seen.len(), 4);
 }
+
+/// The route serves the build, not the request's time: built at T1, read at a later T2, the
+/// board's `as_of` is still T1 (up to the interval old, by design).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_board_keeps_its_builds_as_of(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    assert_eq!(api.get("/players/me", ALICE_SUB).await.status, 200);
+    api.clock.set(EPOCH + 10_000);
+    api.build_board().await.unwrap();
+    let built = api.board().await;
+    api.clock.set(EPOCH + 50_000);
+    let later = api.board().await;
+    assert_eq!(later, built, "the same build, as_of and all");
+    let me = api.get("/players/me", ALICE_SUB).await;
+    assert_ne!(
+        me.body["as_of"],
+        json!(later.as_of),
+        "a player's own view is current"
+    );
+}
+
+/// Before its first board, the job retries every second, not every interval: with an hour's
+/// interval and nothing built, a board still appears within a couple of seconds.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_job_retries_every_second_until_the_first_board(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    assert_eq!(api.get("/players/me", ALICE_SUB).await.status, 200);
+    let c = api.clock.clone();
+    let job = tokio::spawn(voidforge_server::leaderboard::run(
+        api.host.clone(),
+        Arc::new(move || voidforge_host::Clock::now_unix_ms(&c)),
+        EPOCH,
+        Duration::from_secs(3_600),
+        api.board.clone(),
+    ));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if api.get("/leaderboard", ALICE_SUB).await.status == 200 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no board within 3 s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    job.abort();
+}
