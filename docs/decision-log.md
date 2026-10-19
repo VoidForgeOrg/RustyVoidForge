@@ -970,7 +970,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - 200 is `{"seq", "game_time", "events"}`. A repeated key returns the first response, at any age (D-037).
   - **The response's events are the command's own events only. This is a privacy requirement, not tidiness.** The log record also holds the events of advancing to the command's time, and those can be other players' owner-only information (a fleet arrival, D-030). P3.4 must never add them back. The record's `own_events` count (D-037) rebuilds the same list for a repeated key.
   - **Events** are internally tagged by `type`: `building_completed`, `ship_completed`, `demolition_completed`, `fleet_arrived`, `planet_colonized`, `colonization_failed`, `cargo_unloaded`, `fleet_removed` and `fleet_returned`, with `_id` and `_type` names.
-  - **Views:** every view has `as_of` and `valid_until` (always present, null when nothing is scheduled). Every continuous value has its `rate_g_per_h`, every stock its `cap_g`, and every progress its exact `eta` (null while nothing flows).
+  - **Views:** every view has `as_of` and `valid_until` (always present, null when nothing is scheduled). **`valid_until` counts only the viewer's own fleets and the entity's own scheduled events** (D-049, the advisor's ruling): it means "valid until, unless another player's fleet arrives", so a view never tells one player when another's fleet lands. Every continuous value has its `rate_g_per_h`, every stock its `cap_g`, and every progress its exact `eta` (null while nothing flows).
     - The planet view is the architecture's example, extended:
       - `rate_g_per_h` on progress, which the every-continuous-value invariant requires;
       - `position`, `slots`, `ship_builds` and `roster`;

@@ -29,7 +29,7 @@ Every planet, owned or not, has the same properties:
 | Building slots | A fixed number of identical slots; any building fits any slot |
 | Planetary storage | A fixed capacity per resource type |
 
-All of these, plus ownership, are visible to all players at all times. Fleets are visible only to their owner.
+All of these, plus ownership, are visible to all players at all times. Fleets are visible only to their owner. Ships on a planet's roster, like fleets, are visible only to their owner; everything else about a planet, including its Shipyard queue, is visible to all.
 
 ### Starting conditions
 

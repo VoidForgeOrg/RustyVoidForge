@@ -388,6 +388,83 @@ impl World {
         earliest(std::iter::once(next), incoming.map(Some))
     }
 
+    /// [`World::view`] as `viewer` may see it: planets are public, fleets are visible only to
+    /// their owner (Game Design, Universe and planets; decision log D-049). The projection
+    /// itself is [`World::view`]'s, so its staleness check still uses the true validity, which
+    /// counts every fleet. Then:
+    /// - a planet's roster lists only the viewer's own ships;
+    /// - `valid_until` counts only the planet's own events and the viewer's own fleets. It's
+    ///   never earlier than the true validity, so it means "valid until, unless another player's
+    ///   fleet arrives";
+    /// - a player's view counts that player's fleets only when the viewer is that player.
+    ///
+    /// # Errors
+    /// As [`World::view`], and [`ViewError::Unknown`] for [`Query::Fleets`] when its viewer
+    /// isn't `viewer`.
+    pub fn view_for(
+        &self,
+        query: &Query,
+        viewer: PlayerId,
+        t: i64,
+        rules: &Rules,
+    ) -> Result<View, ViewError> {
+        if matches!(*query, Query::Fleets { viewer: v } if v != viewer) {
+            return Err(ViewError::Unknown);
+        }
+        let mut view = self.view(query, t, rules)?;
+        match &mut view {
+            View::Planet(p) => {
+                p.roster.retain(|&(_, _, owner)| owner == viewer);
+                p.valid_until = self.planet_public_valid_until(p.id, viewer);
+            }
+            View::PlanetsNear(n) => {
+                let colonizing = self.fleets.values().filter_map(|f| match f.state {
+                    FleetState::InTransit {
+                        target,
+                        mission: Mission::Colonize,
+                        arrives_at_ms,
+                        ..
+                    } if f.owner == viewer && n.planets.iter().any(|p| p.id == target) => {
+                        Some(arrives_at_ms)
+                    }
+                    _ => None,
+                });
+                n.valid_until = colonizing.min();
+            }
+            View::Player(p) => {
+                let fleets = self
+                    .fleets
+                    .values()
+                    .filter(|f| f.owner == viewer && p.id == viewer);
+                p.valid_until = earliest(
+                    p.planets
+                        .iter()
+                        .map(|&x| self.planet_public_valid_until(x, viewer)),
+                    fleets.map(|f| moving_until(f.state)),
+                );
+            }
+            // Already the viewer's own fleets only, and so its own validity.
+            View::Fleets(_) => {}
+        }
+        Ok(view)
+    }
+
+    /// [`World::planet_valid_until`] as `viewer` may see it: the planet's next event, or the
+    /// first of the viewer's own fleets arriving at it. Another player's arrival is hidden
+    /// (D-049).
+    pub fn planet_public_valid_until(&self, planet: PlanetId, viewer: PlayerId) -> Option<i64> {
+        let incoming = self.fleets.values().filter_map(|f| match f.state {
+            FleetState::InTransit {
+                target,
+                arrives_at_ms,
+                ..
+            } if target == planet && f.owner == viewer => Some(arrives_at_ms),
+            _ => None,
+        });
+        let next = self.planets[&planet].next_event.map(|e| e.at_ms);
+        earliest(std::iter::once(next), incoming.map(Some))
+    }
+
     fn planet_view(
         &self,
         planet: PlanetId,

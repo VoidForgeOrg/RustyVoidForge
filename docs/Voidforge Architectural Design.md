@@ -330,7 +330,7 @@ Table `snapshots`:
 Reads never go through the command path. The host publishes an immutable read model after every step, and API reads project it to the current time.
 
 - `view(query, now)` is valid until each entity's next event; the host keeps the read model fresh by processing due events promptly.
-- Every continuous value comes with `rate_g_per_h`, `as_of` and `valid_until` (the entity's next event), and stocks with `cap_g`. Clients animate counters locally and know when to refetch.
+- Every continuous value comes with `rate_g_per_h`, `as_of` and `valid_until` (the entity's next event, counting only the viewer's own fleets: valid until, unless another player's fleet arrives), and stocks with `cap_g`. Clients animate counters locally and know when to refetch.
 - Completion estimates (`eta`) are exact under current rates and carry the same `valid_until`.
 - Game times leave the API as ISO 8601 UTC timestamps (universe epoch + game time), in RFC 3339 form with milliseconds, always (D-045); amounts leave as integer grams.
 - Score is computed per request from `ScoringSpecs`: planets, finished buildings (operational ones; a building stops counting when its demolition begins), each finished ship once (roster or fleet), builds in progress at points × delivered ÷ cost (rounded down), and resources in storage or cargo.
