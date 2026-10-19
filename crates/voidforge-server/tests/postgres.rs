@@ -32,8 +32,13 @@ fn url(pool: &PgPool) -> String {
 }
 
 fn seed(pool: &PgPool) -> (i32, Value) {
+    finish(seed_process(pool).wait_with_output().unwrap())
+}
+
+/// `seed` started, not yet finished.
+fn seed_process(pool: &PgPool) -> std::process::Child {
     let rules = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/v0.toml");
-    let out = Command::new(BIN)
+    Command::new(BIN)
         .args([
             "seed",
             "--seed",
@@ -44,8 +49,12 @@ fn seed(pool: &PgPool) -> (i32, Value) {
         .args(["--rules", rules.to_str().unwrap(), "--json"])
         .env("DATABASE_URL", url(pool))
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .output()
-        .unwrap();
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+fn finish(out: std::process::Output) -> (i32, Value) {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(!stdout.contains("password"), "the URL is never printed");
     (
@@ -100,6 +109,38 @@ async fn a_second_seed_is_refused_and_changes_nothing(pool: PgPool) {
     assert_eq!(pg.snapshot_at(0).await.unwrap().unwrap(), before);
 }
 
+/// D-043's carry, ruled in D-047: accounts without a universe mean the universe was lost, so
+/// `seed` refuses (exit 3, naming the count) and writes nothing, and the accounts stay.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn an_accounts_only_database_is_refused_and_changes_nothing(pool: PgPool) {
+    for subject in ["alice", "bob"] {
+        sqlx::query(
+            "INSERT INTO accounts (player_id, issuer, subject) \
+             VALUES (uuidv7(), 'http://localhost:5556/dex', $1)",
+        )
+        .bind(subject)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let (code, v) = seed(&pool);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(v["result"], "refused");
+    let error = v["error"].as_str().unwrap();
+    assert!(error.contains("2 accounts"), "{error}");
+    assert!(error.contains("clear them by hand"), "{error}");
+    assert!(v["existing_state_hash"].is_null(), "{v}");
+    let mut pg = PgLog::new(pool.clone());
+    assert!(pg.snapshot_index().await.unwrap().is_empty());
+    assert!(pg.records().await.unwrap().is_empty());
+    let rows = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 2, "nothing deleted");
+}
+
 /// D-038 after the bootstrap: the host recovers from the seq-0 snapshot, serves a Join game, and
 /// recovers again with the player in its homeworld.
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -137,4 +178,60 @@ async fn the_host_recovers_from_the_seeded_universe_and_serves(pool: PgPool) {
         .await
         .unwrap();
     assert!(again.world.players.contains_key(&ALICE));
+}
+
+/// The refusal is sound under a race: `seed` locks `accounts` with the universe's tables, so an
+/// account inserted but not yet committed when seed starts makes seed wait, then refuse, rather
+/// than check a count that can't see it and seed beside it (D-047).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn an_account_committed_during_seed_is_seen_and_refused(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO accounts (player_id, issuer, subject) \
+         VALUES (uuidv7(), 'http://localhost:5556/dex', 'alice')",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let mut child = seed_process(&pool);
+    // Seed must block on the lock while the insert is open; a seed that finishes first didn't.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let waiting = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            break;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("seed finished ({status}) without waiting for the open account insert");
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "seed never reached the lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tx.commit().await.unwrap();
+    let out = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap());
+    let (code, v) = finish(
+        tokio::time::timeout(std::time::Duration::from_secs(60), out)
+            .await
+            .expect("seed finishes once the insert commits")
+            .unwrap(),
+    );
+    assert_eq!(code, 3, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("1 accounts"), "{v}");
+    assert!(
+        PgLog::new(pool.clone())
+            .snapshot_index()
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

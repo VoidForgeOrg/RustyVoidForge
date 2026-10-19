@@ -18,6 +18,7 @@
 //! say which check failed; the check is logged at debug level, never with the token's text.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -155,13 +156,23 @@ impl AuthArgs {
 
 // --- Results ---
 
-/// A verified token's issuer and subject. P3.3 maps them to a player.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A verified token's issuer and subject. P3.3 maps them to a player. `Debug` hides the
+/// subject, which is personal data, so a logged principal never leaks it (D-047).
+#[derive(Clone, PartialEq, Eq)]
 pub struct Principal {
     /// The issuer, as configured.
     pub issuer: String,
     /// The subject: dex's stable ID for the user, 1 to 255 bytes.
     pub subject: String,
+}
+
+impl fmt::Debug for Principal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Principal")
+            .field("issuer", &self.issuer)
+            .field("subject", &format_args!("<{} bytes>", self.subject.len()))
+            .finish()
+    }
 }
 
 /// Why a request has no principal.

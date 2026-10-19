@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO accounts (player_id, issuer, subject) VALUES ($1::text::uuid, $2, $3)\n               ON CONFLICT (issuer, subject) DO NOTHING\n               RETURNING player_id::text AS \"player_id!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player_id!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "317d5996d1a3f36fd2fcceb084e1df9f577057a24577c3c339e05674e715667c"
+}

@@ -353,7 +353,7 @@ pub fn player_uuid(p: PlayerId) -> String {
     )
 }
 
-fn parse_player_uuid(s: &str) -> Option<PlayerId> {
+pub(crate) fn parse_player_uuid(s: &str) -> Option<PlayerId> {
     let hex: String = s.chars().filter(|c| *c != '-').collect();
     (hex.len() == 32)
         .then(|| u128::from_str_radix(&hex, 16).ok())

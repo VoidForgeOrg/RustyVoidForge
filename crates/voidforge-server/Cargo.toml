@@ -9,7 +9,8 @@ repository.workspace = true
 
 [dependencies]
 # The universe bootstrap, `seed` (P2.9, D-043); token checks (P3.2, D-046): axum's extractor,
-# jsonwebtoken for the signature, reqwest for dex's keys, api-types for the error body.
+# jsonwebtoken for the signature, reqwest for dex's keys, api-types for the error body. Accounts
+# (P3.3, D-047): the host for Join game and the read model, uuid for new player IDs.
 axum.workspace = true
 clap.workspace = true
 jsonwebtoken.workspace = true
@@ -19,7 +20,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 voidforge-api-types.workspace = true
+voidforge-host.workspace = true
 voidforge-rules.workspace = true
 voidforge-store.workspace = true
 voidforge-telemetry.workspace = true
@@ -28,13 +31,15 @@ voidforge-worldgen.workspace = true
 [dev-dependencies]
 # The database-stage tests boot the host on a seeded database (P2.9, D-043); api_codes checks the
 # API's game codes against the core's (P3.1, D-045); the token tests generate RSA keys with
-# aws-lc-rs (P3.2, D-046), so no private key is committed.
+# aws-lc-rs (P3.2, D-046), so no private key is committed. The account tests (P3.3, D-047) capture
+# every tracing and log event, sqlx's included, to prove the subject is never logged.
 aws-lc-rs.workspace = true
+log.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+tracing-subscriber.workspace = true
 voidforge-core.workspace = true
-voidforge-host.workspace = true
 voidforge-testkit.workspace = true
 
 [lints]

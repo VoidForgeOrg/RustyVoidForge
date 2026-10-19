@@ -395,17 +395,18 @@ WEB_CASES = [
       "violation: resolved normal path: voidforge-web -> voidforge-core"]),
     # The server has a library since P3.2 (D-046), so cargo resolves this dependency, and the checker
     # reports the declaration, the resolved path, and everything the server reaches (dev-qa's Q2).
+    # Since P3.3 (D-047) the server depends on the host normally, not only in its tests.
     ("web on server by path (resolves since P3.2: a library target)",
      [("voidforge-web", "dependencies", 'voidforge-server = { path = "../voidforge-server" }')], 1,
      [
       "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-core",
-      "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-host",
       "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-host -> voidforge-testkit",
       "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-store -> voidforge-testkit",
       "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-store -> voidforge-worldgen",
       "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-testkit",
       "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-worldgen -> voidforge-testkit",
       "violation: declared normal dependency: voidforge-web -> voidforge-server",
+      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-host",
       "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-host -> voidforge-core",
       "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-host -> voidforge-store",
       "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-rules",
@@ -417,9 +418,9 @@ WEB_CASES = [
       "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-worldgen",
       "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-worldgen -> voidforge-core",
       "violation: resolved dev path: voidforge-web -> voidforge-server -> voidforge-core",
-      "violation: resolved dev path: voidforge-web -> voidforge-server -> voidforge-host",
       "violation: resolved dev path: voidforge-web -> voidforge-server -> voidforge-testkit",
       "violation: resolved normal path: voidforge-web -> voidforge-server",
+      "violation: resolved normal path: voidforge-web -> voidforge-server -> voidforge-host",
       "violation: resolved normal path: voidforge-web -> voidforge-server -> voidforge-rules",
       "violation: resolved normal path: voidforge-web -> voidforge-server -> voidforge-store",
       "violation: resolved normal path: voidforge-web -> voidforge-server -> voidforge-worldgen"]),

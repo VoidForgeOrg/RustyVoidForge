@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "LOCK TABLE snapshots, log_records, accounts IN EXCLUSIVE MODE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "cfbf99d00d3bdaae3f2ebc420795ce9fab799cd639bf25a3f594ea1eede2da8d"
+}

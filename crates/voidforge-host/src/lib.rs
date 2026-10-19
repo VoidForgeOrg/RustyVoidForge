@@ -36,9 +36,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
-use voidforge_core::command::{Command, Rejection};
 use voidforge_core::rules::Rules;
-use voidforge_core::state::{DomainEvent, EngineError, PlayerId, World};
+use voidforge_core::state::EngineError;
 use voidforge_store::log::SnapshotRow;
 use voidforge_store::log::{
     IdempotencyKey, LogError, LogRecord, LogStore, Outcome, Payload, RecordKind,
@@ -47,6 +46,10 @@ use voidforge_store::replay::{self, ReplayError, Step};
 use voidforge_store::snapshot::{self, EngineBuild, Expected, SnapshotError};
 
 pub use clock::{Clock, ManualClock, SystemClock};
+/// The command vocabulary this API already exposes (in [`Receipt`] and [`ReadModel`]), so the
+/// server can name it without depending on the core (decision log D-047).
+pub use voidforge_core::command::{Action, Command, Rejection};
+pub use voidforge_core::state::{DomainEvent, PlayerId, World};
 
 /// How a host runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
