@@ -107,7 +107,7 @@ After any arrival, successful or not, the fleet stays stationed at the destinati
 
 ### Travel and recall
 
-Travel time follows from the 3D distance between the two planets and the fleet's speed. A fleet in transit can be recalled once: it turns around and takes as long to return as it had traveled, so a fleet recalled 5 hours into a 12-hour trip returns in 5 hours. It arrives stationed at its origin with cargo and any Colony Ship intact, delivering nothing and claiming nothing.
+Travel time follows from the 3D distance between the two planets and the fleet's speed. A fleet can't be sent on a trip longer than 1,000 years; such a target is unreachable. A fleet in transit can be recalled once: it turns around and takes as long to return as it had traveled, so a fleet recalled 5 hours into a 12-hour trip returns in 5 hours. It arrives stationed at its origin with cargo and any Colony Ship intact, delivering nothing and claiming nothing.
 
 ### Roster and lifecycle
 
