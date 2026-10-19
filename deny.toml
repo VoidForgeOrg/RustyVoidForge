@@ -22,7 +22,9 @@ version = 2
 # Each license is added with the first dependency that needs it (decision log D-017).
 # MIT-0 (borrow-or-share, through jsonschema; P3.1, decision log D-045) is MIT without the
 # attribution clause: OSI-approved and more permissive.
-allow = ["Apache-2.0", "MIT", "MIT-0", "Unicode-3.0", "Zlib"]
+# ISC and BSD-3-Clause (aws-lc-rs, aws-lc-sys, untrusted; P3.2, decision log D-046): both
+# permissive and OSI-approved.
+allow = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "MIT-0", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.93
 
 [licenses.private]
@@ -242,6 +244,27 @@ allow = [
     { crate = "clap_builder" },
     { crate = "clap_derive" },
     { crate = "clap_lex" },
+    # Token checks (P3.2, decision log D-046): axum for the extractor, jsonwebtoken on the
+    # aws-lc-rs backend (aws-lc-sys compiles C with the system compiler; cmake, dunce, fs_extra,
+    # jobserver and pkg-config are its build-time helpers), and what they pull in. aws-lc-rs is
+    # also the token tests' key generator (dev).
+    { crate = "aws-lc-rs" },
+    { crate = "aws-lc-sys" },
+    { crate = "axum" },
+    { crate = "axum-core" },
+    { crate = "cmake" },
+    { crate = "dunce" },
+    { crate = "fs_extra" },
+    { crate = "jobserver" },
+    { crate = "jsonwebtoken" },
+    { crate = "matchit" },
+    { crate = "mime" },
+    { crate = "pkg-config" },
+    { crate = "serde_path_to_error" },
+    { crate = "signature" },
+    { crate = "untrusted" },
+    { crate = "zeroize" },
+    { crate = "zeroize_derive" },
     # The API types (P3.1, decision log D-045): utoipa with its macros. It reaches the web client
     # and the bots through voidforge-api-types.
     { crate = "utoipa" },

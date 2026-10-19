@@ -393,9 +393,11 @@ WEB_CASES = [
      [("voidforge-web", "dependencies", 'engine = { package = "voidforge-core", path = "../voidforge-core" }')], 1,
      ["violation: declared normal dependency: voidforge-web -> voidforge-core (as engine)",
       "violation: resolved normal path: voidforge-web -> voidforge-core"]),
-    ("web on server by path (cargo ignores it: no library target)",
-     [("voidforge-web", "dependencies", 'voidforge-server = { path = "../voidforge-server" }')], 1,
-     ["violation: declared normal dependency: voidforge-web -> voidforge-server"]),
+    # A binary-only crate: cargo ignores the path dependency, so only the declaration catches it.
+    # (voidforge-server has a library since P3.2, D-046, so replay stands in.)
+    ("web on replay by path (cargo ignores it: no library target)",
+     [("voidforge-web", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }')], 1,
+     ["violation: declared normal dependency: voidforge-web -> voidforge-replay"]),
     ("web on core through api-types",
      [("voidforge-api-types", "dependencies", "voidforge-core = { workspace = true }"),
       ("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 1,
@@ -424,10 +426,12 @@ WEB_CASES = [
       "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-testkit -> voidforge-rules"]),
     # Since P0.6 every binary depends on telemetry, so telemetry -> server would be a cycle;
     # api-types is the reachable crate that declares the binary here.
-    ("web on server through api-types by path (a declaration cargo drops, in a reachable crate)",
-     [("voidforge-api-types", "dependencies", 'voidforge-server = { path = "../voidforge-server" }'),
+    # replay, not server: the server depends on api-types since P3.2, so api-types -> server
+    # would be a cycle cargo refuses outright.
+    ("web on replay through api-types by path (a declaration cargo drops, in a reachable crate)",
+     [("voidforge-api-types", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }'),
       ("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 1,
-     ["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-server"]),
+     ["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-replay"]),
     ("reachable crate declaring an allowed crate (telemetry on api-types)",
      [("voidforge-telemetry", "dependencies", "voidforge-api-types = { workspace = true }")], 0, []),
     ("unreachable crate may declare anything (server on core; web does not depend on server)",

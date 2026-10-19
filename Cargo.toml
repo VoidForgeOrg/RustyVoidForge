@@ -39,6 +39,10 @@ toml = { version = "=1.1.8", default-features = false, features = ["std", "parse
 tracing = "=0.1.44"
 tracing-opentelemetry = { version = "=0.34.0", default-features = false }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["std", "fmt", "registry"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }
+jsonwebtoken = { version = "=11.1.0", default-features = false, features = ["aws_lc_rs"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["json"] }
+aws-lc-rs = "=1.18.2"
 utoipa = { version = "=6.0.0", default-features = false, features = ["macros"] }
 jsonschema = { version = "=0.59.0", default-features = false }
 
