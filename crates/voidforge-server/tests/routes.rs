@@ -820,6 +820,95 @@ async fn a_clock_behind_the_world_answers_at_the_worlds_time(pool: PgPool) {
     }
 }
 
+/// S1 (D-049): another player's fleet or ship answers byte for byte as one that doesn't exist:
+/// the status, every header but the date, and the body, fresh and for a repeated key.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn another_players_fleet_or_ship_answers_byte_for_byte_as_an_unknown_one(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    let token = api.token(ALICE_SUB);
+    let read = api.host.read();
+    let bobs_fleet = read
+        .world
+        .fleets
+        .values()
+        .find(|f| f.owner == BOB)
+        .unwrap()
+        .id
+        .0;
+    let bobs_ship = read
+        .world
+        .ships
+        .values()
+        .find(|s| s.owner == BOB && s.kind == ShipKind::CargoVessel)
+        .unwrap()
+        .id
+        .0;
+    let ghost = read.world.next_id + 1_000;
+    drop(read);
+    let raw = |body: String, key: String| {
+        let (http, url, token) = (
+            api.http.clone(),
+            format!("{}/commands", api.base),
+            token.clone(),
+        );
+        async move {
+            let r = http
+                .post(url)
+                .bearer_auth(token)
+                .header("content-type", "application/json")
+                .header("idempotency-key", key)
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            let status = r.status().as_u16();
+            let mut headers: Vec<(String, String)> = r
+                .headers()
+                .iter()
+                .filter(|(k, _)| *k != "date")
+                .map(|(k, v)| (k.to_string(), v.to_str().unwrap().to_owned()))
+                .collect();
+            headers.sort();
+            (status, headers, r.bytes().await.unwrap().to_vec())
+        }
+    };
+    let home = api.ids.alice_home.0;
+    let fleet_actions = |f: u64| {
+        vec![
+            json!({"type": "recall_fleet", "payload": {"fleet_id": f}}),
+            json!({"type": "disband_fleet", "payload": {"fleet_id": f}}),
+            json!({"type": "trigger_unload", "payload": {"fleet_id": f}}),
+            json!({"type": "send_fleet", "payload": {"fleet_id": f, "target_planet_id": home, "mission": "move"}}),
+            json!({"type": "send_fleet", "payload": {"fleet_id": f, "target_planet_id": 999_999, "mission": "move"}}),
+        ]
+    };
+    let ship_actions = |s: u64| {
+        vec![
+            json!({"type": "assemble_fleet", "payload": {"planet_id": home, "ship_ids": [s],
+                "cargo": {"iron_ore_g": 0, "iron_ingot_g": 0}}}),
+            json!({"type": "assemble_fleet", "payload": {"planet_id": home, "ship_ids": [s],
+                "cargo": {"iron_ore_g": -1, "iron_ingot_g": 0}}}),
+        ]
+    };
+    let pairs = fleet_actions(bobs_fleet)
+        .into_iter()
+        .zip(fleet_actions(ghost))
+        .chain(ship_actions(bobs_ship).into_iter().zip(ship_actions(ghost)));
+    for (i, (foreign, unknown)) in pairs.enumerate() {
+        let a = raw(foreign.to_string(), format!("foreign-{i}")).await;
+        let b = raw(unknown.to_string(), format!("unknown-{i}")).await;
+        assert_eq!(a, b, "{foreign} against {unknown}");
+        assert_eq!(a.0, 422, "{foreign}");
+        // A repeated key gives the same bytes again.
+        assert_eq!(
+            raw(foreign.to_string(), format!("foreign-{i}")).await,
+            a,
+            "{foreign} repeated"
+        );
+    }
+}
+
 /// A full inbox: 503 `busy`, Retry-After 1. A stopped host: 503 `unavailable`, Retry-After 5.
 #[sqlx::test(migrator = "MIGRATOR")]
 #[ignore = "needs Postgres: just db-test"]

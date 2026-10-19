@@ -419,6 +419,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `unknown_planet`, `unknown_building`, `unknown_ship_build`;
     - `not_owner`;
     - `no_free_slot`, `not_under_construction`, `not_operational`, `shipyard_has_builds`, `not_a_shipyard`, `shipyard_not_operational`.
+  - **Amended by D-049 (S1, the advisor; the lead's Addendum 3):** fleets and ships are visible only to their owner, so **another player's fleet or ship is unknown**. It fails the existence check itself, as `unknown_fleet` or `unknown_ship`, and **at every check a foreign one is indistinguishable from one that doesn't exist**. `not_owner` is now only ever about a planet.
 
     An entity that existed and is gone is `unknown_*`, since IDs are never reused. These codes are the API contract. P1.10 keeps the architecture's examples verbatim (`insufficient_stock`, `cargo_aboard`) and adds `unknown_fleet` to the `unknown_*` family, so the list reads as one vocabulary.
   - **Determinism**: `Economy { commands: n }` adds two unowned homeworld candidates and a script of n commands at whole hours, often the instant a build completes. Each is chosen against the state at its instant, half the time a fitting target issued mostly by its owner, otherwise a mix that is rejected. Both runs stop at every command instant (`determinism::stops`).
@@ -969,6 +970,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `IdempotencyKey::parse` carries D-037's rule: missing is 400 `missing_idempotency_key`, invalid is 400 `invalid_idempotency_key`.
     - 200 is `{"seq", "game_time", "events"}`. A repeated key returns the first response, at any age (D-037).
   - **The response's events are the command's own events only. This is a privacy requirement, not tidiness.** The log record also holds the events of advancing to the command's time, and those can be other players' owner-only information (a fleet arrival, D-030). P3.4 must never add them back. The record's `own_events` count (D-037) rebuilds the same list for a repeated key.
+  - **No answer tells a player that another player's fleet or ship exists** (D-049, S1): a foreign fleet or ship is refused exactly as an unknown one, byte for byte. The coarse creation volume visible through the shared sequential ID counter is accepted for the MVP.
   - **Events** are internally tagged by `type`: `building_completed`, `ship_completed`, `demolition_completed`, `fleet_arrived`, `planet_colonized`, `colonization_failed`, `cargo_unloaded`, `fleet_removed` and `fleet_returned`, with `_id` and `_type` names.
   - **Views:** every view has `as_of` and `valid_until` (always present, null when nothing is scheduled). **`valid_until` counts only the viewer's own fleets and the entity's own scheduled events** (D-049, the advisor's ruling): it means "valid until, unless another player's fleet arrives", so a view never tells one player when another's fleet lands. Every continuous value has its `rate_g_per_h`, every stock its `cap_g`, and every progress its exact `eta` (null while nothing flows).
     - The planet view is the architecture's example, extended:
@@ -1217,6 +1219,25 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Dependencies:**
     - **axum gains its `query` feature:** two new crates, `serde_urlencoded` and `ryu`, which it uses.
     - **insta `=1.46.1`** (dev; default features off, plus `json`) for the contract snapshots. It adds seven crates: insta, similar, tempfile, fastrand, rustix, errno and linux-raw-sys.
+- **Repair round 1** (folded in after QA PASS on 4169425 and R1's verdict):
+  - **S1, a core change** (the advisor ruled to change it; the lead's Addendum 3 took the core option over a server remap):
+    - another player's fleet or ship fails the existence check itself, as `unknown_fleet` or `unknown_ship` (`command/fleet.rs`). D-028 is amended, and D-045's privacy text gains the line.
+    - **Why not a server remap.** It couldn't be certain, and it wasn't byte-identical. Walking the core's order:
+      - `send_fleet` checked the target planet between the fleet's existence and its ownership, so a foreign fleet sent to an unknown planet answered `unknown_planet` while an unknown fleet answered `unknown_fleet`;
+      - `assemble_fleet` checked `no_ships` and `invalid_cargo` before ship ownership;
+      - assemble's `not_owner` had two sources, a foreign ship or a foreign planet to load from.
+    - Recall, disband and unload already checked existence, then ownership, then state.
+    - **Planet `not_owner` is unchanged.** It's now only ever the planet: assemble loading from a planet that isn't the player's.
+    - **Tests:**
+      - eight `fleet_commands` expectations change from `NotOwner` to `UnknownFleet` or `UnknownShip`;
+      - paired tests compare a foreign fleet or ship with an unknown one, with the same other inputs, for every fleet and ship action, stationed and in transit, including both cases from the walk;
+      - the assemble split is pinned;
+      - `another_players_fleet_or_ship_answers_byte_for_byte_as_an_unknown_one` compares the status, the headers and the body bytes over HTTP, fresh and for a repeated key.
+    - **Goldens:** `just bless` moves nothing, and `voidforge-replay golden` verifies all six (the goldens' only `not_owner` records are planet refusals).
+  - **L1** (dev-qa): the `radius` schema's minimum is 0, set in `openapi()` after the integer bounds, since utoipa's f64 bounds can't hold i64::MAX and bound_integers would read a minimum of 0 as a u64.
+    - It's re-blessed, and a contract test pins 0 to i64::MAX.
+    - This is a third deliberate place where the schema and serde disagree (−1 fits an i64), alongside D-045's two. It's a query parameter, and the server answers −1 as 400 `invalid_query`.
+  - **dev-qa's test gaps:** a clock behind the World's time answers every view at the World's time, never 500 (Q1); a non-ASCII key byte is 400 (Q2); the body limit's exact boundary (Q3).
 - Tests:
   - **`crates/voidforge-server/tests/routes.rs`**, in the database stage: `database.sh` gains the `routes` binary. It runs the real router over HTTP, a real host recovered from Postgres, `Players` and a dex stand-in (shared with `tests/auth.rs` through `tests/common/dex.rs`), on a universe from testkit's `WorldBuilder` with fixed UUIDv7 players.
   - **The privacy test** holds the host so that another player's event fires inside the caller's own command record, asserts that it's there, and asserts that it never reaches the answer, fresh or repeated.
