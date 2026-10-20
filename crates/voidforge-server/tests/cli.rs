@@ -27,7 +27,10 @@ fn seed(players: &str) -> (i32, String) {
             "--rules",
             &rules(),
         ])
-        .env("DATABASE_URL", "mysql://u:secret-password@127.0.0.1/none")
+        .env(
+            "VOIDFORGE_DATABASE_URL",
+            "mysql://u:secret-password@127.0.0.1/none",
+        )
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
         .output()
         .unwrap();
@@ -56,6 +59,29 @@ fn a_bad_database_url_is_an_input_error_and_is_never_printed() {
     assert!(!out.contains("secret-password"), "{out}");
 }
 
+/// `seed` never reads `DATABASE_URL` (D-055, review-r1's R1-G3): with only that set, the database
+/// is missing, a usage error, and nothing is connected.
+#[test]
+fn seed_never_reads_database_url() {
+    let out = Command::new(BIN)
+        .args(["seed", "--seed", "1", "--players", "1", "--rules", &rules()])
+        .env(
+            "DATABASE_URL",
+            "postgres://u:secret-password@127.0.0.1:1/voidforge",
+        )
+        .env_remove("VOIDFORGE_DATABASE_URL")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("--database-url"), "{stderr}");
+    assert!(!stderr.contains("secret-password"), "{stderr}");
+    let help = Command::new(BIN).args(["seed", "--help"]).output().unwrap();
+    let help = String::from_utf8(help.stdout).unwrap();
+    assert!(help.contains("VOIDFORGE_DATABASE_URL"), "{help}");
+}
+
 #[test]
 fn usage_errors_exit_2() {
     let out = Command::new(BIN).arg("seed").output().unwrap();
@@ -76,7 +102,10 @@ fn seed_refuses_an_epoch_outside_the_window_before_connecting() {
         let out = Command::new(BIN)
             .args(["seed", "--seed", "1", "--players", "1", "--rules", &rules()])
             .args(["--epoch-unix-ms", epoch])
-            .env("DATABASE_URL", "mysql://u:secret-password@127.0.0.1/none")
+            .env(
+                "VOIDFORGE_DATABASE_URL",
+                "mysql://u:secret-password@127.0.0.1/none",
+            )
             .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
             .output()
             .unwrap();
@@ -96,7 +125,10 @@ fn seed_refuses_an_epoch_outside_the_window_before_connecting() {
             "--epoch-unix-ms",
             "-1",
         ])
-        .env("DATABASE_URL", "mysql://u:secret-password@127.0.0.1/none")
+        .env(
+            "VOIDFORGE_DATABASE_URL",
+            "mysql://u:secret-password@127.0.0.1/none",
+        )
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
         .output()
         .unwrap();

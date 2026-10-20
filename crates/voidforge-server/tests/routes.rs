@@ -5,7 +5,9 @@
 //!
 //! **The parity rule (T7):** the harness records the status of every response, per route, and
 //! each test ends by checking that the OpenAPI document declares every status it saw for that
-//! route and method. A handler can't answer something the contract doesn't name.
+//! route and method. A handler can't answer something the contract doesn't name. Since the Phase
+//! 3 gate (D-055, R1-G1) it checks the headers too: a response carries `Retry-After` and
+//! `WWW-Authenticate` exactly when the document declares them for its status.
 //!
 //! These need Postgres, so they are `#[ignore]`d outside the database stage (`just db-test`).
 
@@ -233,6 +235,10 @@ struct Reply {
     www_authenticate: Option<String>,
 }
 
+/// One response, for the parity rule: method, route, status, and whether `Retry-After` and
+/// `WWW-Authenticate` were sent.
+type Seen = (String, String, u16, bool, bool);
+
 struct Api {
     base: String,
     http: reqwest::Client,
@@ -246,8 +252,8 @@ struct Api {
     board: voidforge_server::leaderboard::Publish,
     ids: Ids,
     pool: PgPool,
-    /// Every (method, route, status) seen, for the parity rule.
-    seen: Mutex<BTreeSet<(String, String, u16)>>,
+    /// Every response seen, for the parity rule.
+    seen: Mutex<BTreeSet<Seen>>,
 }
 
 /// Limits no test here reaches, so only the rate-limit tests meet a 429 (P3.8).
@@ -449,6 +455,8 @@ impl Api {
             method.as_str().to_owned(),
             template(method.as_str(), path),
             status,
+            retry_after.is_some(),
+            www_authenticate.is_some(),
         ));
         Reply {
             status,
@@ -496,13 +504,14 @@ impl Api {
 }
 
 impl Drop for Api {
-    /// The parity rule, per test: every status seen is one the document declares for the route.
+    /// The parity rule, per test: every status seen is one the document declares for the route,
+    /// with exactly the headers it declares for that status.
     fn drop(&mut self) {
         if std::thread::panicking() {
             return;
         }
         let doc = voidforge_api_types::openapi();
-        for (method, route, status) in self.seen.lock().unwrap().iter() {
+        for (method, route, status, retry, www) in self.seen.lock().unwrap().iter() {
             let declared =
                 &doc["paths"][route][method.to_lowercase()]["responses"][status.to_string()];
             let unrouted = route.starts_with("unrouted") && *status == 404;
@@ -510,6 +519,13 @@ impl Drop for Api {
                 unrouted || !declared.is_null(),
                 "{method} {route} answered {status}, which the document doesn't declare"
             );
+            for (header, sent) in [("Retry-After", retry), ("WWW-Authenticate", www)] {
+                assert_eq!(
+                    *sent,
+                    !declared["headers"][header].is_null(),
+                    "{method} {route} {status}: {header} sent: {sent}; the document must agree"
+                );
+            }
         }
     }
 }
@@ -2036,5 +2052,57 @@ async fn the_budget_is_chosen_by_the_method(pool: PgPool) {
     for _ in 0..3 {
         assert_eq!(probe(Method::GET).await.unwrap().status(), 200);
     }
+    assert_limited(&api.get("/players/me", ALICE_SUB).await);
+}
+
+/// HEAD is refused on every route as 404 `not_found`, before any extractor runs: it never joins
+/// and never spends read budget (D-049 T3, D-055; review-r1's R1-G2). A HEAD response has no
+/// body, so these are sent directly, outside the parity bookkeeping.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn head_is_not_found_and_runs_nothing(pool: PgPool) {
+    let clock = Stepped::new();
+    let api = api_with(
+        &pool,
+        world(1, 0),
+        |_| {},
+        Some(clock.limiter((1, 1), (1, 1))),
+        None,
+    )
+    .await;
+    let accounts = api.accounts().await;
+    let paths = [
+        format!("/planets/{}", api.ids.alice_home.0),
+        "/planets?near=0,0,0&radius=1".to_owned(),
+        "/players/me".to_owned(),
+        "/players/me/fleets".to_owned(),
+        "/leaderboard".to_owned(),
+        "/openapi.json".to_owned(),
+        "/nothing".to_owned(),
+    ];
+    let gets = routes()
+        .into_iter()
+        .filter(|r| r.method == Method::GET)
+        .count();
+    assert_eq!(gets + 1, paths.len(), "every GET route, and one unknown");
+    for sub in [CAROL_SUB, ALICE_SUB] {
+        let token = api.token(sub);
+        for path in &paths {
+            for _ in 0..3 {
+                let r = api
+                    .http
+                    .head(format!("{}{path}", api.base))
+                    .bearer_auth(&token)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(r.status().as_u16(), 404, "HEAD {path}");
+            }
+        }
+    }
+    assert_eq!(api.accounts().await, accounts, "a HEAD made no account");
+    assert_eq!(api.records().await, 0, "a HEAD joined nobody");
+    // Alice's one read is still there: no HEAD spent it.
+    assert_eq!(api.get("/players/me", ALICE_SUB).await.status, 200);
     assert_limited(&api.get("/players/me", ALICE_SUB).await);
 }

@@ -64,7 +64,7 @@ fn seed(url: &str, epoch: i64) -> i32 {
             &rules_path(),
         ])
         .args(["--epoch-unix-ms", &epoch.to_string(), "--json"])
-        .env("DATABASE_URL", url)
+        .env("VOIDFORGE_DATABASE_URL", url)
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1293,7 +1293,7 @@ async fn seed_defaults_the_epoch_to_the_wall_clock(pool: PgPool) {
             "--rules",
             &rules_path(),
         ])
-        .env("DATABASE_URL", url(&pool))
+        .env("VOIDFORGE_DATABASE_URL", url(&pool))
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
         .output()
         .unwrap();

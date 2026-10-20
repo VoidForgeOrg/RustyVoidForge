@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT schemaname AS \"schema!\", tablename AS \"table!\" FROM pg_tables\n            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')\n            ORDER BY 1, 2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schema!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_tables",
+            "name": "schemaname"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "table!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_tables",
+            "name": "tablename"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "9d7016d4970bc55f70de5773d71940ffc68139b14fd10cbc92d11f3e050eee93"
+}

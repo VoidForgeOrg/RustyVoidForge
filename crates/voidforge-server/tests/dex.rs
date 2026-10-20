@@ -67,7 +67,8 @@ async fn a_real_dex_token_verifies_and_a_tampered_one_does_not() {
     let principal = verifier.verify(&bearer(&token)).await.unwrap();
     assert_eq!(principal.issuer, ISSUER);
     assert!(!principal.subject.is_empty());
-    println!("alice's subject: {}", principal.subject);
+    // The subject is personal data, never printed (D-047); its length shows it arrived.
+    println!("alice's subject: {} bytes", principal.subject.len());
     // One character of the signature changed.
     let mut tampered = token.clone();
     let last = tampered.pop().unwrap();

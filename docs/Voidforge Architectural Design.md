@@ -344,7 +344,7 @@ Reads never go through the command path. The host publishes an immutable read mo
 - Score is computed per request from `ScoringSpecs`: planets, finished buildings (operational ones; a building stops counting when its demolition begins), each finished ship once (roster or fleet), builds in progress at points × delivered ÷ cost (rounded down), and resources in storage or cargo.
 - The leaderboard is rebuilt every 60 seconds from the read model and served with its `as_of`. It is the only fixed-interval computation besides snapshots.
 - Post-MVP: Domain events stream to each player over SSE or WebSocket, with the log `seq` as the resume token. Until then clients poll the read API, using valid\_until to know when a view next changes; a domain-event feed is post-MVP too.
-- Planet data is public to all players; fleets are visible only to their owner.
+- Planet data is public to all players, except the ships on a planet's roster: those, like fleets, are visible only to their owner (Game Design).
 
 Example planet view, with illustrative values. It's abridged: the full view also has `position`, `slots`, `ship_builds` and `roster`, and `crates/voidforge-api-types/openapi.json` is the contract (D-045).
 
@@ -373,6 +373,7 @@ Example planet view, with illustrative values. It's abridged: the full view also
 | `GET /players/me` | Profile, homeworld and score |
 | `GET /players/me/fleets` | The player's fleets |
 | `GET /leaderboard` | Ranked scores with `as_of` |
+| `GET /openapi.json` | The contract itself; public, needs no token (D-049) |
 
 All writes go through the single `POST /commands` endpoint. Its body names one of the ten player actions from Commands, so every write maps one-to-one onto a log record; the player comes from the auth token, never from the body. Join game isn't in the public body: the server issues it on a player's first call (D-045).
 

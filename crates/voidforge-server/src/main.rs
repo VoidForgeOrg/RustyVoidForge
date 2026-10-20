@@ -25,8 +25,8 @@ use voidforge_worldgen::WorldgenError;
 const SERVICE: &str = "voidforge-server";
 
 const SEED_EXIT_CODES: &str = "Exit codes: 0 seeded, 2 usage error, 3 refused (the database is \
-    not empty, the universe is too large, or the epoch is out of range), 4 input or database \
-    error, 5 telemetry failed.";
+    not empty, before anything is migrated; the universe is too large; or the epoch is out of \
+    range), 4 input or database error, 5 telemetry failed.";
 
 const SERVE_EXIT_CODES: &str = "Exit codes: 0 stopped cleanly (the final snapshot is at the log \
     head), 2 usage error (a setting out of range), 3 refused (no universe, no recorded epoch, an \
@@ -58,8 +58,9 @@ enum Command {
         /// The rules file (for example rules/v0.toml).
         #[arg(long)]
         rules: PathBuf,
-        /// The database (default: DATABASE_URL). It is never printed.
-        #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
+        /// The universe's database. Required; never printed. Deliberately not DATABASE_URL: a
+        /// stray one, set for sqlx's tooling, could point here at the owner's database (D-055).
+        #[arg(long, env = "VOIDFORGE_DATABASE_URL", hide_env_values = true)]
         database_url: String,
         /// The universe's epoch, Unix milliseconds: wall time at game time 0, from 1970-01-01 up
         /// to 2100-01-01 (default: now). Recorded once; `serve` reads it.
@@ -280,9 +281,9 @@ fn bootstrap(
                     "the database already holds a universe; it is never overwritten".to_owned(),
                 )
             }
-            BootstrapError::HasAccounts { .. } | BootstrapError::EpochOutOfRange(_) => {
-                (Exit::Refused, e.to_string())
-            }
+            BootstrapError::HasAccounts { .. }
+            | BootstrapError::Foreign { .. }
+            | BootstrapError::EpochOutOfRange(_) => (Exit::Refused, e.to_string()),
             // The URL holds a password: the error never echoes it.
             BootstrapError::Url => input("--database-url is not a Postgres URL".to_owned()),
             other => input(other.to_string()),

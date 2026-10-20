@@ -47,7 +47,7 @@ fn seed_process(pool: &PgPool) -> std::process::Child {
             &PLAYERS.to_string(),
         ])
         .args(["--rules", rules.to_str().unwrap(), "--json"])
-        .env("DATABASE_URL", url(pool))
+        .env("VOIDFORGE_DATABASE_URL", url(pool))
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -139,6 +139,82 @@ async fn an_accounts_only_database_is_refused_and_changes_nothing(pool: PgPool) 
         .await
         .unwrap();
     assert_eq!(rows, 2, "nothing deleted");
+}
+
+/// Every table outside the system schemas, and the migrations sqlx recorded (none without its
+/// table): what a refused seed must leave exactly as it found.
+async fn schema(pool: &PgPool) -> (Vec<String>, Vec<i64>) {
+    let tables = sqlx::query_scalar::<_, String>(
+        "SELECT schemaname || '.' || tablename FROM pg_tables \
+         WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    let applied = if tables.iter().any(|t| t == "public._sqlx_migrations") {
+        sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations ORDER BY 1")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    } else {
+        Vec::new()
+    };
+    (tables, applied)
+}
+
+/// D-055 (review-r1's R1-G3): an unmigrated database that isn't empty is refused **before
+/// anything is migrated**. Before the fix, seed migrated it, found no universe, and seeded beside
+/// the stranger's table.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn an_unmigrated_database_with_other_tables_is_refused_and_gets_no_schema(pool: PgPool) {
+    sqlx::query("CREATE TABLE notes (body text)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = schema(&pool).await;
+    assert_eq!(before, (vec!["public.notes".to_owned()], vec![]));
+    let (code, v) = seed(&pool);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(v["result"], "refused");
+    let error = v["error"].as_str().unwrap();
+    assert!(
+        error.contains("1 tables that aren't a Voidforge universe's (for example public.notes)"),
+        "{error}"
+    );
+    assert_eq!(schema(&pool).await, before, "nothing was migrated");
+}
+
+/// D-055: a refused seed writes no schema. An accounts-only database migrated only to 0003 (no
+/// universe table yet) is refused before migrating: still no universe table, nothing recorded.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_refused_seed_on_a_partly_migrated_database_changes_no_schema(pool: PgPool) {
+    for m in MIGRATOR.iter().filter(|m| m.version <= 3) {
+        // The repository's own migration files, applied by hand to stop at 0003.
+        sqlx::raw_sql(m.sql.clone()).execute(&pool).await.unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO accounts (player_id, issuer, subject) \
+         VALUES (uuidv7(), 'http://localhost:5556/dex', 'alice')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let before = schema(&pool).await;
+    assert!(
+        before.0.contains(&"public.accounts".to_owned()),
+        "{before:?}"
+    );
+    assert!(
+        !before.0.contains(&"public.universe".to_owned()),
+        "{before:?}"
+    );
+    let (code, v) = seed(&pool);
+    assert_eq!(code, 3, "{v}");
+    let error = v["error"].as_str().unwrap();
+    assert!(error.contains("1 accounts"), "{error}");
+    assert_eq!(schema(&pool).await, before, "nothing was migrated");
 }
 
 /// D-038 after the bootstrap: the host recovers from the seq-0 snapshot, serves a Join game, and
