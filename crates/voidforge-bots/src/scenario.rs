@@ -454,24 +454,44 @@ pub async fn run(
     ensure(fleet.cargo == load, step, || {
         format!("the cargo fleet carries {:?}, not {load:?}", fleet.cargo)
     })?;
-    // The homeworld paid for the cargo (dev-qa's F1): a load that doesn't debit the planet makes
-    // ingots. The planet refines meanwhile, so its own view's rate and times give the expected
-    // amount; the tolerance, 1% of the cargo, is far above the rounding and far below the cargo.
+    // The homeworld paid for the cargo, exactly (dev-qa's F1; review-r2 on round 1: a 1% bound let
+    // a 99.5% debit through). A stock reads value + floor((rate * (t - checkpoint) + remainder)
+    // / 3,600,000), and loading subtracts whole grams without touching the remainder or the
+    // checkpoint, so between two reads at one rate, after - before + cargo is within 1 g of
+    // rate * elapsed / 3,600,000: |3,600,000 * (after - before + cargo) - rate * elapsed| is
+    // below 3,600,000. That holds only while the flow is constant, which the setup checks below
+    // establish from the views themselves.
     let after = view(winner.planet(home).await?, step)?;
     let (was, now) = (before.stocks.iron_ingot, after.stocks.iron_ingot);
-    let elapsed_ms = unix_ms(&after.as_of) - unix_ms(&before.as_of);
-    let refined = i128::from(was.rate_g_per_h) * i128::from(elapsed_ms) / 3_600_000;
-    let expected = i128::from(was.amount_g) + refined - i128::from(CARGO_INGOTS_G);
     ensure(
-        (i128::from(now.amount_g) - expected).abs() <= i128::from(CARGO_INGOTS_G / 100),
-        step,
+        was.rate_g_per_h == now.rate_g_per_h
+            && before
+                .valid_until
+                .as_ref()
+                .is_none_or(|v| *v >= after.as_of),
+        "transport (setup)",
         || {
             format!(
-                "the homeworld's ingots went {} -> {} over {elapsed_ms} ms at {} g/h; loading {CARGO_INGOTS_G} g should leave about {expected}",
-                was.amount_g, now.amount_g, was.rate_g_per_h
+                "the homeworld's ingot flow changed between the two reads, so the debit can't be measured exactly: rate {} then {} g/h, valid until {:?}, read again at {:?}",
+                was.rate_g_per_h, now.rate_g_per_h, before.valid_until, after.as_of
             )
         },
     )?;
+    let elapsed_ms = unix_ms(&after.as_of) - unix_ms(&before.as_of);
+    let hour_ms = 3_600_000_i128;
+    let moved = (i128::from(now.amount_g) - i128::from(was.amount_g) + i128::from(CARGO_INGOTS_G))
+        * hour_ms;
+    let refined = i128::from(was.rate_g_per_h) * i128::from(elapsed_ms);
+    ensure((moved - refined).abs() < hour_ms, step, || {
+        format!(
+            "the homeworld's ingots went {} -> {} over {elapsed_ms} ms at {} g/h: {CARGO_INGOTS_G} g loaded, but the planet paid {} g",
+            was.amount_g,
+            now.amount_g,
+            was.rate_g_per_h,
+            (i128::from(was.amount_g) * hour_ms + refined - i128::from(now.amount_g) * hour_ms)
+                / hour_ms,
+        )
+    })?;
     accepted(
         winner
             .command(

@@ -1445,7 +1445,9 @@ Each entry records its date, the package that made it, the decision, the reasons
          - the loser's fleet is stationed at the target with its Colony Ship aboard.
        - A same-millisecond tie stays with the core's tests.
     6. **Transport:**
-       - the winner assembles its Cargo Vessel with 400,000,000 g of ingots. The fleet shows that cargo, and **the homeworld is debited by it** (repair round 1, F1): its ingots after loading equal those before, plus what it refined in between at its view's own rate, minus the cargo, within 1% of the cargo. The winner then sends the fleet, `transport`, to its colony;
+       - the winner assembles its Cargo Vessel with 400,000,000 g of ingots. The fleet shows that cargo, and **the homeworld is debited by exactly it** (repair round 1, F1; tightened in round 2). The winner then sends the fleet, `transport`, to its colony.
+         - **The bound's derivation:** a stock reads `value + floor((rate·(t − checkpoint) + remainder) / 3,600,000)`, and loading subtracts whole grams without touching the remainder or the checkpoint. So between the two reads, `after − before + cargo` is within 1 g of `rate·elapsed / 3,600,000`. The check is the integer form, `|3,600,000·(after − before + cargo) − rate·elapsed| < 3,600,000`: under 1 g, with no tolerance to choose.
+         - **A setup check first:** the flow must be constant across the window (the same rate in both views, and the first view's `valid_until` not before the second's `as_of`, so no completion or cap falls between them). Otherwise the step fails as "transport (setup)", loudly and never vacuously. With the fixed seed, nothing is scheduled in that window of about 12 ms.
        - on arrival the fleet carries nothing, and the colony's ingots rose by exactly that amount. The colony has no buildings: a setup check confirms its rate is 0, so the delta is exact.
     7. **Privacy** (D-030, D-049 S1), while alice's colony fleet is in flight:
        - a setup check: alice's own fleets list that fleet;
@@ -1499,12 +1501,12 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **The CI negative control:** a throwaway draft PR (#44), whose one commit makes the bots expect the later arrival to win, failed red at the race with a readable log and every service's log printed. It was then closed and its branch deleted.
   - **The mutation table** (`slices/37-p3-6-e2e/proof/mutate.py`):
     - Each case is a full `e2e.sh` run in a fresh copy with one planted bug, and counts as caught only when it fails **at the step it names**. Compile errors are unproven and never counted.
-    - **The control passed, and 20 of 20 mutants were caught at their named steps** on repair round 1's head (b14572f; 0e74bcb before it: 16 of 16). That's 14 product bugs, the spec's 2 negative controls and 4 harness cases:
+    - **The control passed, and every mutant was caught at its named step:** 21 of 21 on repair round 2's head (20 of 20 on round 1's b14572f; 16 of 16 on 0e74bcb). That's 15 product bugs, the spec's 2 negative controls and 4 harness cases:
       - join: every call joins a new player; the board leaves a player off;
       - leaderboard: ranks from 0; the board keeps only the leader after a colonize (review-r2's L1);
       - build: a repeated key applies the command again;
       - race: an owned planet is colonized again; a colonization uses no Colony Ship; a failed colonization uses the Colony Ship; a player's planets are only its homeworld;
-      - transport: Transport doesn't unload; a fleet is assembled without its cargo; the cargo isn't debited from the planet (dev-qa's M1);
+      - transport: Transport doesn't unload; a fleet is assembled without its cargo; the cargo isn't debited from the planet (dev-qa's M1); the planet is debited 99.5% of the cargo (review-r2, round 2);
       - privacy: everyone's fleets are listed; a foreign fleet is `not_owner`;
       - the spec's two negative controls: serve accepts only the web client's tokens (join, 401); the bots expect the later arrival to win (race);
       - the harness: serve killed instead of stopped, and serve dying during the scenario (both exit 137, named); serve ignoring SIGTERM (exit 124: killed, reaped, its database dropped); the run's database failing to drop (the run fails with the reason).
@@ -1517,6 +1519,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **L1 (review-r2, LOW):** the final board's exact membership. R2's mutant, the board keeping only the leader once anyone has two planets, survived before; it's caught now.
   - **F3 (dev-qa, INFO), my call: correct by construction, not removed.** The fixed seed makes alice win every run, so the old bob-only path (queue a Cargo Vessel after the race) never ran. Now both players build the same ships before the race, and the winner's vessel is picked with its other data. The transport has one path, and nothing is left that only a bob win would run.
   - **F4 (dev-qa, INFO):** `SHIPS_WITHIN`'s comment names its measurement: the ships step takes 37 s. The prototype's 19 s came after about 20 s of extra refining.
+- **Repair round 2** (review-r2 on 6b9f868; `repair-assignment-r2.md`): F1's 1% bound (4,000,000 g) let a 99.5% debit through (2 t duplicated). A clean run shows the exact debit, with no residual, at 16,000 g/ms. The bound is now under 1 g, derived above, with the constant-flow setup check. R2's partial-debit mutant joins the table: "the planet paid 398000000 g" is caught at transport, and so is QA's M1 ("paid 0 g").
 - Where it's enforced:
   - `crates/voidforge-bots/` (src, Cargo.toml, AGENTS.md);
   - `.github/scripts/{e2e.sh, check-dex-parity.sh, test-check-dex-parity.sh}` and `.github/workflows/ci.yml` (the lint steps, the `e2e` job);
