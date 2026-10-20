@@ -196,6 +196,8 @@ def run(args):
         # 6. Replay.
         status, _, body = web.request(callback)
         check(status == 400 and "Login failed" in body, "a replayed callback is refused (400)", str(status))
+        check("You are still logged in" in body and "not logged in" not in body,
+              "the refusal says the browser is still logged in (QA's F1)", body[:300])
         stranger = Browser()
         status, _, body = stranger.request(callback)
         check(status == 400 and "Logged in" not in stranger.request(WEB + "/")[2],

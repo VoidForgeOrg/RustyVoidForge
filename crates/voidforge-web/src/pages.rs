@@ -126,9 +126,10 @@ pub enum Refusal {
     Unavailable,
 }
 
-/// The page for a refused login: always 400 or 503, never a session.
+/// The page for a refused login: always 400 or 503, never a new login. `logged_in` says whether
+/// the browser still has the login it had before.
 #[must_use]
-pub fn refused(why: Refusal) -> Markup {
+pub fn refused(why: Refusal, logged_in: bool) -> Markup {
     let text = match why {
         Refusal::UnknownAttempt => {
             "This login link isn't one this browser started, or it was already used."
@@ -142,8 +143,13 @@ pub fn refused(why: Refusal) -> Markup {
         "Login failed",
         html! {
             h1 { "Login failed" }
-            p { (text) " You are not logged in." }
-            p { a href="/login" { "Log in again" } }
+            @if logged_in {
+                p { (text) " You are still logged in from before." }
+                p { a href="/" { "Home" } }
+            } @else {
+                p { (text) " You are not logged in." }
+                p { a href="/login" { "Log in again" } }
+            }
         },
     )
 }

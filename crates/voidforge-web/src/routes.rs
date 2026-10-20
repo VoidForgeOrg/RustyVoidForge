@@ -207,9 +207,12 @@ struct CallbackQuery {
     error: Option<String>,
 }
 
-fn refusal(status: StatusCode, why: Refusal) -> Response {
+/// A refused callback's page. It never logs anyone in, and it says whether the browser is still
+/// logged in from before: a replayed callback keeps the session it found (QA's F1).
+async fn refusal(session: &Session, status: StatusCode, why: Refusal) -> Response {
     tracing::warn!(outcome = "refused", reason = ?why, "a login callback was refused");
-    page(status, pages::refused(why))
+    let logged_in = matches!(session.get::<LoggedIn>(LOGIN_KEY).await, Ok(Some(_)));
+    page(status, pages::refused(why, logged_in))
 }
 
 #[tracing::instrument(name = "web.callback", skip_all)]
@@ -234,30 +237,35 @@ async fn callback(
         None => None,
     };
     if q.error.is_some() {
-        return refusal(StatusCode::BAD_REQUEST, Refusal::Provider);
+        return refusal(&session, StatusCode::BAD_REQUEST, Refusal::Provider).await;
     }
     let Some(pending) = pending else {
-        return refusal(StatusCode::BAD_REQUEST, Refusal::UnknownAttempt);
+        return refusal(&session, StatusCode::BAD_REQUEST, Refusal::UnknownAttempt).await;
     };
     let Some(code) = q.code.as_deref().filter(|c| !c.is_empty()) else {
-        return refusal(StatusCode::BAD_REQUEST, Refusal::NoCode);
+        return refusal(&session, StatusCode::BAD_REQUEST, Refusal::NoCode).await;
     };
     let identity = match s.provider.finish(code, &pending).await {
         Ok(i) => i,
         Err(LoginError::KeysUnavailable) => {
-            return refusal(StatusCode::SERVICE_UNAVAILABLE, Refusal::Unavailable);
+            return refusal(
+                &session,
+                StatusCode::SERVICE_UNAVAILABLE,
+                Refusal::Unavailable,
+            )
+            .await;
         }
         Err(LoginError::Random) => return internal(),
         Err(e) => {
             tracing::warn!(error = %e, "the login's answer failed a check");
-            return refusal(StatusCode::BAD_REQUEST, Refusal::Rejected);
+            return refusal(&session, StatusCode::BAD_REQUEST, Refusal::Rejected).await;
         }
     };
     let until = identity.exp.saturating_add(EXPIRED_GRACE_SECS);
     let Ok(session_end) =
         OffsetDateTime::from_unix_timestamp(i64::try_from(until).unwrap_or(i64::MAX))
     else {
-        return refusal(StatusCode::BAD_REQUEST, Refusal::Rejected);
+        return refusal(&session, StatusCode::BAD_REQUEST, Refusal::Rejected).await;
     };
     // A new session id at login, so an id planted before it is worthless (fixation).
     let stored = async {

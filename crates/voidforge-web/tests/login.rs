@@ -257,12 +257,24 @@ async fn a_replayed_callback_is_refused() {
     assert_eq!(b.get(&callback).await.status, 303);
     let again = b.get(&callback).await;
     assert_eq!(again.status, 400);
+    // QA's F1: the page matches the session it kept.
+    assert!(
+        again.body.contains("You are still logged in") && !again.body.contains("not logged in"),
+        "{}",
+        again.body
+    );
     assert!(
         logged_in(&b.get("/").await.body),
         "the refusal leaves the real login alone"
     );
     let mut other = w.browser();
-    assert_eq!(other.get(&callback).await.status, 400);
+    let refused = other.get(&callback).await;
+    assert_eq!(refused.status, 400);
+    assert!(
+        refused.body.contains("You are not logged in"),
+        "{}",
+        refused.body
+    );
     assert!(!logged_in(&other.get("/").await.body));
 }
 
