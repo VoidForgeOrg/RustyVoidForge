@@ -290,17 +290,18 @@ Gate: the end-to-end scenario passes in CI with real dex tokens, and QA has trie
 
 ## Phase 4: Web frontend
 
-A person can play the whole MVP loop in a browser. Every package lives in `voidforge-web`, which never links the server or the core.
+A person can play the whole MVP loop in a browser. Every package except P4.1r lives in `voidforge-web`, which never links the server or the core; P4.1r adds a public rules read to the server and `voidforge-api-types`.
 
 | ID | Package | Done when |
 | --- | --- | --- |
 | P4.1 | Login: authorization code with PKCE through dex, state and nonce checks, session and logout | A static dex user logs in and out |
+| P4.1r | Public rules read: `GET /rules` returns, as api-types, building and ship costs and build times, ship capacities and speeds, slots and caps, and the rules version | `/openapi.json` covers it, and the values match the rules file the universe was seeded with |
 | P4.2 | API client: typed calls built on `voidforge-api-types`, forwarding the ID token | API errors show up as messages on the page |
 | P4.3 | Pages: home, planet, fleets, universe and leaderboard | Every page renders from live API data |
 | P4.4 | Command forms: one per action, a hidden idempotency key, post then redirect | Every MVP action works from the browser |
 | P4.5 | Smoke tests: an HTTP client with a cookie jar walks the login and one game loop | Passes in CI against the compose stack within minutes, on the fast test rules |
 
-Packages run one at a time, in ID order.
+Packages run one at a time, in ID order; P4.1r runs between P4.1 and P4.2.
 
 Gate: on the fast test rules, QA logs in as a static user in a real browser, then build, queue ships, colonize and transport cargo from the browser alone.
 

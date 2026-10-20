@@ -1726,3 +1726,10 @@ Each entry records its date, the package that made it, the decision, the reasons
   - `crates/voidforge-api-types/src/lib.rs` and `openapi.json`;
   - `tests/guardrails/{check_web_deps.py, run_fixtures.py}`;
   - `.github/scripts/{seed.sh, e2e.sh}`, AGENTS.md, `deploy/README.md`, the Architectural Design.
+
+### D-056: A public rules read, P4.1r
+
+- Date and package: 2026-10-20, planning (Phase 4). Raised by dev-design (`phase4-ux.md`, section 9 Q2); advisor intent input; lead ruling (`phase4-ux-ruling-lead.md`, revised Q2). The Technical Plan row was added by the advisor.
+- Decision: package P4.1r, between P4.1 and P4.2, adds `GET /rules` to the server and its types to `voidforge-api-types`. It returns building and ship costs and build times, ship capacities and speeds, slots and caps, and the rules version. It's a contract change through `just openapi`, with a reviewer. The builder proposes whether it is authenticated like every route or public like `/openapi.json`. P4.2's client and P4.3/P4.4's forms show cost, time and capacity from it.
+- Reasons: the economy is the game, and forms that can't show what a choice costs or how long it takes leave it opaque (the API exposes `cost_g` only once a build exists, and no ship capacity). The rules are static per universe and public game data, so the read is cheap and has no privacy surface. The web still never reads the rules files itself (layering). It replaces the carry the lead first ruled (a rules surface after the Phase 4 gate).
+- Where it's recorded: the [Technical Plan's Phase 4 table](Voidforge%20Technical%20Plan.md#phase-4-web-frontend).
