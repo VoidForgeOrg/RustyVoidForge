@@ -735,3 +735,82 @@ async fn while_keys_cant_be_fetched_the_page_says_so() {
         "the floor holds after a failure too"
     );
 }
+
+// --- Round 2: the cap's boundary (QA's D1) and its log (QA's D2) ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn at_the_cap_concurrent_logins_get_a_login_or_the_busy_page_never_a_500() {
+    // The room check and the save race only when requests overlap between them, which a single
+    // round of 32 does about half the time; 20 fresh rounds make a missed race vanishingly rare.
+    for round in 0..20 {
+        let w = World::start_with(
+            Options {
+                max_sessions: 4,
+                ..Options::default()
+            },
+            |_| {},
+        )
+        .await;
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let mut b = w.browser();
+            handles.push(tokio::spawn(async move { b.get("/login").await.status }));
+        }
+        let mut statuses = Vec::new();
+        for h in handles {
+            statuses.push(h.await.unwrap());
+        }
+        let logins = statuses.iter().filter(|&&s| s == 303).count();
+        let busy = statuses.iter().filter(|&&s| s == 503).count();
+        assert_eq!((logins, busy), (4, 28), "round {round}: {statuses:?}");
+    }
+}
+
+#[tokio::test]
+async fn refusals_at_the_cap_log_one_warn_then_one_info_on_recovery() {
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::Layer as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let sink = Sink::default();
+    let writer = sink.clone();
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
+    );
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let w = World::start_with(
+        Options {
+            max_sessions: 1,
+            ..Options::default()
+        },
+        |_| {},
+    )
+    .await;
+    let mut alice = logged_in_browser(&w).await;
+    for _ in 0..40 {
+        assert_eq!(w.browser().get("/login").await.status, 503);
+    }
+    alice.post("/logout").await;
+    assert_eq!(w.browser().get("/login").await.status, 303);
+    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    let lines = |what: &str| log.lines().filter(|l| l.contains(what)).count();
+    assert_eq!(lines("refusing new logins"), 1, "{log}");
+    assert!(log.contains("WARN") && log.contains("refused=1 "), "{log}");
+    assert_eq!(lines("has room again"), 1, "{log}");
+    assert!(log.contains("refused=40"), "{log}");
+}

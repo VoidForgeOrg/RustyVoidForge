@@ -147,6 +147,12 @@ async fn keep_expiry(session: &Session) -> Result<(), session::SessionError> {
     Ok(())
 }
 
+/// The 503 page for a new session past the store's cap, logged without a flood (QA's D2).
+fn busy(s: &AppState) -> Response {
+    s.sessions.refused();
+    page(StatusCode::SERVICE_UNAVAILABLE, pages::busy())
+}
+
 /// Ends the session and shows the expired notice, offering to return to `next`.
 async fn expired(session: &Session, next: &str) -> Response {
     if let Err(e) = session.flush().await {
@@ -203,10 +209,11 @@ async fn login(
         .and_then(local_path)
         .unwrap_or("/")
         .to_owned();
-    // A new session past the store's cap is refused here, before anything is stored (R1-1).
-    if session.id().is_none() && !s.sessions.has_room() {
-        tracing::warn!(outcome = "busy", "the session store is full");
-        return page(StatusCode::SERVICE_UNAVAILABLE, pages::busy());
+    // A new session past the store's cap is refused (R1-1), never evicting another. This check
+    // is the fast path; the save below decides a race at the boundary (QA's D1).
+    let new = session.id().is_none();
+    if new && !s.sessions.has_room() {
+        return busy(&s);
     }
     let Some(now) = oidc::unix_now() else {
         return internal();
@@ -225,6 +232,15 @@ async fn login(
     if let Err(e) = keep_expiry(&session).await {
         tracing::error!(error = %e, "reading the session failed");
         return internal();
+    }
+    // Saved here rather than by the layer after the handler, so a store refused at the cap
+    // (another login took the last place since the check) is the busy page, not a bare 500.
+    // The store checks and inserts under one lock. A 503 makes the layer skip its own save.
+    if new {
+        if session.save().await.is_err() {
+            return busy(&s);
+        }
+        s.sessions.admitted();
     }
     tracing::info!(outcome = "redirected", "a login started");
     see_other(&url)

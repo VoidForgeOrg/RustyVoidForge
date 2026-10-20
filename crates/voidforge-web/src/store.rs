@@ -10,10 +10,16 @@
 //!   `/login` answers 503 rather than grow. Logged-in sessions already stored are never evicted
 //!   for room.
 //!
+//! - **Refusals are logged without a flood** (round 2, QA's D2; D-054's pattern): the first
+//!   refusal after a quiet spell is a WARN, later ones are debug with a running count, a WARN
+//!   repeats at most once a minute while refusals go on, and the first session admitted after
+//!   them is an INFO with the total.
+//!
 //! One `std` mutex, held for one map operation and never across an await.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tower_sessions::cookie::time::OffsetDateTime;
@@ -24,6 +30,8 @@ use tower_sessions::session_store::{self, SessionStore};
 pub const MAX_SESSIONS: usize = 50_000;
 /// The smallest map a doubling sweep waits for.
 pub const SWEEP_FLOOR: usize = 1_024;
+/// The shortest time between two WARNs about refused sessions.
+pub const WARN_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Default)]
 struct Inner {
@@ -32,10 +40,21 @@ struct Inner {
     swept: usize,
 }
 
+/// Refusals since the store last had room, for the log.
+#[derive(Debug, Default)]
+struct Pressure {
+    /// Refused since the last admitted session.
+    refused: u64,
+    /// Refused since the last WARN.
+    since_warn: u64,
+    last_warn: Option<Instant>,
+}
+
 /// A bounded in-memory session store. Clones share one map.
 #[derive(Debug, Clone)]
 pub struct BoundedStore {
     inner: Arc<Mutex<Inner>>,
+    pressure: Arc<Mutex<Pressure>>,
     max: usize,
 }
 
@@ -55,7 +74,38 @@ impl BoundedStore {
     pub fn new(max: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner::default())),
+            pressure: Arc::new(Mutex::new(Pressure::default())),
             max,
+        }
+    }
+
+    /// Logs a refused new session: a WARN after a quiet spell or a minute, debug otherwise.
+    pub fn refused(&self) {
+        let mut p = self.pressure.lock().unwrap_or_else(|e| e.into_inner());
+        p.refused = p.refused.saturating_add(1);
+        p.since_warn = p.since_warn.saturating_add(1);
+        if p.last_warn.is_none_or(|at| at.elapsed() >= WARN_EVERY) {
+            tracing::warn!(
+                refused = p.since_warn,
+                max = self.max,
+                "the session store is full: refusing new logins"
+            );
+            p.since_warn = 0;
+            p.last_warn = Some(Instant::now());
+        } else {
+            tracing::debug!(
+                refused = p.refused,
+                "a new login refused: the session store is full"
+            );
+        }
+    }
+
+    /// Notes an admitted new session: after refusals, one INFO with their total.
+    pub fn admitted(&self) {
+        let mut p = self.pressure.lock().unwrap_or_else(|e| e.into_inner());
+        if p.refused > 0 {
+            tracing::info!(refused = p.refused, "the session store has room again");
+            *p = Pressure::default();
         }
     }
 
