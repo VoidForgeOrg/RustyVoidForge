@@ -460,6 +460,8 @@ async fn start(
         last_seq = recovered.last_seq,
         "recovered the universe"
     );
+    // `GET /rules` answers the rules just verified against the universe, built once (D-058).
+    let rules_body = crate::rules_view::body(&rules);
     let store_url = url.clone();
     let config = HostConfig::new(epoch, build);
     // `spawn` waits for the host to start: a blocking wait, kept off the async workers.
@@ -516,6 +518,7 @@ async fn start(
         epoch_unix_ms: epoch,
         leaderboard: board,
         limiter: Arc::new(Limiter::new(limits, Arc::new(Instant::now))),
+        rules: rules_body,
     };
     tracing::info!(
         read_rate = limits.read.per_sec,

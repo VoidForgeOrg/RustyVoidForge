@@ -10,4 +10,5 @@ pub mod auth;
 pub mod codes;
 pub mod leaderboard;
 pub mod limit;
+pub mod rules_view;
 pub mod serve;

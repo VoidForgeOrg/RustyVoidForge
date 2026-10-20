@@ -50,6 +50,10 @@ expression: declared
     "500",
     "503"
   ],
+  "GET /rules": [
+    "200",
+    "500"
+  ],
   "POST /commands": [
     "200",
     "400",

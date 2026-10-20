@@ -50,6 +50,9 @@ pub use clock::{Clock, ManualClock, SystemClock};
 /// The command vocabulary this API already exposes (in [`Receipt`] and [`ReadModel`]), so the
 /// server can name it without depending on the core (decision log D-047).
 pub use voidforge_core::command::{Action, Command, Rejection};
+/// The rules' spec types, so the server can map the loaded rules to `GET /rules` without
+/// depending on the core (decision log D-058). Names only.
+pub use voidforge_core::rules;
 /// The rules type `recover` and `spawn` take, so `serve` can pass a parsed rules file between its
 /// runtimes without depending on the core (decision log D-050). A name only.
 pub use voidforge_core::rules::Rules;

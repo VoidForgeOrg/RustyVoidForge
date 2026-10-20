@@ -704,6 +704,24 @@ async fn dex_down_at_startup_answers_503_until_the_keys_load(pool: PgPool) {
     assert_eq!(s.exit(PATIENCE).0, 0);
 }
 
+/// `GET /rules` from the real binary is the rules file it was started with, key for key, read as
+/// plain TOML without worldgen (P4.1r, D-058): the body is built from the rules `serve` loaded and
+/// verified, and it's public, so no token is sent.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn rules_answers_the_loaded_rules_file(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let s = serve(&url, &dex.issuer, &[]);
+    let r = call("GET", s.url("/rules"), None, None);
+    assert_eq!(r.status, 200, "{:?}", r.body);
+    let text = std::fs::read_to_string(rules_path()).unwrap();
+    let mut file: toml::Table = toml::from_str(&text).unwrap();
+    file.remove("worldgen");
+    assert_eq!(r.body, serde_json::to_value(file).unwrap());
+    s.signal("TERM");
+    assert_eq!(s.exit(PATIENCE).0, 0);
+}
+
 /// A request in flight at shutdown, made certain with no hook in the code: the test holds
 /// `log_records` locked, so the host's append waits, and the drain waits for it. Released within
 /// the drain, the request is answered, its record is durable, and the stop is clean.

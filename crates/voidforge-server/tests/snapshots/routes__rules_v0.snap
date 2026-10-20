@@ -1,0 +1,71 @@
+---
+source: crates/voidforge-server/tests/routes.rs
+expression: want
+---
+{
+  "buildings": {
+    "drill": {
+      "build_time_ms": 10800000,
+      "cost_g": 150000000,
+      "demolition_time_ms": 3600000,
+      "output_g_per_h": 10000000
+    },
+    "refinery": {
+      "build_time_ms": 14400000,
+      "cost_g": 250000000,
+      "demolition_time_ms": 3600000,
+      "ingots_per_ore": 2,
+      "intake_g_per_h": 8000000,
+      "output_g_per_h": 16000000
+    },
+    "shipyard": {
+      "build_time_ms": 43200000,
+      "cost_g": 1200000000,
+      "demolition_time_ms": 7200000,
+      "parallel_builds": 3
+    }
+  },
+  "homeworld": {
+    "drills": 1,
+    "ingots_g": 1500000000,
+    "ore_g": 2000000000,
+    "refineries": 1
+  },
+  "name": "v0",
+  "planet": {
+    "ingot_cap_g": 5000000000,
+    "ore_cap_g": 10000000000,
+    "slots": 8
+  },
+  "scoring": {
+    "cargo_vessel": 150,
+    "colony_ship": 400,
+    "drill": 100,
+    "ingots": {
+      "per_g": 10000000,
+      "points": 2
+    },
+    "ore": {
+      "per_g": 10000000,
+      "points": 1
+    },
+    "planet": 1000,
+    "refinery": 150,
+    "shipyard": 500
+  },
+  "ships": {
+    "cargo_vessel": {
+      "build_time_ms": 14400000,
+      "cargo_capacity_g": 500000000,
+      "cost_g": 300000000,
+      "speed_du_per_h": 15000
+    },
+    "colony_ship": {
+      "build_time_ms": 36000000,
+      "cargo_capacity_g": 0,
+      "cost_g": 800000000,
+      "speed_du_per_h": 10000
+    }
+  },
+  "version": 0
+}
