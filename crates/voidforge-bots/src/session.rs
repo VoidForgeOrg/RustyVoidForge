@@ -263,6 +263,30 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// review-r1's ready test (R1-2): a symlink planted at the temporary name is never followed,
+    /// so a shared directory can't redirect the token into someone else's file. `create_new`
+    /// makes the save fail instead (EEXIST), the right side to fail on.
+    #[test]
+    fn a_symlink_planted_at_the_temporary_name_is_never_followed() {
+        let dir = temp_dir("planted");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("token.json");
+        let elsewhere = dir.join("someone-elses-file");
+        fs::write(&elsewhere, b"").unwrap();
+        let temp = dir.join(format!(".token.json.{}.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&elsewhere, &temp).unwrap();
+        assert!(matches!(
+            save(&file, &session(now_unix_s() + 60)),
+            Err(Failure::Usage(_))
+        ));
+        let leaked = fs::read_to_string(&elsewhere).unwrap();
+        assert!(
+            !leaked.contains("header.payload"),
+            "the token was written through the symlink"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn the_debug_form_hides_the_token() {
         let shown = format!("{:?}", session(1));

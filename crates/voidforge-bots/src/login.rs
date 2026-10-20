@@ -61,6 +61,20 @@ const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// How much longer to wait after a `slow_down` (RFC 8628, 3.5).
 const SLOW_DOWN: Duration = Duration::from_secs(5);
 
+/// The interval when dex gives none or 0: RFC 8628 3.2's default (review-r1's R1-1: an interval
+/// of 0 polled about 600 times a second).
+const DEFAULT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The shortest interval a server may set.
+const MIN_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The longest interval, `slow_down`s included: no login waits minutes between polls.
+const MAX_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The longest a code may live: dex's default is 300 s. A longer `expires_in`, up to `u64::MAX`,
+/// is capped here, so the deadline's arithmetic can't overflow (R1-1).
+const MAX_LIFETIME: Duration = Duration::from_secs(1_800);
+
 /// dex's device authorization response (RFC 8628, 3.2).
 #[derive(Deserialize)]
 struct DeviceCode {
@@ -76,7 +90,16 @@ struct DeviceCode {
 
 /// RFC 8628, 3.2: 5 seconds when the server doesn't say.
 fn default_interval() -> u64 {
-    5
+    DEFAULT_INTERVAL.as_secs()
+}
+
+/// dex's interval, bounded: 0 is the default, anything else is clamped to the allowed range.
+fn bounded_interval(secs: u64) -> Duration {
+    if secs == 0 {
+        DEFAULT_INTERVAL
+    } else {
+        Duration::from_secs(secs).clamp(MIN_INTERVAL, MAX_INTERVAL)
+    }
 }
 
 /// The token response's parts a terminal login keeps.
@@ -149,10 +172,15 @@ pub async fn device(
         complete: code.verification_uri_complete.clone(),
         uri: code.verification_uri.clone(),
         user_code: code.user_code.clone(),
-        expires_in: Duration::from_secs(code.expires_in),
+        expires_in: Duration::from_secs(code.expires_in).min(MAX_LIFETIME),
     });
-    let deadline = Instant::now() + Duration::from_secs(code.expires_in);
-    let mut interval = Duration::from_secs(code.interval);
+    let lifetime = Duration::from_secs(code.expires_in).min(MAX_LIFETIME);
+    let out_of_range =
+        || Failure::Http(format!("dex at {url}: a device code lifetime out of range"));
+    let deadline = Instant::now()
+        .checked_add(lifetime)
+        .ok_or_else(out_of_range)?;
+    let mut interval = bounded_interval(code.interval);
     let token_url = format!("{issuer}/token");
     let body = format!(
         "grant_type={}&device_code={}&client_id={CLIENT_ID}",
@@ -160,7 +188,10 @@ pub async fn device(
         form_encode(&code.device_code),
     );
     loop {
-        if Instant::now() + interval >= deadline {
+        let next = Instant::now()
+            .checked_add(interval)
+            .ok_or_else(out_of_range)?;
+        if next >= deadline {
             return Err(Failure::CodeExpired(
                 "the login code expired before it was approved".to_owned(),
             ));
@@ -183,7 +214,7 @@ pub async fn device(
             .as_deref()
         {
             Ok("authorization_pending") => {}
-            Ok("slow_down") => interval += SLOW_DOWN,
+            Ok("slow_down") => interval = (interval + SLOW_DOWN).min(MAX_INTERVAL),
             Ok("access_denied") => {
                 return Err(Failure::Declined(
                     "the login was declined in the browser".to_owned(),
@@ -405,12 +436,19 @@ mod tests {
         )
     }
 
+    /// The longest any stand-in run may take: a client that ignores its bounds fails here, fast,
+    /// instead of hanging the suite (the slowest real case is about 13 s).
+    const RUN_WITHIN: Duration = Duration::from_secs(30);
+
     async fn run(stand_in: &StandIn) -> (Result<IdToken, Failure>, Option<Prompt>) {
         let mut shown = None;
-        let result = device(&reqwest::Client::new(), &stand_in.issuer, |p| {
+        let http = reqwest::Client::new();
+        let flow = device(&http, &stand_in.issuer, |p| {
             shown = Some(p.clone());
-        })
-        .await;
+        });
+        let result = tokio::time::timeout(RUN_WITHIN, flow)
+            .await
+            .unwrap_or_else(|_| panic!("the device flow didn't finish within {RUN_WITHIN:?}"));
         (result, shown)
     }
 
@@ -495,6 +533,54 @@ mod tests {
                 "{first:?} {gap:?}"
             );
         }
+    }
+
+    /// review-r1's R1-1 probe: an interval of 0 is the RFC's 5 s, so a 2 s code expires without a
+    /// single poll (it polled about 600 times a second).
+    #[tokio::test]
+    async fn an_interval_of_zero_is_the_default_five_seconds() {
+        let stand_in = StandIn::start(
+            &code(2, 0),
+            std::iter::repeat_with(|| error("authorization_pending"))
+                .take(3)
+                .collect(),
+        );
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            run(&stand_in).await.0,
+            Err(Failure::CodeExpired(_))
+        ));
+        assert_eq!(stand_in.polls().len(), 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(bounded_interval(0), Duration::from_secs(5));
+        assert_eq!(bounded_interval(1), Duration::from_secs(1));
+        assert_eq!(bounded_interval(u64::MAX), MAX_INTERVAL);
+    }
+
+    /// R1-1's probes: a huge `expires_in` or `interval` is capped, never a panic.
+    #[tokio::test]
+    async fn huge_lifetimes_and_intervals_are_capped_not_a_panic() {
+        // u64::MAX seconds of life, capped to MAX_LIFETIME: the first poll (after 1 s) succeeds.
+        let long_life = StandIn::start(&code(u64::MAX, 1), vec![ok_token()]);
+        let outcome = tokio::spawn(async move {
+            let (result, shown) = run(&long_life).await;
+            (result.is_ok(), shown.map(|p| p.expires_in))
+        })
+        .await;
+        assert_eq!(outcome.unwrap(), (true, Some(MAX_LIFETIME)));
+        // A u64::MAX interval, capped to MAX_INTERVAL (60 s), outlives a 30 s code: expired at
+        // once, without a poll or a panic.
+        let long_wait = StandIn::start(&code(30, u64::MAX), vec![ok_token()]);
+        let outcome =
+            tokio::spawn(
+                async move { matches!(run(&long_wait).await.0, Err(Failure::CodeExpired(_))) },
+            )
+            .await;
+        assert!(outcome.unwrap());
     }
 
     #[tokio::test]
