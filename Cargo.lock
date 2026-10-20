@@ -2580,7 +2580,13 @@ dependencies = [
 name = "voidforge-bots"
 version = "0.1.0"
 dependencies = [
+ "clap",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
  "tracing",
+ "voidforge-api-types",
  "voidforge-telemetry",
 ]
 

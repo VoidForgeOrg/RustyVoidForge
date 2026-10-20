@@ -1,5 +1,6 @@
-# CI baseline (Technical Plan P0.3), plus the database job (P2.1, D-034). Each job is a required
-# check on main once the ruleset names it; database waits on the owner (D-034).
+# CI baseline (Technical Plan P0.3), plus the database job (P2.1, D-034) and the e2e job (P3.6,
+# D-052). Each job is a required check on main once the ruleset names it; database waits on the
+# owner (D-034), and e2e is must-pass by team discipline until the ruleset names it.
 # Every command here also runs locally from the repository root; see AGENTS.md, Commands.
 # Action and tool versions are pinned; see docs/versions.md and decision log D-007.
 name: CI
@@ -33,6 +34,10 @@ jobs:
         run: .github/scripts/check-no-managed-blocks.sh
       - name: Managed-block check regression cases
         run: .github/scripts/test-check-no-managed-blocks.sh
+      - name: dex config parity (CI is local plus exactly the password grant)
+        run: .github/scripts/check-dex-parity.sh
+      - name: dex parity check regression cases
+        run: .github/scripts/test-check-dex-parity.sh
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors
@@ -130,3 +135,43 @@ jobs:
         env:
           # The job context (the service container's ID) is available to steps, not to job-level env.
           PSQL: docker exec -i ${{ job.services.postgres.id }} psql -U voidforge
+
+  # The end-to-end scenario (Technical Plan P3.6, the Phase 3 gate; decision log D-052): compose's
+  # Postgres and dex with the CI dex config (the password grant on), then .github/scripts/e2e.sh,
+  # which seeds a fresh universe on the fast rules, runs the serve binary on the host and the
+  # bots against it. Then the token checks against the real dex (D-046). `just e2e` and
+  # `just dex-test` run the same against the local stack.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DEX_CONFIG: config.ci.yaml
+      E2E_LOG_DIR: ${{ github.workspace }}/target/e2e/ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Postgres and dex (CI config), healthy
+        run: docker compose -f deploy/compose.yaml up --build --detach --wait --wait-timeout 300 postgres dex
+      - name: Build the server and the bots
+        run: SQLX_OFFLINE=true cargo build --locked -p voidforge-server -p voidforge-bots
+      - name: The end-to-end scenario
+        run: .github/scripts/e2e.sh
+      - name: Token checks against the real dex
+        run: SQLX_OFFLINE=true cargo nextest run -p voidforge-server --test dex --locked --run-ignored only --no-capture
+      - name: On failure, the logs (serve, the bots, seed, dex, Postgres)
+        if: failure()
+        run: |
+          for f in serve bots seed; do
+            echo "::group::$f.log"
+            cat "$E2E_LOG_DIR/$f.log" 2>/dev/null || echo "(no $f.log)"
+            echo "::endgroup::"
+          done
+          echo "::group::dex and Postgres"
+          docker compose -f deploy/compose.yaml logs --no-color dex postgres
+          echo "::endgroup::"
