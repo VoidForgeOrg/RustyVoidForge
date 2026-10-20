@@ -304,6 +304,19 @@ fn every_error_code_validates_in_the_one_error_body() {
     assert_eq!(seen, c.enum_values("ErrorCode"), "ALL is every code");
 }
 
+/// `as_str` is serde's name for every code, so the code a page shows is the one on the wire
+/// (P4.2, T3).
+#[test]
+fn as_str_is_the_wire_name_of_every_code() {
+    for code in ErrorCode::ALL {
+        assert_eq!(
+            serde_json::to_value(code).unwrap().as_str(),
+            Some(code.as_str()),
+            "{code:?}"
+        );
+    }
+}
+
 /// The code list per status, as ruled (D-045, Q5): the status is part of the contract.
 #[test]
 fn every_code_has_its_ruled_status() {

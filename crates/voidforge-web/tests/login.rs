@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use common::{Browser, CLIENT, EMAIL, Options, PLAYER, SECRET, World, now, player_view};
 use serde_json::json;
 use voidforge_web::oidc::{DiscoveryError, Provider};
-use voidforge_web::pages::{EXPIRED, UNIVERSE_FULL};
+use voidforge_web::pages::EXPIRED;
 
 fn logged_in(body: &str) -> bool {
     body.contains("Logged in as")
@@ -191,21 +191,29 @@ async fn the_api_refusing_the_token_ends_the_session() {
 }
 
 #[tokio::test]
-async fn a_full_universe_is_a_sentence_and_the_user_stays_logged_in() {
+async fn a_full_universe_is_its_own_page_and_the_user_stays_logged_in() {
     let w = World::start().await;
+    let mut b = logged_in_browser(&w).await;
     *w.api.answer.lock().unwrap() = (
         StatusCode::UNPROCESSABLE_ENTITY,
         json!({"code": "no_free_homeworld", "message": "full"}),
     );
-    let mut b = logged_in_browser(&w).await;
-    let home = b.get("/").await;
-    assert!(
-        home.body.contains(UNIVERSE_FULL) && !home.body.contains("no_free_homeworld"),
-        "{}",
-        home.body
-    );
-    assert!(logged_in(&home.body));
+    // phase4-ux §4.1 (the advisor's A2): its own page, the copy with its code, and Log out as
+    // the only action. The login stays: retrying can't change it, and logging out is the way on.
+    for _ in 0..2 {
+        let home = b.get("/").await;
+        assert_eq!(home.status, 200);
+        assert!(
+            home.body.contains("<h1>The universe is full</h1>")
+                && home.body.contains("(<code>no_free_homeworld</code>)")
+                && home.body.contains(r#"<form method="post" action="/logout">"#)
+                && !home.body.contains("<a "),
+            "{}",
+            home.body
+        );
+    }
     assert_eq!(b.post("/logout").await.status, 303);
+    assert!(b.get("/").await.body.contains(r#"href="/login""#));
 }
 
 #[tokio::test]

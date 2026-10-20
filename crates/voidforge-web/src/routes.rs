@@ -1,7 +1,9 @@
 //! The routes (P4.1, D-057): Home, the login, its callback and the logout.
 //!
-//! - `GET /` shows Home. Logged in, it calls `GET /players/me` with the ID token on every render;
-//!   an expired login, or a 401 from the API, ends the session and shows the expired notice.
+//! - `GET /` shows Home. It reads the public `GET /rules` for the fast-rules line, then, logged
+//!   in, `GET /players/me` with the ID token on every render (P4.2, D-059). An expired login, or
+//!   a 401 from the API, ends the session and shows the expired notice; a full universe is its
+//!   own page; any other failure is the retry page with the API's status (§5.5).
 //! - `GET /login?next=<local path>` starts an attempt and sends the browser to dex.
 //! - `GET /callback` takes the attempt matching `state` out of the session (once), exchanges the
 //!   code, checks the ID token, then gives the session a **new id** (against fixation) and
@@ -16,7 +18,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::header::{CACHE_CONTROL, LOCATION, REFERRER_POLICY};
+use axum::http::header::{CACHE_CONTROL, LOCATION, REFERRER_POLICY, RETRY_AFTER};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -26,9 +28,10 @@ use tower_sessions::cookie::SameSite;
 use tower_sessions::cookie::time::{Duration as CookieDuration, OffsetDateTime};
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 
-use crate::api::{self, MeAnswer};
+use crate::api::Api;
+use crate::messages::{self, Context, Fill, Kind};
 use crate::oidc::{self, LoginError, Provider};
-use crate::pages::{self, Notice, Refusal};
+use crate::pages::{self, Frame, Notice, Refusal};
 use crate::session::{self, LOGIN_KEY, LoggedIn, PENDING_KEY, PENDING_LIFETIME_SECS};
 use crate::store::BoundedStore;
 
@@ -46,10 +49,8 @@ pub const EXPIRED_GRACE_SECS: u64 = 24 * 60 * 60;
 pub struct AppState {
     /// The issuer and its keys.
     pub provider: Arc<Provider>,
-    /// The API's HTTP client.
-    pub api: reqwest::Client,
-    /// The API's base URL.
-    pub api_url: String,
+    /// The API's client.
+    pub api: Api,
     /// The bounded session store (R1-1).
     pub sessions: BoundedStore,
 }
@@ -153,15 +154,23 @@ fn busy(s: &AppState) -> Response {
     page(StatusCode::SERVICE_UNAVAILABLE, pages::busy())
 }
 
+/// The rules' name for the fast test rules: the frame says so (phase4-ux §2).
+pub const FAST_RULES: &str = "v0-fast";
+
+/// Whether the universe runs the fast test rules. A failed read only drops the line (§5.7).
+async fn fast_rules(s: &AppState) -> bool {
+    s.api.rules().await.is_ok_and(|r| r.name == FAST_RULES)
+}
+
 /// Ends the session and shows the expired notice, offering to return to `next`.
-async fn expired(session: &Session, next: &str) -> Response {
+async fn expired(session: &Session, next: &str, fast: bool) -> Response {
     if let Err(e) = session.flush().await {
         tracing::error!(error = %e, "ending an expired session failed");
         return internal();
     }
     page(
         StatusCode::OK,
-        pages::home_logged_out(Some(Notice::Expired), &login_href(next)),
+        pages::home_logged_out(Some(Notice::Expired), &login_href(next), fast),
     )
 }
 
@@ -174,22 +183,60 @@ async fn home(State(s): State<AppState>, session: Session) -> Response {
             return internal();
         }
     };
+    // `/rules` first: it's public, so the expired and full-universe pages keep the line (D3).
+    let fast = fast_rules(&s).await;
     let Some(login) = login else {
-        return page(StatusCode::OK, pages::home_logged_out(None, "/login"));
+        return page(StatusCode::OK, pages::home_logged_out(None, "/login", fast));
     };
     let Some(now) = oidc::unix_now() else {
         return internal();
     };
     if now >= login.exp {
         tracing::info!(outcome = "expired", "the login expired");
-        return expired(&session, "/").await;
+        return expired(&session, "/", fast).await;
     }
-    let me = api::player_me(&s.api, &s.api_url, &login.id_token).await;
-    if matches!(me, MeAnswer::Unauthorized) {
-        tracing::info!(outcome = "api_unauthorized", "the API refused the token");
-        return expired(&session, "/").await;
+    let error = match s.api.me(&login.id_token).await {
+        Ok(me) => return page(StatusCode::OK, pages::home_logged_in(&login, &me, fast)),
+        Err(e) => e,
+    };
+    let m = messages::for_error(&error, Context::Page, Fill::default());
+    match m.kind {
+        Kind::Login => {
+            tracing::info!(outcome = "api_unauthorized", "the API refused the token");
+            expired(&session, "/", fast).await
+        }
+        Kind::UniverseFull => page(StatusCode::OK, pages::universe_full(fast, &m)),
+        Kind::Retry {
+            status,
+            retry_after,
+        } => retry(status, retry_after, &pages::retry_page(frame(fast, &login), &m, "/")),
+        // A read the API refused for a reason a page can't act on: the page can't be shown.
+        Kind::Banner => retry(
+            StatusCode::BAD_GATEWAY.as_u16(),
+            None,
+            &pages::retry_page(frame(fast, &login), &m, "/"),
+        ),
     }
-    page(StatusCode::OK, pages::home_logged_in(&login, &me))
+}
+
+fn frame(fast: bool, login: &LoggedIn) -> Frame<'_> {
+    Frame {
+        fast,
+        login: Some(login),
+        me: None,
+    }
+}
+
+/// The retry page with the API's status, and its Retry-After passed on (§5.5).
+fn retry(status: u16, retry_after: Option<u64>, markup: &Markup) -> Response {
+    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut response = page(status, markup.clone());
+    if let Some(secs) = retry_after {
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from(secs));
+    }
+    response
 }
 
 #[derive(Deserialize)]
