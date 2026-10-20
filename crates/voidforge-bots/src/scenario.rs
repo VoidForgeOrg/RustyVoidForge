@@ -34,7 +34,9 @@ const READY_WITHIN: Duration = Duration::from_secs(30);
 const BOARD_WITHIN: Duration = Duration::from_secs(10);
 
 /// Ships queued behind one another, or throttled by ingots, have no fixed `eta` to wait for: a
-/// waiting build has none, and a throttled one's moves. Measured: 19 s for both of alice's ships.
+/// waiting build has none, and a throttled one's moves. Measured: the ships step (each player's
+/// Colony Ship and Cargo Vessel, from Shipyards just completed) takes 37 s. The prototype's 19 s
+/// came after about 20 s of extra refining between the joins and the builds.
 const SHIPS_WITHIN: Duration = Duration::from_secs(90);
 
 /// How long the winner's homeworld may take to refine the cargo's ingots, if it's short.
@@ -196,13 +198,20 @@ pub async fn run(
         .await?,
         step,
     )?;
-    let ships_a = ships(
-        &alice,
-        a.homeworld_id,
-        &[ShipType::ColonyShip, ShipType::CargoVessel],
-    )
-    .await?;
-    let ships_b = ships(&bob, b.homeworld_id, &[ShipType::ColonyShip]).await?;
+    // Both players build the same ships, so whoever wins the race carries the cargo by the same
+    // path: the fixed seed makes alice the winner every run, and a winner-only branch would never
+    // run (dev-qa's F3).
+    accepted(
+        bob.command(
+            &queue(yard_b, ShipType::CargoVessel),
+            &keys.of("bob", "queue-cargo-vessel"),
+        )
+        .await?,
+        step,
+    )?;
+    let fleet_ships = [ShipType::ColonyShip, ShipType::CargoVessel];
+    let ships_a = ships(&alice, a.homeworld_id, &fleet_ships).await?;
+    let ships_b = ships(&bob, b.homeworld_id, &fleet_ships).await?;
     info!(step, "the ships are on the rosters");
 
     // 5. The race.
@@ -352,10 +361,21 @@ pub async fn run(
         })
     })
     .await?;
+    // won and lost: the player's view, its colony fleet, and its Cargo Vessel.
     let (winner, loser, won, lost) = if arrives_a < arrives_b {
-        (&alice, &bob, (&a, &fleet_a), (&b, &fleet_b))
+        (
+            &alice,
+            &bob,
+            (&a, &fleet_a, ships_a[1]),
+            (&b, &fleet_b, ships_b[1]),
+        )
     } else {
-        (&bob, &alice, (&b, &fleet_b), (&a, &fleet_a))
+        (
+            &bob,
+            &alice,
+            (&b, &fleet_b, ships_b[1]),
+            (&a, &fleet_a, ships_a[1]),
+        )
     };
     let owner = view(winner.planet(target).await?, step)?.owner;
     ensure(owner.as_ref() == Some(&won.0.player_id), step, || {
@@ -417,20 +437,7 @@ pub async fn run(
     // 6. Transport: the winner carries ingots from its homeworld to its colony.
     let step = "transport";
     let home = won.0.homeworld_id;
-    let vessel = if std::ptr::eq(winner, &alice) {
-        ships_a[1]
-    } else {
-        // bob has no Cargo Vessel yet: queue one.
-        accepted(
-            bob.command(
-                &queue(yard_b, ShipType::CargoVessel),
-                &keys.of("bob", "queue-cargo-vessel"),
-            )
-            .await?,
-            step,
-        )?;
-        ships(&bob, home, &[ShipType::CargoVessel]).await?[0]
-    };
+    let vessel = won.2;
     ingots_at_least(winner, home, CARGO_INGOTS_G).await?;
     let colony = view(winner.planet(target).await?, step)?.stocks.iron_ingot;
     ensure(colony.rate_g_per_h == 0, step, || {
@@ -442,10 +449,29 @@ pub async fn run(
         iron_ore_g: 0,
         iron_ingot_g: CARGO_INGOTS_G,
     };
+    let before = view(winner.planet(home).await?, step)?;
     let fleet = assemble(winner, &keys, home, vessel, load, "cargo").await?;
     ensure(fleet.cargo == load, step, || {
         format!("the cargo fleet carries {:?}, not {load:?}", fleet.cargo)
     })?;
+    // The homeworld paid for the cargo (dev-qa's F1): a load that doesn't debit the planet makes
+    // ingots. The planet refines meanwhile, so its own view's rate and times give the expected
+    // amount; the tolerance, 1% of the cargo, is far above the rounding and far below the cargo.
+    let after = view(winner.planet(home).await?, step)?;
+    let (was, now) = (before.stocks.iron_ingot, after.stocks.iron_ingot);
+    let elapsed_ms = unix_ms(&after.as_of) - unix_ms(&before.as_of);
+    let refined = i128::from(was.rate_g_per_h) * i128::from(elapsed_ms) / 3_600_000;
+    let expected = i128::from(was.amount_g) + refined - i128::from(CARGO_INGOTS_G);
+    ensure(
+        (i128::from(now.amount_g) - expected).abs() <= i128::from(CARGO_INGOTS_G / 100),
+        step,
+        || {
+            format!(
+                "the homeworld's ingots went {} -> {} over {elapsed_ms} ms at {} g/h; loading {CARGO_INGOTS_G} g should leave about {expected}",
+                was.amount_g, now.amount_g, was.rate_g_per_h
+            )
+        },
+    )?;
     accepted(
         winner
             .command(
@@ -499,6 +525,18 @@ pub async fn run(
     // 8. The board at the end.
     let step = "leaderboard";
     let board = board_after(&alice, &arrives, "leaderboard: after the transport").await?;
+    // Exactly the two joined players, each once (review-r2's L1): the ranks below hold for any
+    // subset of the board, so membership needs its own check after the universe has changed.
+    let mut listed: Vec<&PlayerId> = board.iter().map(|(_, id, _)| id).collect();
+    listed.sort();
+    let mut joined = vec![&a.player_id, &b.player_id];
+    joined.sort();
+    ensure(listed == joined, step, || {
+        format!(
+            "the board lists {listed:?}, not exactly alice and bob ({:?}, {:?}) once each: {board:?}",
+            a.player_id, b.player_id
+        )
+    })?;
     for (rank, id, score) in &board {
         let ahead = board.iter().filter(|(_, _, s)| s > score).count();
         ensure(
@@ -507,8 +545,8 @@ pub async fn run(
             || format!("{id:?} is ranked {rank} with {ahead} players ahead: {board:?}"),
         )?;
     }
-    // The winner leads: a planet is 1,000 points, while the loser keeps a Colony Ship (400) and
-    // a few hundred points of stock.
+    // The winner leads by about 600: both built the same ships and spent the same ingots, and
+    // the winner traded its Colony Ship (400 points) for a planet (1,000).
     ensure(
         board
             .first()

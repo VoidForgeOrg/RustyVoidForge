@@ -1433,7 +1433,7 @@ Each entry records its date, the package that made it, the decision, the reasons
        - a Shipyard each (S2: that's the "builds something, and it completes" building);
        - **alice's command repeated under its key returns the first answer, and the homeworld then holds exactly one Shipyard** (checked by effect);
        - the same key with another command is 422 `idempotency_key_conflict`.
-    4. **Ships:** a Colony Ship each, and a Cargo Vessel for alice.
+    4. **Ships:** a Colony Ship and a Cargo Vessel each. Both players build the same ships, so the transport below is one path whoever wins (repair round 1, F3).
     5. **The race** (S1, S3):
        - **The target:** a free planet near the homeworlds' midpoint, whose two predicted trips differ by at least 3 s.
        - **Setup checks:** both fleets are in transit to it, the planet is unowned, and the reported arrivals are at least 2 s apart.
@@ -1445,15 +1445,16 @@ Each entry records its date, the package that made it, the decision, the reasons
          - the loser's fleet is stationed at the target with its Colony Ship aboard.
        - A same-millisecond tie stays with the core's tests.
     6. **Transport:**
-       - the winner assembles its Cargo Vessel with 400,000,000 g of ingots (the fleet shows that cargo) and sends it, `transport`, to its colony;
+       - the winner assembles its Cargo Vessel with 400,000,000 g of ingots. The fleet shows that cargo, and **the homeworld is debited by it** (repair round 1, F1): its ingots after loading equal those before, plus what it refined in between at its view's own rate, minus the cargo, within 1% of the cargo. The winner then sends the fleet, `transport`, to its colony;
        - on arrival the fleet carries nothing, and the colony's ingots rose by exactly that amount. The colony has no buildings: a setup check confirms its rate is 0, so the delta is exact.
     7. **Privacy** (D-030, D-049 S1), while alice's colony fleet is in flight:
        - a setup check: alice's own fleets list that fleet;
        - bob's fleets name none of alice's;
        - bob's `send_fleet` naming her fleet gets **the same status, code and message** as a fleet ID no one has (`unknown_fleet`).
     8. **The board at the end:**
+       - **it lists exactly the two joined players, each once** (repair round 1, review-r2's L1: the rank checks hold for any subset of the board);
        - each rank is 1 plus the number of players strictly ahead;
-       - the winner is first: a planet is 1,000 points, against the loser's Colony Ship (400) and a few hundred points of stock.
+       - the winner is first, by about 600 points: both built the same ships, and the winner traded its Colony Ship (400) for a planet (1,000).
   - **The CI `e2e` job:**
     - It runs on `pull_request` and on push to main, like the other jobs, with the name `e2e`, not a matrix, so a ruleset can require it (T3). Until Tom adds it to the main ruleset, it's must-pass by team discipline.
     - **Its steps:**
@@ -1478,6 +1479,10 @@ Each entry records its date, the package that made it, the decision, the reasons
     - the whole script takes 127 s with an incremental build.
     - Game time is the wall clock, so the scenario's length doesn't depend on the runner's speed; the build does.
     - **CI** (PR #43, 5dd6b37): the job took 4m25s. Compose up 15 s, build 68 s, the scenario PASSED in 119.0 s, and the real-dex tests passed 2 of 2. The 20-minute timeout is well above that.
+  - **`e2e.sh`'s cleanup is honest** (repair round 1, dev-qa's F2):
+    - a serve that doesn't stop within 20 s of its SIGTERM is SIGKILLed and reaped, so it's never orphaned;
+    - "dropped" is printed only after a drop succeeds. A failed drop of the run's own database prints the reason and the command, and fails the run;
+    - the leftover sweep reports a leftover it can't drop (its pid gone, but something still holds it) with the reason and the command, and carries on, never dying on a raw psql error under `set -e`.
   - **A serve that died during the scenario** is reported as such: `e2e.sh` sends its SIGTERM only to a live serve, and names what stopped it in the failure line. (Before, the `kill` of a dead pid ended the script under `set -e` with no message.)
   - **Carried drift, not fixed here** (the lead's ruling): `just trace-check` (`deploy/verify_trace.py`) runs each binary with no arguments and expects its `stub_startup` span.
     - `voidforge-server` exits 2 that way since P2.9, and `voidforge-replay` since P2.7 (confirmed on a fresh build: both exit 2 with no subcommand), because both gained subcommands. P3.6 extends that to `voidforge-bots`, whose stub was also the binary for the offline and unreachable cases. Only `voidforge-web` still runs its stub.
@@ -1506,6 +1511,12 @@ Each entry records its date, the package that made it, the decision, the reasons
     - **Two harness lessons, both recorded in the proof:**
       - run 1 used `shutil.copy2`, which kept the old file times, so cargo reused the previous case's mutated core for the last three cases. The copy now gives fresh times, and the table was rerun in full;
       - a "SIGTERM twice" mutant didn't plant its bug: serve stopped in about 50 ms, before the second signal. It was replaced by SIGKILL.
+- **Repair round 1** (folded after QA PASS and review-r2's functional PASS on 0e74bcb; `repair-assignment.md`):
+  - **F1 (dev-qa, LOW):** the homeworld's debit for the cargo, as above. QA's mutant, cargo loaded without debiting the planet, survived before; it's caught now.
+  - **F2 (dev-qa, LOW):** the cleanup, as above. The harness cases are a serve that ignores SIGTERM (SIGSTOP), a failed drop of the run's own database, and, by hand, an in-use leftover with a dead pid (reported, and the run passed).
+  - **L1 (review-r2, LOW):** the final board's exact membership. R2's mutant, the board keeping only the leader once anyone has two planets, survived before; it's caught now.
+  - **F3 (dev-qa, INFO), my call: correct by construction, not removed.** The fixed seed makes alice win every run, so the old bob-only path (queue a Cargo Vessel after the race) never ran. Now both players build the same ships before the race, and the winner's vessel is picked with its other data. The transport has one path, and nothing is left that only a bob win would run.
+  - **F4 (dev-qa, INFO):** `SHIPS_WITHIN`'s comment names its measurement: the ships step takes 37 s. The prototype's 19 s came after about 20 s of extra refining.
 - Where it's enforced:
   - `crates/voidforge-bots/` (src, Cargo.toml, AGENTS.md);
   - `.github/scripts/{e2e.sh, check-dex-parity.sh, test-check-dex-parity.sh}` and `.github/workflows/ci.yml` (the lint steps, the `e2e` job);

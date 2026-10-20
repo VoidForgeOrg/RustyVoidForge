@@ -35,6 +35,7 @@ log_dir="${E2E_LOG_DIR:-target/e2e/$run}"
 psql=(docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -X -q -v ON_ERROR_STOP=1 -At -d postgres)
 sql() { "${psql[@]}" -c "$1" < /dev/null; }
 say() { echo "e2e: $*" >&2; }
+drop_hint() { say "  docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -d postgres -c 'DROP DATABASE \"$1\"'"; }
 
 case "$db" in
     "$prefix"[0-9]*_[0-9]*) ;;
@@ -61,10 +62,15 @@ for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\
     pid="${old##*_}"
     if kill -0 "$pid" 2> /dev/null; then
         say "leftover $old: pid $pid is alive (perhaps another run); drop it yourself if it isn't:"
-        say "  docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -d postgres -c 'DROP DATABASE \"$old\"'"
-    else
-        sql "DROP DATABASE IF EXISTS \"$old\""
+        drop_hint "$old"
+    elif out=$(sql "DROP DATABASE IF EXISTS \"$old\"" 2>&1); then
         say "dropped leftover $old (pid $pid is gone)"
+    else
+        # Its pid is gone, but something still holds it (a serve left running, say): report it
+        # and go on, since this run's own database is separate.
+        say "leftover $old: pid $pid is gone, but it couldn't be dropped: ${out//$'\n'/ }"
+        say "  stop whatever holds it, then:"
+        drop_hint "$old"
     fi
 done
 
@@ -81,9 +87,15 @@ cleanup() {
         kill -KILL "$serve_pid" 2> /dev/null || true
         wait "$serve_pid" 2> /dev/null || true
     fi
-    # serve is gone, so nothing holds the database: no FORCE.
-    sql "DROP DATABASE IF EXISTS \"$db\"" > /dev/null || say "couldn't drop $db; drop it by hand"
-    say "dropped $db; logs in $log_dir"
+    # serve is gone, so nothing holds the database: no FORCE. A failed drop is reported, and fails
+    # the run: it leaves a database behind.
+    if out=$(sql "DROP DATABASE IF EXISTS \"$db\"" 2>&1); then
+        say "dropped $db; logs in $log_dir"
+    else
+        say "FAILED to drop $db: ${out//$'\n'/ }; logs in $log_dir. Drop it by hand:"
+        drop_hint "$db"
+        [ "$code" != 0 ] || code=1
+    fi
     exit "$code"
 }
 trap cleanup EXIT
@@ -131,7 +143,9 @@ for _ in $(seq 1 100); do
     sleep 0.2
 done
 if kill -0 "$serve_pid" 2> /dev/null; then
-    say "serve didn't stop within 20 s of SIGTERM"
+    say "serve didn't stop within 20 s of SIGTERM; killing it"
+    kill -KILL "$serve_pid" 2> /dev/null || true
+    wait "$serve_pid" 2> /dev/null || true
     serve_code=124
 else
     set +e
@@ -139,6 +153,7 @@ else
     serve_code=$?
     set -e
 fi
+# serve has been reaped on every path above, so cleanup has nothing left to kill.
 serve_pid=
 if [ "$bots_code" != 0 ]; then
     say "FAILED: the bots exited $bots_code; serve exited $serve_code after $stopped_by; serve's log is $log_dir/serve.log"
