@@ -374,19 +374,16 @@ async fn a_body_that_isnt_the_contract_is_undecodable() {
     );
 }
 
-#[tokio::test]
-async fn a_body_over_the_cap_is_refused_unread() {
-    let (stand_in, base) = api_stand_in().await;
-    let api = client(&base);
-    // Valid JSON just over the cap, with its length declared.
-    let over = format!("\"{}\"", "a".repeat(MAX_BODY_BYTES - 1));
-    *stand_in.rules.lock().unwrap() = Reply::raw(StatusCode::OK, &over);
-    assert_eq!(
-        api.rules().await,
-        Err(ApiError::Undecodable { status: 200 })
-    );
+/// A valid view padded with whitespace to `len` bytes: JSON allows it, so only the cap can refuse
+/// it (a body that's also not a view would be refused anyway, and pin nothing).
+fn padded_rules(len: usize) -> Vec<u8> {
+    let mut body = common::rules_view("v0").to_string().into_bytes();
+    body.resize(len, b' ');
+    body
+}
 
-    // The same without a declared length (chunked), from a raw server: the read stops at the cap.
+/// Answers one request with `body` in 1 MiB chunks and no declared length, from a raw server.
+fn chunked_server(body: Vec<u8>) -> std::net::SocketAddr {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
     std::thread::spawn(move || {
@@ -395,22 +392,52 @@ async fn a_body_over_the_cap_is_refused_unread() {
         let mut buf = [0u8; 4096];
         let _ = s.read(&mut buf).unwrap();
         let head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n";
-        let chunk = vec![b' '; 1024 * 1024];
         let mut send = || -> std::io::Result<()> {
             s.write_all(head.as_bytes())?;
-            for _ in 0..6 {
+            for chunk in body.chunks(1024 * 1024) {
                 s.write_all(format!("{:x}\r\n", chunk.len()).as_bytes())?;
-                s.write_all(&chunk)?;
+                s.write_all(chunk)?;
                 s.write_all(b"\r\n")?;
             }
             s.write_all(b"0\r\n\r\n")
         };
-        // The client hangs up at the cap, so a failed write here is the expected end.
+        // Past the cap the client hangs up, so a failed write is the expected end there.
         let _ = send();
     });
-    let raw = client(&format!("http://{addr}"));
+    addr
+}
+
+#[tokio::test]
+async fn a_body_over_the_cap_is_refused_unread() {
+    let (stand_in, base) = api_stand_in().await;
+    let api = client(&base);
+    // A valid view at the cap is read; one byte more, with its length declared, isn't.
+    *stand_in.rules.lock().unwrap() = Reply {
+        body: padded_rules(MAX_BODY_BYTES),
+        ..Reply::raw(StatusCode::OK, "")
+    };
+    assert_eq!(api.rules().await.map(|r| r.name), Ok("v0".to_owned()));
+    *stand_in.rules.lock().unwrap() = Reply {
+        body: padded_rules(MAX_BODY_BYTES + 1),
+        ..Reply::raw(StatusCode::OK, "")
+    };
     assert_eq!(
-        raw.rules().await,
+        api.rules().await,
+        Err(ApiError::Undecodable { status: 200 })
+    );
+
+    // The same without a declared length (chunked): the read stops at the cap.
+    let at = chunked_server(padded_rules(MAX_BODY_BYTES));
+    assert_eq!(
+        client(&format!("http://{at}"))
+            .rules()
+            .await
+            .map(|r| r.name),
+        Ok("v0".to_owned())
+    );
+    let over = chunked_server(padded_rules(MAX_BODY_BYTES + 1));
+    assert_eq!(
+        client(&format!("http://{over}")).rules().await,
         Err(ApiError::Undecodable { status: 200 })
     );
 }
@@ -473,4 +500,39 @@ async fn no_failure_logs_or_shows_the_token() {
     assert!(!log.contains("the-id-token-itself"), "{log}");
     let shown = format!("{errors:?} {api:?} {:?}", token());
     assert!(!shown.contains("the-id-token-itself"), "{shown}");
+}
+
+/// A connect that hangs (a listener that never accepts, its backlog already full) is reported at
+/// the connect bound, not the total: the bound is what reports a dead API in seconds.
+#[tokio::test]
+async fn a_connect_that_hangs_ends_at_the_connect_bound() {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = socket.listen(1).unwrap();
+    let addr = listener.local_addr().unwrap();
+    // Fill the backlog; these are never accepted.
+    let mut held = Vec::new();
+    for _ in 0..8 {
+        if let Ok(Ok(s)) = tokio::time::timeout(
+            Duration::from_millis(200),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        {
+            held.push(s);
+        }
+    }
+    let api = Api::with_timeouts(
+        format!("http://{addr}"),
+        Duration::from_secs(10),
+        Duration::from_millis(300),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let got = api.rules().await;
+    let took = started.elapsed();
+    eprintln!("held {} connections; {got:?} after {took:?}", held.len());
+    assert_eq!(got, Err(ApiError::Unreachable(Unreachable::Timeout)));
+    assert!(took < Duration::from_secs(3), "{took:?}");
+    drop((listener, held));
 }
