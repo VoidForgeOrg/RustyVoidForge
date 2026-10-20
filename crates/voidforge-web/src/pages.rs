@@ -202,7 +202,8 @@ pub fn retry_page(frame: Frame<'_>, m: &Message, again: &str) -> Markup {
     )
 }
 
-/// §4.1: the universe is full, so this account can't join. Log out is the only action.
+/// §4.1: the universe is full, so this account can't join: the heading, §6.1's copy with its
+/// code (it doesn't repeat the heading: QA's F2), and Log out as the only action.
 #[must_use]
 pub fn universe_full(fast: bool, m: &Message) -> Markup {
     layout(
@@ -213,7 +214,6 @@ pub fn universe_full(fast: bool, m: &Message) -> Markup {
         },
         html! {
             h1 { "The universe is full" }
-            p { "There's no free homeworld for a new player, so your account can't join this universe." }
             p { (m.copy) (code(m)) }
             form method="post" action="/logout" {
                 button type="submit" { "Log out" }

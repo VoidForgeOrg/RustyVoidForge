@@ -169,7 +169,7 @@ pub fn copy(code: ErrorCode, ctx: Context, fill: Fill) -> String {
         // 422, the game's rules.
         ErrorCode::AlreadyJoined => "You've already joined this universe.",
         ErrorCode::NoFreeHomeworld => {
-            "The universe is full: there's no free homeworld for a new player, so your account can't join."
+            "There's no free homeworld for a new player, so your account can't join this universe. Trying again won't change that."
         }
         ErrorCode::NotJoined => "Your account hasn't joined the game yet. Reload the page to join.",
         ErrorCode::UnknownPlanet => {

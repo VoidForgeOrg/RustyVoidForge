@@ -21,6 +21,8 @@ def main():
         if not m:
             continue
         code, first, second = m.groups()
+        # A trailing note for readers of the document, citing a section, isn't copy.
+        first = re.sub(r" \([^()]*§[^()]*\)$", "", first)
         if second is None:
             codes[code] = {"page": first, "command": first}
         else:

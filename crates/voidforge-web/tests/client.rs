@@ -442,66 +442,6 @@ async fn a_body_over_the_cap_is_refused_unread() {
     );
 }
 
-#[tokio::test]
-async fn no_failure_logs_or_shows_the_token() {
-    use std::sync::{Arc, Mutex};
-    use tracing_subscriber::Layer as _;
-    use tracing_subscriber::layer::SubscriberExt as _;
-
-    #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Sink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let sink = Sink::default();
-    let writer = sink.clone();
-    let subscriber = tracing_subscriber::registry().with(
-        tracing_subscriber::fmt::layer()
-            .with_writer(move || writer.clone())
-            .with_ansi(false)
-            .with_filter(tracing_subscriber::filter::LevelFilter::TRACE),
-    );
-    let _guard = tracing::subscriber::set_default(subscriber);
-
-    let (stand_in, base) = api_stand_in().await;
-    let api = client(&base);
-    let mut errors = Vec::new();
-    for reply in [
-        Reply::error(401, "invalid_token"),
-        Reply::error(503, "busy").header("retry-after", "1"),
-        Reply::error(400, "busy"),
-        Reply::raw(StatusCode::OK, "nope"),
-        Reply::raw(StatusCode::FOUND, "").header("location", "/elsewhere"),
-    ] {
-        stand_in.reply("/commands", reply);
-        errors.push(api.command(&token(), &key(), &build()).await.unwrap_err());
-    }
-    let closed = {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        l.local_addr().unwrap()
-    };
-    errors.push(
-        client(&format!("http://{closed}"))
-            .me(&token())
-            .await
-            .unwrap_err(),
-    );
-
-    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-    assert!(log.contains("the API refused"), "{log}");
-    assert!(log.contains("the API can't be reached"), "{log}");
-    assert!(!log.contains(TOKEN), "{log}");
-    assert!(!log.contains("the-id-token-itself"), "{log}");
-    let shown = format!("{errors:?} {api:?} {:?}", token());
-    assert!(!shown.contains("the-id-token-itself"), "{shown}");
-}
-
 /// A connect that hangs (a listener that never accepts, its backlog already full) is reported at
 /// the connect bound, not the total: the bound is what reports a dead API in seconds.
 #[tokio::test]

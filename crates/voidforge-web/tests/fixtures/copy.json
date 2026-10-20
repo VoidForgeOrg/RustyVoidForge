@@ -38,8 +38,8 @@
    "command": "You've already joined this universe."
   },
   "no_free_homeworld": {
-   "page": "The universe is full: there's no free homeworld for a new player, so your account can't join.",
-   "command": "The universe is full: there's no free homeworld for a new player, so your account can't join."
+   "page": "There's no free homeworld for a new player, so your account can't join this universe. Trying again won't change that.",
+   "command": "There's no free homeworld for a new player, so your account can't join this universe. Trying again won't change that."
   },
   "not_joined": {
    "page": "Your account hasn't joined the game yet. Reload the page to join.",
