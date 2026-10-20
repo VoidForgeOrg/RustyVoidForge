@@ -2,7 +2,7 @@
 # Regression cases for check-dex-parity.sh. Each case copies the real dex configs into a
 # throwaway directory, changes one thing, and asserts the checker's exit code: 0 in parity,
 # 1 drift, 2 could not check.
-# Usage: test-check-dex-parity.sh   (run from the repository root)
+# Usage: test-check-dex-parity.sh   (run from the repository root; VERBOSE=1 shows each case's output)
 set -eu
 checker="$(pwd)/.github/scripts/check-dex-parity.sh"
 [ -x "$checker" ] || { echo "error: run from the repository root; $checker not found" >&2; exit 2; }
@@ -14,7 +14,8 @@ expect() { # expect <code> <name> <command...>
     got=0
     "$@" > "$work/out" 2>&1 || got=$?
     if [ "$got" -eq "$want" ]; then
-        echo "pass: $name (exit $got)"; [ -n "${VERBOSE:-}" ] && sed "s/^/    /" "$work/out"
+        echo "pass: $name (exit $got)"
+        if [ -n "${VERBOSE:-}" ]; then sed 's/^/    /' "$work/out"; fi
     else
         echo "FAIL: $name: expected exit $want, got $got"; sed 's/^/    /' "$work/out"
         failures=$((failures + 1))
