@@ -188,7 +188,11 @@ pub fn copy(code: ErrorCode, ctx: Context, fill: Fill) -> String {
         ErrorCode::NotOwner => {
             return planet(
                 fill.planet,
-                |p| format!("Planet #{p} isn't yours. You can build, and load cargo, only on your own planets."),
+                |p| {
+                    format!(
+                        "Planet #{p} isn't yours. You can build, and load cargo, only on your own planets."
+                    )
+                },
                 "That planet isn't yours. You can build, and load cargo, only on your own planets.",
             );
         }
@@ -229,7 +233,9 @@ pub fn copy(code: ErrorCode, ctx: Context, fill: Fill) -> String {
         ErrorCode::FleetNotInTransit => {
             "That fleet isn't flying a mission, so there's nothing to turn back. It may have just arrived."
         }
-        ErrorCode::AlreadyRecalled => "That fleet has already turned back once, and it can't again.",
+        ErrorCode::AlreadyRecalled => {
+            "That fleet has already turned back once, and it can't again."
+        }
         ErrorCode::SamePlanet => {
             return planet(
                 fill.target,
@@ -241,7 +247,11 @@ pub fn copy(code: ErrorCode, ctx: Context, fill: Fill) -> String {
         ErrorCode::TargetOwned => {
             return planet(
                 fill.target,
-                |t| format!("Planet #{t} is already owned. Colonize needs an unowned planet; Move goes anywhere."),
+                |t| {
+                    format!(
+                        "Planet #{t} is already owned. Colonize needs an unowned planet; Move goes anywhere."
+                    )
+                },
                 "That planet is already owned. Colonize needs an unowned planet; Move goes anywhere.",
             );
         }
@@ -353,7 +363,10 @@ mod tests {
             let page = for_error(&e, Context::Page, Fill::default());
             let order = for_error(&e, Context::Command, Fill::default());
             assert_eq!((page.code, order.code), (None, None));
-            assert!(order.copy.contains("may or may not have gone through"), "{e:?}");
+            assert!(
+                order.copy.contains("may or may not have gone through"),
+                "{e:?}"
+            );
             assert!(!page.copy.contains("order"), "{e:?}");
         }
     }

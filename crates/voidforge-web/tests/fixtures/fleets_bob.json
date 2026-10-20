@@ -1,0 +1,27 @@
+{
+  "as_of": "2025-10-09T08:53:20.000Z",
+  "fleets": [
+    {
+      "arrives_at": "2025-10-09T09:53:20.000Z",
+      "capacity_g": 0,
+      "cargo": {
+        "iron_ingot_g": 0,
+        "iron_ore_g": 0
+      },
+      "departed_at": "2025-10-09T08:53:20.000Z",
+      "fleet_id": 11,
+      "mission": "colonize",
+      "origin_planet_id": 4,
+      "ships": [
+        {
+          "ship_id": 10,
+          "ship_type": "colony_ship"
+        }
+      ],
+      "speed_du_per_h": 10000,
+      "state": "in_transit",
+      "target_planet_id": 7
+    }
+  ],
+  "valid_until": "2025-10-09T09:53:20.000Z"
+}

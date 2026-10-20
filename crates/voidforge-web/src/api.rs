@@ -251,7 +251,12 @@ async fn exchange<T: DeserializeOwned>(
 ) -> Result<T, ApiError> {
     let mut response = req.send().await.map_err(unreachable)?;
     let status = response.status();
-    if status != StatusCode::OK && !(status.is_client_error() || status.is_server_error()) {
+    // 200, or a status some code is sent with on this route; anything else, whatever its body.
+    let expected = status == StatusCode::OK
+        || ErrorCode::ALL
+            .iter()
+            .any(|c| route.sends(*c, status.as_u16()));
+    if !expected {
         return Err(ApiError::UnexpectedStatus(status.as_u16()));
     }
     let retry_after = retry_after(&response);
@@ -381,6 +386,9 @@ mod tests {
     #[test]
     fn debug_shows_no_more_than_the_base() {
         let api = Api::new("http://localhost:8080".to_owned()).unwrap();
-        assert_eq!(format!("{api:?}"), r#"Api { base: "http://localhost:8080" }"#);
+        assert_eq!(
+            format!("{api:?}"),
+            r#"Api { base: "http://localhost:8080" }"#
+        );
     }
 }

@@ -437,9 +437,7 @@ async fn api_any(
     }
     let mut response = (reply.status, reply.body).into_response();
     for (name, value) in reply.headers {
-        response
-            .headers_mut()
-            .insert(name, value.parse().unwrap());
+        response.headers_mut().insert(name, value.parse().unwrap());
     }
     response
 }

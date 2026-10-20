@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use clap::Parser;
 use tokio::signal::unix::{SignalKind, signal};
+use voidforge_web::api::Api;
 use voidforge_web::config::{Args, SECRET_ENV};
 use voidforge_web::oidc::Provider;
-use voidforge_web::api::Api;
 use voidforge_web::routes;
 
 const SERVICE: &str = "voidforge-web";

@@ -209,7 +209,11 @@ async fn home(State(s): State<AppState>, session: Session) -> Response {
         Kind::Retry {
             status,
             retry_after,
-        } => retry(status, retry_after, &pages::retry_page(frame(fast, &login), &m, "/")),
+        } => retry(
+            status,
+            retry_after,
+            &pages::retry_page(frame(fast, &login), &m, "/"),
+        ),
         // A read the API refused for a reason a page can't act on: the page can't be shown.
         Kind::Banner => retry(
             StatusCode::BAD_GATEWAY.as_u16(),

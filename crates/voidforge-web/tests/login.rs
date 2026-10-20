@@ -206,7 +206,9 @@ async fn a_full_universe_is_its_own_page_and_the_user_stays_logged_in() {
         assert!(
             home.body.contains("<h1>The universe is full</h1>")
                 && home.body.contains("(<code>no_free_homeworld</code>)")
-                && home.body.contains(r#"<form method="post" action="/logout">"#)
+                && home
+                    .body
+                    .contains(r#"<form method="post" action="/logout">"#)
                 && !home.body.contains("<a "),
             "{}",
             home.body

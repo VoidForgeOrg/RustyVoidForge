@@ -1,0 +1,50 @@
+{
+  "as_of": "2025-10-09T08:53:20.000Z",
+  "buildings": [
+    {
+      "id": 2,
+      "state": "operational",
+      "status": "running",
+      "type": "drill"
+    },
+    {
+      "id": 3,
+      "state": "operational",
+      "status": "running",
+      "type": "refinery"
+    },
+    {
+      "cost_g": 150000000,
+      "delivered_g": 0,
+      "eta": "2025-10-09T11:53:20.000Z",
+      "id": 8,
+      "rate_g_per_h": 50000000,
+      "state": "under_construction",
+      "status": "running",
+      "type": "drill"
+    }
+  ],
+  "owner": "01928c5e-7a3b-7c2d-9e4f-5a6b7c8d9e0f",
+  "planet_id": 1,
+  "position": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  },
+  "roster": [],
+  "ship_builds": [],
+  "slots": 8,
+  "stocks": {
+    "iron_ingot": {
+      "amount_g": 1500000000,
+      "cap_g": 5000000000,
+      "rate_g_per_h": -34000000
+    },
+    "iron_ore": {
+      "amount_g": 2000000000,
+      "cap_g": 10000000000,
+      "rate_g_per_h": 2000000
+    }
+  },
+  "valid_until": "2025-10-09T11:53:20.000Z"
+}

@@ -364,7 +364,10 @@ mod tests {
         assert!(at(r#"Planet #9</a>"#) < at(r#"Planet #12</a>"#));
         assert!(!page.contains("Welcome."), "{page}");
         let first = home_logged_in(&login(None), &me(&[7]), false).into_string();
-        assert!(first.contains("Welcome. Planet #7 is your homeworld"), "{first}");
+        assert!(
+            first.contains("Welcome. Planet #7 is your homeworld"),
+            "{first}"
+        );
         assert!(first.contains("Your planets (1)"), "{first}");
     }
 }
