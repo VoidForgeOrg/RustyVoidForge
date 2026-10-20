@@ -1618,3 +1618,69 @@ Each entry records its date, the package that made it, the decision, the reasons
   - `deploy/dex/config.yaml` and `config.ci.yaml` (the callback), `deploy/verify_stack.py`, `deploy/README.md`;
   - `.github/scripts/{device-login.py, e2e.sh}` and `.github/workflows/ci.yml` (the failure logs);
   - the `justfile` and the root AGENTS.md.
+
+### D-054: Rate limits: per-principal GCRA, read and write budgets
+
+- Date and package: 2026-10-20, P3.8. Proposed by dev-build (`slices/39-p3-8-rate-limits/proposal-rate-limits.md`), from the P3.6 bots' measured request rates. The lead approved T1 to T6 with notes (`ruling-lead.md`); the advisor agreed A1 to A4 (`ruling-advisor.md`).
+- **Measured first:** the e2e scenario and the terminal login, three runs through a counting proxy between the bots and the real `serve` (`proof/measure/`; identical counts, the seed fixes the scenario). A bot's checks after each action read back with no pause between requests, so the busier bot sends **12 reads and 3 commands back to back** (the other: 4 commands), 22 reads in 10 s and 79 in 60 s. At 10 reads a second, a burst of 12 refuses nothing; the commands need a burst of 4 at any rate.
+- Decision:
+  - **Our own limiter, not `tower_governor`** (T2). The Tech stack's line is amended. `tower_governor` would bring `governor`, `dashmap`, `quanta` and more; its key extractor is synchronous, so keying by identity would verify each token twice; and its keyed store grows until something calls `retain_recent()`. GCRA here is about 80 lines with no dependency (`voidforge_server::limit`).
+  - **GCRA, two budgets per principal** (A2). A request's class is its method's: `POST` spends the write budget, everything else the read budget, never by path. With the emission interval T = 1 s / rate and the burst B, the allowance is τ = (B − 1)·T. A request conforms when `max(TAT, now) − now ≤ τ`, and then the TAT moves on by T. **A refusal changes nothing**, so a loop that ignores 429 is held to the steady rate, not shut out.
+  - **The defaults** (the advisor's A1): **reads 10 a second, burst 40; writes 2 a second, burst 10**. That's more than 3 times the bots' read burst and 2.5 times their write burst, and about 7.6 and 17 times their busiest minute. A person on the Phase 4 web pages, a few pages a second at most, doesn't come near them. They're `serve` flags with env vars, so they can be tuned without a release: `--read-rate`/`VOIDFORGE_READ_RATE` and `--write-rate` (1 to 1,000 a second), `--read-burst` and `--write-burst` (1 to 10,000). Out of range is exit 2, and `serve` logs the effective limits at startup.
+  - **The key is the principal, checked before the account** (T1, A3). The check runs inside the `Player` extractor, after the token is verified and before `Players::player`: (issuer, subject) is the same identity as the player (D-047's unique index). So a 429 never makes an account, never joins, never reaches the host, and never consumes an idempotency key: `Player` is every authenticated handler's first extractor that reads the request, so it runs before the path, the query, the body or the key are read. A refused account's 422 `no_free_homeworld` loop is limited too (D-047's carry).
+  - **The subject is never held** (the lead's T1 note): the key is a SipHash of (issuer, subject) under a key drawn once per process (`RandomState`), and its Debug prints only the class. Two principals could share a budget only through a 64-bit collision. Nothing here logs an identity.
+  - **Not counted** (A4): 401s and the 503 while dex's keys load have no principal; `/openapi.json` takes no `Player`. There's no per-IP limit, since every web player shares the web server's address. **Carry to P5 (deployment):** an edge proxy can limit by IP.
+  - **The answer:** 429 `rate_limited`, D-045's body with the message "too many requests; retry after N s", and **Retry-After N in whole seconds, rounded up, at least 1**. Waiting that long, then sending one request of that class, succeeds unless the same principal sent another meanwhile. An accepted request leaves the TAT at most τ + T ahead, so a refusal waits at most T, and every allowed rate is at least 1 a second: **Retry-After is always 1 today.** The rounding up stays for correctness should a rate below 1 a second ever be allowed.
+  - **Memory:** an entry whose TAT is at or before now answers exactly as no entry, so removing it never changes an answer. A sweep removes those whenever the map has doubled since the last sweep (at least 1,024 entries), so the map holds at most twice the larger of 1,024 and the principals active within one budget's B·T (4 s for reads, 5 s for writes at the defaults) before the last sweep.
+  - **Concurrency and time:** one `Mutex`, held for one map operation and never across an await; one `serve` per universe (D-050), so in-memory state is the whole truth. The clock is `Instant`, injected (`AppState::limiter` takes a `Now`), so the router tests step it exactly.
+  - **The aggregate** (the advisor's note): per-principal limits don't bound the total. With about 250 players, the host's inbox, answering 503 `busy` when full, remains its guard against many players at once.
+  - **Logging:** a limited client mustn't flood the log (P3.5's lesson). A refusal logs at WARN at most once a minute, counting the refusals since the last WARN, and at debug otherwise, with no identity.
+  - **The contract** (T4): each authenticated route declares 429 "rate_limited, with Retry-After" with a `Retry-After` header (integer seconds). **`/openapi.json` no longer declares 429**: it's never limited. D-049's parity rule (observed statuses ⊆ declared) covers the new 429s.
+  - **The bots and the terminal honour Retry-After** (the advisor's A4 note, SPEC item 6). Their client retries a 429 after its Retry-After, at most 3 times and only for a Retry-After of 60 s or less, logging each wait; a command keeps its idempotency key. Each 429 is counted, and **the e2e scenario fails if either bot met one**, since the defaults must leave the bots margin.
+- Tests:
+  - **The limiter's unit tests** (`limit.rs`, on a stepped clock):
+    - a burst of exactly B, then one every T: a nanosecond early is refused;
+    - waiting the Retry-After given succeeds;
+    - a hundred refusals don't move the next slot (refused at 499 ms, accepted at 500);
+    - principals, issuers and classes are independent;
+    - after an idle spell, with the old entry still held, the burst is exactly B;
+    - the map stays bounded under 65,536 principals, and a sweep keeps a live entry;
+    - the subject appears in no Debug and no log line;
+    - one WARN a minute, counting the refusals between.
+  - **The router, on a stepped clock** (`tests/routes.rs`, database stage):
+    - **every route in D-049's table answers 429 once its budget is spent, and `/openapi.json` never does** (the lead's T3 addition; a new route must be added to the test);
+    - one player's burst doesn't limit another;
+    - a limited command appends nothing, and its key, retried a Retry-After later, gets the real first outcome, which a repeat returns again;
+    - a limited new principal makes no account and joins nothing;
+    - a refused account's 422s are counted, and 401s are not;
+    - **the budget is chosen by the method:** a probe `POST` on another path spends the write budget.
+  - **serve:**
+    - the flags parse to their own budgets, with inclusive bounds (unit);
+    - out of range is exit 2 (`tests/cli.rs`);
+    - **by effect on the real binary:** tight flags give 429 with Retry-After 1 per budget, success after the wait, and the logged limits (`tests/serve.rs`).
+  - **The bots' client, against a scripted stand-in:**
+    - it waits Retry-After, then retries;
+    - at most 3 retries;
+    - a missing, malformed or over-60 s Retry-After isn't waited;
+    - a retried command keeps its key.
+  - **By effect, `e2e.sh` through a counting proxy:**
+    - under the defaults it PASSED, with 0 of 228 requests answered 429;
+    - **under tight limits** (`VOIDFORGE_READ_RATE=5 VOIDFORGE_READ_BURST=8`), alice's one 429 was retried 1.004 s later and got 200, and the run **FAILED at the rate-limit step**, as designed;
+    - serve logged one WARN, with the class and a count and no identity.
+  - **CI:** 6 of 6 green on 3073cbf (run 39401932735) and 40b1820 (run 39405954414). The e2e job logs "neither bot met a 429".
+  - **The mutation table** (`slices/39-p3-8-rate-limits/proof/mutate.py`; layers: the server's lib, routes, serve and cli against Postgres, and the bots' unit tests). **On 40b1820, both controls passed and 23 of 24 were caught:**
+    - the lead's named mutants: a refusal advancing the TAT; the class taken from the path; eviction removing a live entry;
+    - the burst one larger; no burst; an old TAT kept, banking idle time; never sweeping;
+    - one budget for both classes; the issuer left out of the key; every method a read;
+    - the limit after the account lookup; a 429 without Retry-After; a message that isn't an instruction; every refusal logged at WARN;
+    - the flags ignored; the read and write flags swapped; `--read-rate` unbounded;
+    - the bots: no retry, unbounded retries, no wait, any Retry-After waited, a 429 not counted;
+    - and "Retry-After rounded down" without the floor of 1.
+  - **One equivalent mutant, as predicted:** "Retry-After rounded down" with the floor of 1 kept. A refusal waits at most T ≤ 1 s, so both forms give 1 at every allowed rate.
+  - **The first table, on 3073cbf, had a real survivor:** "the flags ignored". No test ran serve with limits it could reach; the leaderboard test's 20 polls a second sit right at the default, so it caught the mutant only in some runs. The by-effect serve test above closes it.
+  - The first attempt at that table stopped at a stale anchor (rustfmt had reflowed a line); every anchor is now checked against the formatted file.
+- Where it's enforced:
+  - `crates/voidforge-server/src/{limit.rs, accounts.rs, api/mod.rs, serve.rs}` and its AGENTS.md;
+  - `crates/voidforge-api-types/src/lib.rs` and `openapi.json`;
+  - `crates/voidforge-bots/src/{client.rs, scenario.rs}` and its AGENTS.md;
+  - the Technical Plan's Tech stack line, and `docs/versions.md`'s list of crates still to come.

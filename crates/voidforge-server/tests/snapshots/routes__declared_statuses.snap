@@ -13,7 +13,6 @@ expression: declared
   ],
   "GET /openapi.json": [
     "200",
-    "429",
     "500"
   ],
   "GET /planets": [

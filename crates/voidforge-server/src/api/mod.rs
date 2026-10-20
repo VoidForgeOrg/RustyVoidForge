@@ -32,6 +32,7 @@ use voidforge_store::log::IdempotencyKey;
 use crate::accounts::{Player, Players};
 use crate::auth::TokenVerifier;
 use crate::codes::game_code;
+use crate::limit::Limiter;
 use error::{ApiError, ApiJson, ApiPath, ApiQuery, host_error};
 
 /// The most planets one `GET /planets?near=…` answers. More is 400 `invalid_query`, never a
@@ -63,6 +64,8 @@ pub struct AppState {
     pub epoch_unix_ms: i64,
     /// The latest leaderboard build (P3.5): `None` until one succeeds.
     pub leaderboard: crate::leaderboard::Board,
+    /// The per-principal rate limits (P3.8), checked by the [`Player`] extractor.
+    pub limiter: Arc<Limiter>,
 }
 
 impl FromRef<AppState> for Arc<TokenVerifier> {
@@ -74,6 +77,12 @@ impl FromRef<AppState> for Arc<TokenVerifier> {
 impl FromRef<AppState> for Arc<Players<PgAccounts>> {
     fn from_ref(s: &AppState) -> Self {
         s.players.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<Limiter> {
+    fn from_ref(s: &AppState) -> Self {
+        s.limiter.clone()
     }
 }
 

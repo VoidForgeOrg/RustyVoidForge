@@ -17,6 +17,7 @@ Binary. P3.6 added its first subcommand, `e2e`, the end-to-end scenario ([D-052]
 - Terminal login uses the device code grant as the public `voidforge-cli` dex client (P3.7). The CI end-to-end tests use the password grant, for the static test users only.
 - The terminal's login is a credential: saved only in the user-only token file (0600, in a 0700 directory, replaced atomically), refused when others can read it, and never printed or logged, nor are its subject or the device code (D-053). A login lasts dex's 24 h with no refresh token; an expired or refused one says "log in again" with the command, never a raw 401.
 - The terminal writes answers as JSON to stdout and everything for the person to stderr. `get` takes only API paths, never a URL. One exit-code table covers every subcommand (`--help`).
+- A 429 is retried after its Retry-After, at most 3 times and only for a Retry-After of 60 s or less; a command keeps its idempotency key. Every 429 is counted, and the e2e scenario fails if either bot met one: `serve`'s default limits must leave the bots margin (D-054).
 - End-to-end and nightly runs use the fast test rules.
 - The bots never read the rules file. Every wait's deadline comes from the views' own `eta`, `arrives_at` and `valid_until`, and every wait is bounded: no blind sleeps (D-052).
 - Every check is on a view read back over the API, never on a command's 200 alone. A check that could pass with nothing in place is preceded by one proving the case is there (for example, that alice's fleet exists before bob is shown not to see it).

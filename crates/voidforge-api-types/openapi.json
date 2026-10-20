@@ -1788,7 +1788,18 @@
                 }
               }
             },
-            "description": "rate_limited, with Retry-After"
+            "description": "rate_limited, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds; one request after that conforms (D-054)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -1864,7 +1875,18 @@
                 }
               }
             },
-            "description": "rate_limited"
+            "description": "rate_limited, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds; one request after that conforms (D-054)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -1908,16 +1930,6 @@
             },
             "description": "The OpenAPI document"
           },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            },
-            "description": "rate_limited"
-          },
           "500": {
             "content": {
               "application/json": {
@@ -1929,7 +1941,7 @@
             "description": "internal"
           }
         },
-        "summary": "This document: the API's contract. Public: it needs no token, so reading it never joins\nanyone (D-049).",
+        "summary": "This document: the API's contract. Public: it needs no token, so reading it never joins\nanyone (D-049), and it's never rate limited (D-054).",
         "tags": [
           "paths"
         ]
@@ -2011,7 +2023,18 @@
                 }
               }
             },
-            "description": "rate_limited"
+            "description": "rate_limited, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds; one request after that conforms (D-054)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -2121,7 +2144,18 @@
                 }
               }
             },
-            "description": "rate_limited"
+            "description": "rate_limited, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds; one request after that conforms (D-054)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -2197,7 +2231,18 @@
                 }
               }
             },
-            "description": "rate_limited"
+            "description": "rate_limited, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds; one request after that conforms (D-054)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -2273,7 +2318,18 @@
                 }
               }
             },
-            "description": "rate_limited"
+            "description": "rate_limited, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds; one request after that conforms (D-054)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "500": {
             "content": {

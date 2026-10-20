@@ -146,6 +146,19 @@ fn serve_usage_settings_and_a_bad_url() {
         let (code, out) = serve(&["--leaderboard-secs", secs], bad);
         assert_eq!(code, 2, "--leaderboard-secs {secs}: {out}");
     }
+    // The rate limits (D-054): rates 1 to 1,000 a second, bursts 1 to 10,000. The inclusive ends
+    // are pinned in serve.rs's unit tests, without a database to time out on.
+    for (flag, over) in [
+        ("--read-rate", "1001"),
+        ("--write-rate", "1001"),
+        ("--read-burst", "10001"),
+        ("--write-burst", "10001"),
+    ] {
+        for bad_value in ["0", over] {
+            let (code, out) = serve(&[flag, bad_value], bad);
+            assert_eq!(code, 2, "{flag} {bad_value}: {out}");
+        }
+    }
     let (code, out) = serve(&["--token-leeway-secs", "301"], bad);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("token-leeway-secs"), "{out}");

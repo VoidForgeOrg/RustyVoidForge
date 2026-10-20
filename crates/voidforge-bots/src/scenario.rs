@@ -2,7 +2,8 @@
 //! through dex, join, build a Shipyard, build ships, race their Colony Ships to one free planet,
 //! and the winner carries cargo between its two planets. Every assertion is on a view read back
 //! over the API, never on a command's 200 alone, and each claim that could pass with nothing in
-//! place is preceded by a check that the case is really there.
+//! place is preceded by a check that the case is really there. Under `serve`'s default rate limits
+//! neither bot may meet a 429 (D-054).
 //!
 //! The bots never read the rules file: every wait's deadline comes from the views' own `eta`,
 //! `arrives_at` and `valid_until` ([`crate::wait`]).
@@ -580,6 +581,20 @@ pub async fn run(
         },
     )?;
     info!(step, "the board ranks both, {} first", winner.name);
+
+    // 9. The rate limits (D-054): the defaults must leave the bots margin, so a 429 anywhere,
+    // even one the client waited out, fails the run.
+    let step = "rate limits";
+    for player in [&alice, &bob] {
+        let limited = player.rate_limited();
+        ensure(limited == 0, step, || {
+            format!(
+                "{} was answered 429 {limited} time(s): serve's limits leave the bots no margin",
+                player.name
+            )
+        })?;
+    }
+    info!(step, "neither bot met a 429");
     Ok(())
 }
 
