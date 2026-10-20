@@ -1386,6 +1386,8 @@ Each entry records its date, the package that made it, the decision, the reasons
     - **every board read is validated against the document's `Leaderboard` schema** (Draft 2020-12, formats on) and deserialized into `api::Leaderboard` (the lead's T1 condition);
     - **a failed build keeps the previous board:** the host's append held past Bob's arrival, the build `Stale` after its wait, the route serving the previous board unchanged, then a rebuild once released;
     - the job on a 50 ms interval rebuilding as the clock moves;
+    - **the job's own error path keeps the board** (added for the mutation table's one survivor, "a failed build clears the board": the direct-build test never ran the job): on a 50 ms interval with the host held stale for 2.5 s, the route serves the previous board unchanged, and the job's next build advances it once released;
+    - the build's `as_of` kept when read later (not the request's time), and the job retrying every second until its first board;
     - before any build, 503 with `Retry-After: 1`.
   - **`tests/serve.rs`** (the real binary):
     - with `--leaderboard-secs 1`, the board is 200 at `ready:` and its `as_of` advances;

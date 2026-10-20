@@ -1692,3 +1692,44 @@ async fn the_job_retries_every_second_until_the_first_board(pool: PgPool) {
     }
     job.abort();
 }
+
+/// The job itself keeps the previous board when its builds fail (the mutation table's survivor:
+/// the direct-build test never ran the job's own error path). With the host's append held past
+/// Bob's arrival, every build is stale; over 2.5 s the job, on a 50 ms interval with its 1 s
+/// stale wait, attempts and fails at least twice, and the route still serves the previous board,
+/// unchanged. Released, the job's next build advances it, which shows the job was running.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_job_keeps_the_previous_board_when_its_builds_fail(pool: PgPool) {
+    let api = api(&pool, world(0, 0), |_| {}).await;
+    assert_eq!(api.get("/players/me", ALICE_SUB).await.status, 200);
+    api.build_board().await.unwrap();
+    let before = api.board().await;
+    let c = api.clock.clone();
+    let job = tokio::spawn(voidforge_server::leaderboard::run(
+        api.host.clone(),
+        Arc::new(move || voidforge_host::Clock::now_unix_ms(&c)),
+        EPOCH,
+        Duration::from_millis(50),
+        api.board.clone(),
+    ));
+    api.faults.hold.store(true, Ordering::SeqCst);
+    api.clock.set(EPOCH + BOB_ARRIVES + 1);
+    api.faults.entered(1).await;
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(api.board().await, before, "the previous board, unchanged");
+    api.faults.release();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let now = api.board().await;
+        if now.as_of != before.as_of {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the job never rebuilt"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    job.abort();
+}
