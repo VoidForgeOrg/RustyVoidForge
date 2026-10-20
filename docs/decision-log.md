@@ -1494,7 +1494,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **The CI negative control:** a throwaway draft PR (#44), whose one commit makes the bots expect the later arrival to win, failed red at the race with a readable log and every service's log printed. It was then closed and its branch deleted.
   - **The mutation table** (`slices/37-p3-6-e2e/proof/mutate.py`):
     - Each case is a full `e2e.sh` run in a fresh copy with one planted bug, and counts as caught only when it fails **at the step it names**. Compile errors are unproven and never counted.
-    - **The control passed, and 15 of 15 mutants were caught at their named steps:**
+    - **The control passed, and 16 of 16 mutants were caught at their named steps (12 product bugs, the spec's 2 negative controls, 2 harness cases):**
       - join: every call joins a new player; the board leaves a player off;
       - leaderboard: ranks from 0;
       - build: a repeated key applies the command again;
