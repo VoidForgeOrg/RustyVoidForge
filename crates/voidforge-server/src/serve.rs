@@ -50,9 +50,13 @@ use voidforge_store::{LockError, OpenError};
 use crate::accounts::Players;
 use crate::api::{self, AppState};
 use crate::auth::{AuthArgs, TokenVerifier};
+use crate::leaderboard;
 
 /// The default bind address: loopback, so a local run is never exposed by accident.
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
+
+/// The longest interval `--leaderboard-secs` accepts.
+pub const MAX_LEADERBOARD_SECS: u64 = 3_600;
 
 /// The longest drain `--drain-secs` accepts.
 pub const MAX_DRAIN_SECS: u64 = 60;
@@ -86,6 +90,14 @@ pub struct ServeArgs {
         value_parser = clap::value_parser!(u64).range(0..=MAX_DRAIN_SECS)
     )]
     pub drain_secs: u64,
+    /// How often the leaderboard is rebuilt, in seconds (1 to 3,600; the Game Design's 60).
+    #[arg(
+        long,
+        env = "VOIDFORGE_LEADERBOARD_SECS",
+        default_value_t = 60,
+        value_parser = clap::value_parser!(u64).range(1..=MAX_LEADERBOARD_SECS)
+    )]
+    pub leaderboard_secs: u64,
     /// The token checks (D-046).
     #[command(flatten)]
     pub auth: AuthArgs,
@@ -255,9 +267,14 @@ async fn serve(args: &ServeArgs) -> ServeExit {
         Ok(runtime) => ServerRuntime(Some(runtime)),
         Err(e) => return fail(ServeExit::Input, &format!("runtime: {e}")),
     };
-    let start = runtime
-        .handle()
-        .spawn(start(url.to_owned(), args.bind, rules, auth, epoch));
+    let start = runtime.handle().spawn(start(
+        url.to_owned(),
+        args.bind,
+        rules,
+        auth,
+        epoch,
+        Duration::from_secs(args.leaderboard_secs),
+    ));
     let Started {
         task,
         mut watch,
@@ -358,6 +375,7 @@ async fn start(
     rules: Rules,
     auth: crate::auth::AuthConfig,
     epoch: i64,
+    leaderboard_every: Duration,
 ) -> Result<Started, ServeExit> {
     let build =
         EngineBuild::new(ENGINE_BUILD).map_err(|e| fail(ServeExit::Input, &e.to_string()))?;
@@ -410,12 +428,35 @@ async fn start(
     );
     let watch = host.clone();
     let seq = host.read().seq;
+    let now_unix_ms: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(|| SystemClock.now_unix_ms());
+    // The leaderboard (P3.5, D-051): its first build runs before `ready:`, so the board exists
+    // from the first request; a failure there is loud, and the job retries every second. The job
+    // runs on this runtime, so the shutdown drops it, and its host handle, with the connections.
+    let (publish, board) = leaderboard::channel();
+    let mut board_host = host.clone();
+    match leaderboard::build_now(&mut board_host, now_unix_ms.as_ref(), epoch).await {
+        Ok(built) => {
+            publish.send_replace(Some(Arc::new(built)));
+        }
+        Err(error) => tracing::error!(
+            %error,
+            "the first leaderboard build failed; /leaderboard answers 503 until a build succeeds"
+        ),
+    }
+    tokio::spawn(leaderboard::run(
+        board_host,
+        now_unix_ms.clone(),
+        epoch,
+        leaderboard_every,
+        publish,
+    ));
     let state = AppState {
         verifier,
         players: Arc::new(Players::new(accounts, host.clone())),
         host,
-        now_unix_ms: Arc::new(|| SystemClock.now_unix_ms()),
+        now_unix_ms,
         epoch_unix_ms: epoch,
+        leaderboard: board,
     };
     let listener = tokio::net::TcpListener::bind(bind)
         .await

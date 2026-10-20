@@ -24,7 +24,7 @@ Binary. P2.9 added its first subcommand, `seed`, the universe bootstrap ([D-043]
   - The join has no idempotency key: D-037 would keep a rejection under it permanently. The core's `already_joined` refusal, under the single writer, is the deduplicator, and an `already_joined` receipt counts as joined.
   - A refused join is 422 with the core's code (`no_free_homeworld`), and the row stays. A full universe is answered from the read model, without appending a record. A refused account gets that 422 on every route that takes a player, reads included: there is no spectator mode.
   - The subject is personal data. It is never logged at any level, and never appears in an error body, a panic message or a `Debug` output; the player UUID is the public identity.
-- The leaderboard is rebuilt every 60 seconds from the read model and served with its `as_of`.
+- The leaderboard is rebuilt every 60 seconds (`--leaderboard-secs`) from the read model and served with its `as_of` (`voidforge_server::leaderboard`, [D-051](../../docs/decision-log.md#d-051-the-leaderboard)). Each player's score comes through the route's own `view_for(Query::Player)` call at the build's one `t`, so the board equals `/players/me` at the same time. A failed build keeps the previous board; before the first, the route is 503 with Retry-After 1. The job runs on `serve`'s server runtime, so the shutdown drops it with its handle.
 
 ## Tests
 

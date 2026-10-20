@@ -142,6 +142,10 @@ fn serve_usage_settings_and_a_bad_url() {
     let bad = Some("postgres://u:secret-password@127.0.0.1:1/none");
     let (code, out) = serve(&["--drain-secs", "61"], bad);
     assert_eq!(code, 2, "{out}");
+    for secs in ["0", "3601"] {
+        let (code, out) = serve(&["--leaderboard-secs", secs], bad);
+        assert_eq!(code, 2, "--leaderboard-secs {secs}: {out}");
+    }
     let (code, out) = serve(&["--token-leeway-secs", "301"], bad);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("token-leeway-secs"), "{out}");

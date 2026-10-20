@@ -61,6 +61,8 @@ pub struct AppState {
     pub now_unix_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// The universe epoch, Unix milliseconds: the host's.
     pub epoch_unix_ms: i64,
+    /// The latest leaderboard build (P3.5): `None` until one succeeds.
+    pub leaderboard: crate::leaderboard::Board,
 }
 
 impl FromRef<AppState> for Arc<TokenVerifier> {
@@ -367,10 +369,25 @@ async fn fleets(
     }
 }
 
-/// Until P3.5 builds the leaderboard job: 503 `unavailable`, with no Retry-After, so no client
-/// polls (D-049, T5). The path and its schema stay in the document.
-async fn leaderboard(_player: Player) -> ApiError {
-    ApiError::new(ErrorCode::Unavailable, "the leaderboard isn't built yet")
+/// Seconds a client waits after the 503 for a board not built yet: the job retries every second
+/// until the first build succeeds (D-051).
+pub const LEADERBOARD_RETRY_AFTER_SECS: u64 = 1;
+
+/// The latest build, with its own `as_of` (up to the job's interval old, by design; a player's own
+/// score is current through `/players/me`). Before the first build: 503 with Retry-After.
+async fn leaderboard(State(s): State<AppState>, _player: Player) -> Result<Response, ApiError> {
+    let latest = s.leaderboard.borrow().clone();
+    match latest {
+        Some(built) => Ok((
+            [(CONTENT_TYPE, HeaderValue::from_static("application/json"))],
+            built.json.clone(),
+        )
+            .into_response()),
+        None => Err(
+            ApiError::new(ErrorCode::Unavailable, "the leaderboard isn't built yet")
+                .retry_after(LEADERBOARD_RETRY_AFTER_SECS),
+        ),
+    }
 }
 
 static OPENAPI: LazyLock<String> = LazyLock::new(voidforge_api_types::openapi_json);

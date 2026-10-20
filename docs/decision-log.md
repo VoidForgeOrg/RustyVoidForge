@@ -1199,7 +1199,7 @@ Each entry records its date, the package that made it, the decision, the reasons
       - **more than `MAX_NEAR_RESULTS` = 1,000 matches is 400 `invalid_query`, never a truncated list.** The cap bounds the response, not the scan: the scan is bounded by `MAX_PLANETS`, and P3.8 bounds frequency.
       - **The extremes are safe:** the core's `distance` widens to i128 and returns `None` only past i64, which is beyond every radius, so excluding the planet is the right answer. A test pins radius i64::MAX, centres at i64::MIN and MAX, and a planet at exactly i64::MAX. No core change was needed.
     - `GET /players/me` and `GET /players/me/fleets`: the caller's own.
-    - **`GET /leaderboard` until P3.5 (T5):** 503 `unavailable`, "the leaderboard isn't built yet", with **no** Retry-After so no client polls. The path and schema stay.
+    - **`GET /leaderboard` until P3.5 (T5):** 503 `unavailable`, "the leaderboard isn't built yet", with **no** Retry-After so no client polls. The path and schema stay. **Amended by D-051:** the 503 now comes only before the first build, with `Retry-After: 1`.
   - **`GET /openapi.json` is public** (T2): no `Principal`, no `Player`, so reading it joins nobody. It's in the document as a path without security, and `openapi.json` is re-blessed.
   - **The document now declares 422 `no_free_homeworld` on every GET route** that takes a player (D-047, owner-confirmed). Without it, T7's status parity would fail.
   - **Every error is a D-045 body:**
@@ -1352,3 +1352,48 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `seed`'s out-of-range epoch is exit 3 even with a URL that isn't Postgres, so it's checked before connecting.
   - **The core:** `crates/voidforge-testkit/tests/fleet_commands.rs` pins the horizon's value and both edges for Send and Recall.
 - Where it's enforced: `crates/voidforge-core/src/{fleet.rs, command.rs, command/fleet.rs}`, `crates/voidforge-store/{migrations/0004_universe.sql, src/lib.rs, src/accounts.rs}`, `crates/voidforge-server/src/{serve.rs, main.rs, lib.rs}`, `crates/voidforge-server/tests/{serve.rs, cli.rs, accounts.rs, routes.rs}`, `crates/voidforge-testkit/tests/fleet_commands.rs`, `.sqlx/`, `.github/scripts/{database.sh, serve.sh}`, `justfile`, `deny.toml`, `crates/voidforge-host/src/lib.rs` (the `Rules` re-export), the host's AGENTS.md, the Game Design (Travel and recall), the Architectural Design (Persistence, Operations), D-029, the [version table](versions.md), and the server's and store's AGENTS.md.
+
+### D-051: The leaderboard
+
+- Date and package: 2026-10-20, P3.5. Proposed by dev-build (`slices/36-p3-5-leaderboard/proposal-leaderboard.md`). Lead ruling on T1 to T6, approved with four conditions (`ruling-lead.md`). The advisor settled the intent beforehand (SPEC items 1 and 5).
+- Decision:
+  - **Who's on it** (advisor): every joined player, with no top N; the Game Design says the board is visible to all. A zero score can't occur, because a homeworld alone is 1,000 points. The ship value inside a total is public by design.
+  - **`voidforge_server::leaderboard`:**
+    - `build(read, t, epoch)` is a pure function;
+    - `rank` gives D-045's order (score descending, then player ID ascending) and competition ranks (1, 2, 2, 4), with the rank a checked `u32`. The ID order is the `u128`'s, which is the wire's text order, because the hyphenated lowercase UUID has fixed-width hex;
+    - `build_now` and `run`, the job;
+    - `Built` (the game time `t` and the JSON bytes, serialized once per build), published on a `tokio::sync::watch`. `AppState` gains `leaderboard`.
+  - **One computation with `/players/me`:** a build reads **one** published read model at **one** `t = max(clock − epoch, world time)`, the routes' projection. It takes each player's score through **the route's own call**, `view_for(&Query::Player { player }, player, t, rules)`. So the board and a player's own view at the same time are one function on one World.
+  - **A stale read model** (behind a due event): the build waits up to 1 s for the host's next publish (`STALE_WAIT`, as the routes do), then fails as `Stale`. **A failed build keeps the previous board** and logs at error level. A half-built board is never published, because publishing is one `send` of a complete build.
+  - **The job:** it waits, then builds and publishes. It waits `--leaderboard-secs` once a board exists, and 1 s until then. Each wait starts after a build ends, which is the effect of `MissedTickBehavior::Delay`: a slow build never bunches builds up.
+  - **In `serve`:** the first build runs before `ready:`, so the board exists from the first request. If it fails, `serve` still starts, logs it, and **`GET /leaderboard` answers 503 `unavailable` with `Retry-After: 1`** until a build succeeds (D-049 T5 amended). The document already declared the 503, and `openapi.json` doesn't change.
+    - `--leaderboard-secs` / `VOIDFORGE_LEADERBOARD_SECS`: default 60 (the Game Design's), from 1 to 3,600, exit 2 outside.
+    - The job is a task on the **server runtime**, so D-050's shutdown drops it, and its host handle, with the connections. There's no new mechanism. The CPU part of a build holds only the `Arc<ReadModel>`.
+  - **Logging** (repair round 1, the lead's option on dev-qa's I2): the first failure in a run logs at error level, later ones at debug with a count, and the next success at info with the count. A host stuck for minutes gives one ERROR, not about 30 a minute. No test pins the levels; they're log-only.
+  - **The route** serves the latest build's bytes, with the build's own `as_of`: up to the interval old by design, while a player's own score is current through `/players/me`.
+  - **Measured** (the lead's condition; release build, solved homeworlds, at `t` = 1 h):
+
+    | Players | Build | Board |
+    | --- | --- | --- |
+    | 250 (the default cube's practical limit) | 0.25 ms | 18.8 KB |
+    | 5,000 (the cap) | 113 ms | 375 KB |
+
+    Under the ruling's 1 s threshold, so the build stays inline on the server runtime. **Scaling** (review-r1's R1-2): a build is O(players × (planets + fleets)), because each player's view walks the World. That gives 0.24 ms at 250 players, 113 to 132 ms at 5,000, and about 1 s near 14,000. **Rerun `build_time` before any rise in the player cap**, and move the build to `spawn_blocking` if it nears 1 s.
+  - **Dependencies:** `jsonschema` (D-045's pin, already in the graph) becomes a server dev-dependency, for the schema check below. There's no new crate.
+- Tests:
+  - **`src/leaderboard.rs`:** the ranking table (ties in the middle and at the end; all tied; strictly ordered; empty), and a property test over 500 generated boards (each rank is 1 plus the count strictly ahead; the order; every player once). Also the ignored measurement, `build_time`.
+  - **`tests/routes.rs`** (the database stage, the real router and host on a `ManualClock`):
+    - **the board equals every player's own `/players/me` at the same time**: five players (three newcomers tied on identical homeworlds; Alice's drill under construction for partial credit; Bob's ships), at 1 minute and again at 5 hours, after the drill completes and Bob's fleet arrives. Each check covers the ranks, the order, the tie, the same `as_of`, and the `as_of` advancing;
+    - **every board read is validated against the document's `Leaderboard` schema** (Draft 2020-12, formats on) and deserialized into `api::Leaderboard` (the lead's T1 condition);
+    - **a failed build keeps the previous board:** the host's append held past Bob's arrival, the build `Stale` after its wait, the route serving the previous board unchanged, then a rebuild once released;
+    - the job on a 50 ms interval rebuilding as the clock moves;
+    - **the job's own error path keeps the board** (added for the mutation table's one survivor, "a failed build clears the board": the direct-build test never ran the job): on a 50 ms interval with the host held stale for 2.5 s, the route serves the previous board unchanged, and the job's next build advances it once released;
+    - the build's `as_of` kept when read later (not the request's time), and the job retrying every second until its first board;
+    - **the interval pinned** (repair round 1, dev-qa's Q1, in `tests/serve.rs`): with `--leaderboard-secs 1`, every gap between new `as_of`s over 6 s lies between 0.8 and 1.6 s;
+    - before any build, 503 with `Retry-After: 1`.
+  - **`tests/serve.rs`** (the real binary):
+    - with `--leaderboard-secs 1`, the board is 200 at `ready:` and its `as_of` advances;
+    - **the host joins with the job mid-wait** (the lead's T3 condition): with `--leaderboard-secs 3600` the job is asleep holding its handle, and SIGINT is exit 0 with the snapshot at the head in under 5 s, well inside the 10 s join bound.
+    - **Honest scope:** this pins the job's sleep, its usual wait. The other wait, the up-to-1 s stale wait inside a build, is an await point of the same task, dropped the same way, but no test parks a real build in it.
+  - **`tests/cli.rs`:** `--leaderboard-secs` 0 and 3,601 are exit 2.
+- Where it's enforced: `crates/voidforge-server/src/{leaderboard.rs, api/mod.rs, serve.rs, lib.rs}`, `crates/voidforge-server/tests/{routes.rs, serve.rs, cli.rs}`, `crates/voidforge-server/Cargo.toml`, D-049, and the server's AGENTS.md.
