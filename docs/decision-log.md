@@ -1476,9 +1476,38 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Measured** (2026-10-20, a local debug build):
     - the scenario takes **119 s** of wall time: join 1 s, Shipyard 12 s, ships 37 s, race 44 s, transport 24 s, board 1 s;
     - the whole script takes 127 s with an incremental build.
-    - Game time is the wall clock, so the scenario's length doesn't depend on the runner's speed; the build does. The CI job's first runs are in the PR's proof.
+    - Game time is the wall clock, so the scenario's length doesn't depend on the runner's speed; the build does.
+    - **CI** (PR #43, 5dd6b37): the job took 4m25s. Compose up 15 s, build 68 s, the scenario PASSED in 119.0 s, and the real-dex tests passed 2 of 2. The 20-minute timeout is well above that.
+  - **A serve that died during the scenario** is reported as such: `e2e.sh` sends its SIGTERM only to a live serve, and names what stopped it in the failure line. (Before, the `kill` of a dead pid ended the script under `set -e` with no message.)
   - **Carried drift, not fixed here** (the lead's ruling): `just trace-check` (`deploy/verify_trace.py`) runs each binary with no arguments and expects its `stub_startup` span.
     - `voidforge-server` exits 2 that way since P2.9, and `voidforge-replay` since P2.7 (confirmed on a fresh build: both exit 2 with no subcommand), because both gained subcommands. P3.6 extends that to `voidforge-bots`, whose stub was also the binary for the offline and unreachable cases. Only `voidforge-web` still runs its stub.
     - trace-check isn't in CI.
     - The lead carries a real per-binary telemetry check to P5's observability work.
   - **D-015's note**, that the CI end-to-end stage would be the first host-network container on Linux, no longer holds: serve runs on the host. The first such container comes with P5's images; `deploy/README.md` says so.
+- Tests:
+  - **The scenario is the test.** It passes locally (`e2e.sh`) and in CI on the exact head.
+  - **The bots' unit tests:**
+    - `unix_ms` on known instants, leap days included;
+    - `between` never negative;
+    - on paused time, a passed deadline names its step and the last view, and polls follow `valid_until` between 100 ms and 1 s;
+    - the form encoding of the login.
+  - **The CI negative control:** a throwaway draft PR (#44), whose one commit makes the bots expect the later arrival to win, failed red at the race with a readable log and every service's log printed. It was then closed and its branch deleted.
+  - **The mutation table** (`slices/37-p3-6-e2e/proof/mutate.py`):
+    - Each case is a full `e2e.sh` run in a fresh copy with one planted bug, and counts as caught only when it fails **at the step it names**. Compile errors are unproven and never counted.
+    - **The control passed, and 15 of 15 mutants were caught at their named steps:**
+      - join: every call joins a new player; the board leaves a player off;
+      - leaderboard: ranks from 0;
+      - build: a repeated key applies the command again;
+      - race: an owned planet is colonized again; a colonization uses no Colony Ship; a failed colonization uses the Colony Ship; a player's planets are only its homeworld;
+      - transport: Transport doesn't unload; a fleet is assembled without its cargo;
+      - privacy: everyone's fleets are listed; a foreign fleet is `not_owner`;
+      - the spec's two negative controls: serve accepts only the web client's tokens (join, 401); the bots expect the later arrival to win (race);
+      - the harness's clean-stop check: serve killed instead of stopped, and serve dying during the scenario (both exit 137, named).
+    - **Two harness lessons, both recorded in the proof:**
+      - run 1 used `shutil.copy2`, which kept the old file times, so cargo reused the previous case's mutated core for the last three cases. The copy now gives fresh times, and the table was rerun in full;
+      - a "SIGTERM twice" mutant didn't plant its bug: serve stopped in about 50 ms, before the second signal. It was replaced by SIGKILL.
+- Where it's enforced:
+  - `crates/voidforge-bots/` (src, Cargo.toml, AGENTS.md);
+  - `.github/scripts/{e2e.sh, check-dex-parity.sh, test-check-dex-parity.sh}` and `.github/workflows/ci.yml` (the lint steps, the `e2e` job);
+  - the `justfile` (`e2e`, lint);
+  - the root AGENTS.md, `deploy/README.md` and `docs/versions.md`.

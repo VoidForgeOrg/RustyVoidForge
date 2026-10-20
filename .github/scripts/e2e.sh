@@ -118,8 +118,14 @@ set +e
 bots_code=${PIPESTATUS[0]}
 set -e
 
-# 6. One SIGTERM: serve drains and stops with its final snapshot, exit 0 (D-050).
-kill -TERM "$serve_pid"
+# 6. One SIGTERM: serve drains and stops with its final snapshot, exit 0 (D-050). A serve that
+# already exited during the scenario is reported as such, never as a stop.
+stopped_by="one SIGTERM"
+if kill -0 "$serve_pid" 2> /dev/null; then
+    kill -TERM "$serve_pid"
+else
+    stopped_by="nothing: it had already exited during the scenario"
+fi
 for _ in $(seq 1 100); do
     kill -0 "$serve_pid" 2> /dev/null || break
     sleep 0.2
@@ -135,11 +141,11 @@ else
 fi
 serve_pid=
 if [ "$bots_code" != 0 ]; then
-    say "FAILED: the bots exited $bots_code; serve's log is $log_dir/serve.log"
+    say "FAILED: the bots exited $bots_code; serve exited $serve_code after $stopped_by; serve's log is $log_dir/serve.log"
     exit 1
 fi
 if [ "$serve_code" != 0 ]; then
-    say "FAILED: the scenario passed, but serve exited $serve_code after one SIGTERM; its log:"
+    say "FAILED: the scenario passed, but serve exited $serve_code after $stopped_by; its log:"
     tail -n 40 "$log_dir/serve.log" >&2
     exit 1
 fi
