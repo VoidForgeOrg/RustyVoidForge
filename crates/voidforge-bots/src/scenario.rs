@@ -352,7 +352,7 @@ pub async fn run(
         })
     })
     .await?;
-    let (winner, loser, won, lost) = if arrives_a < arrives_b {
+    let (winner, loser, won, lost) = if arrives_a > arrives_b {
         (&alice, &bob, (&a, &fleet_a), (&b, &fleet_b))
     } else {
         (&bob, &alice, (&b, &fleet_b), (&a, &fleet_a))
