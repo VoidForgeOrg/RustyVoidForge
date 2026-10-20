@@ -3,11 +3,12 @@
 # `just e2e`, against the compose stack's Postgres and dex (the CI dex config: password grant on).
 #
 #   1. checks dex's password grant, and lists leftover e2e databases;
-#   2. builds voidforge-server and voidforge-bots;
+#   2. builds voidforge-server, voidforge-bots and voidforge-web;
 #   3. creates this run's own database, voidforge_e2e_<time>_<pid>, and seeds it on the fast rules;
 #   4. starts the serve binary as a host process (never through just or cargo run: D-050 I5) on a
 #      free port, and waits for its ready line and GET /openapi.json;
-#   5. runs `voidforge-bots e2e`, then the terminal login check (.github/scripts/device-login.py);
+#   5. runs `voidforge-bots e2e`, then the terminal login check (.github/scripts/device-login.py),
+#      then the web login check (.github/scripts/web-login.py; it needs localhost:8081 free);
 #   6. stops serve with one SIGTERM and requires exit 0 (the final snapshot at the log head);
 #   7. drops this run's database, on every exit.
 #
@@ -16,7 +17,8 @@
 # leftover from a killed run is dropped only when the pid in its name is dead; otherwise it's
 # listed with the command that drops it.
 #
-# E2E_ISSUER (default http://localhost:5556/dex) names the dex to use. Logs go to E2E_LOG_DIR (default target/e2e/<run>): serve.log, bots.log, seed.log.
+# E2E_ISSUER (default http://localhost:5556/dex) names the dex to use. Logs go to E2E_LOG_DIR (default target/e2e/<run>): serve.log, bots.log, seed.log,
+# device-login.log, web-login.log and web.log.
 # Exit codes: 0 passed; 1 the scenario failed, or serve didn't stop cleanly; 2 usage;
 # 3 the stack isn't ready (dex without the password grant, Postgres unreachable, serve not ready).
 set -euo pipefail
@@ -75,10 +77,11 @@ for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\
 done
 
 # 2. The binaries, checked against .sqlx/ (D-034), never against a database.
-SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots
+SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots -p voidforge-web
 target_dir=$(cargo metadata -q --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 server="$target_dir/debug/voidforge-server"
 bots="$target_dir/debug/voidforge-bots"
+web="$target_dir/debug/voidforge-web"
 
 serve_pid=
 cleanup() {
@@ -137,6 +140,15 @@ if [ "$bots_code" = 0 ]; then
         2>&1 | tee "$log_dir/device-login.log"
     device_code=${PIPESTATUS[0]}
 fi
+# 5c. The web login (P4.1, D-057): alice logs in and out of voidforge-web through dex's
+# authorization code flow, driven over HTTP with cookie jars; Home's score proves the API took
+# the web app's token. It starts and stops voidforge-web itself, on localhost:8081.
+web_code=0
+if [ "$bots_code" = 0 ]; then
+    python3 .github/scripts/web-login.py --web "$web" --api "http://$addr" --issuer "$issuer" \
+        --log "$log_dir/web.log" 2>&1 | tee "$log_dir/web-login.log"
+    web_code=${PIPESTATUS[0]}
+fi
 set -e
 
 # 6. One SIGTERM: serve drains and stops with its final snapshot, exit 0 (D-050). A serve that
@@ -168,6 +180,10 @@ if [ "$bots_code" = 0 ] && [ "$device_code" != 0 ]; then
     say "FAILED: the scenario passed, but the terminal login check exited $device_code; its log is $log_dir/device-login.log"
     exit 1
 fi
+if [ "$bots_code" = 0 ] && [ "$web_code" != 0 ]; then
+    say "FAILED: the scenario passed, but the web login check exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
+    exit 1
+fi
 if [ "$bots_code" != 0 ]; then
     say "FAILED: the bots exited $bots_code; serve exited $serve_code after $stopped_by; serve's log is $log_dir/serve.log"
     exit 1
@@ -177,4 +193,4 @@ if [ "$serve_code" != 0 ]; then
     tail -n 40 "$log_dir/serve.log" >&2
     exit 1
 fi
-say "PASSED: the scenario and the terminal login passed, and serve stopped cleanly"
+say "PASSED: the scenario, the terminal login and the web login passed, and serve stopped cleanly"

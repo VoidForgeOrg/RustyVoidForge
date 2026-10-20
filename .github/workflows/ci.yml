@@ -167,7 +167,7 @@ jobs:
       - name: On failure, the logs (serve, the bots, the terminal login, seed, dex, Postgres)
         if: failure()
         run: |
-          for f in serve bots device-login seed; do
+          for f in serve bots device-login web-login web seed; do
             echo "::group::$f.log"
             cat "$E2E_LOG_DIR/$f.log" 2>/dev/null || echo "(no $f.log)"
             echo "::endgroup::"
