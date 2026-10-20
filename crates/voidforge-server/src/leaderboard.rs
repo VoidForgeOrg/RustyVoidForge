@@ -77,7 +77,8 @@ pub async fn build_now(
 }
 
 /// The job: waits, rebuilds the board, and publishes each success; a failure keeps the previous
-/// board and logs at error level. It waits `every` once a board exists, and
+/// board. The first of a run of failures logs at error level, the rest at debug, and the next
+/// success at info with the count. It waits `every` once a board exists, and
 /// [`RETRY_UNTIL_FIRST`] until then. Each wait starts after a build ends, so a slow build never
 /// bunches builds up (the effect of `MissedTickBehavior::Delay`). It runs until its task is
 /// dropped: `serve` drops it with its server runtime (D-050).
@@ -88,6 +89,9 @@ pub async fn run(
     every: Duration,
     publish: Publish,
 ) {
+    // Failed builds in a row: the first is logged at error level, the rest at debug, and the
+    // recovery at info, so a host stuck for minutes doesn't flood the log (dev-qa's I2).
+    let mut failing: u64 = 0;
     loop {
         // The wait comes first: `serve` builds once itself before `ready:`.
         let wait = if publish.borrow().is_some() {
@@ -98,11 +102,20 @@ pub async fn run(
         tokio::time::sleep(wait).await;
         match build_now(&mut host, now_unix_ms.as_ref(), epoch_unix_ms).await {
             Ok(built) => {
+                if failing > 0 {
+                    tracing::info!(failed = failing, "the leaderboard builds again");
+                }
+                failing = 0;
                 tracing::debug!(t = built.t, bytes = built.json.len(), "leaderboard built");
                 publish.send_replace(Some(Arc::new(built)));
             }
             Err(error) => {
-                tracing::error!(%error, "the leaderboard build failed; the previous board stays");
+                failing = failing.saturating_add(1);
+                if failing == 1 {
+                    tracing::error!(%error, "the leaderboard build failed; the previous board stays");
+                } else {
+                    tracing::debug!(%error, failing, "the leaderboard build failed again");
+                }
             }
         }
     }

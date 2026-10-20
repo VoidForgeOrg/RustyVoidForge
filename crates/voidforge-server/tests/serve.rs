@@ -1412,3 +1412,41 @@ async fn the_host_joins_with_the_job_mid_wait(pool: PgPool) {
         sent.elapsed()
     );
 }
+
+/// Dev-qa's Q1: the job's interval is pinned. With `--leaderboard-secs 1`, every gap between new
+/// `as_of`s over 6 s lies between 0.8 and 1.6 s: a job building ten times as often (or not at
+/// all) fails here.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_job_rebuilds_on_its_interval_and_no_faster(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    let s = serve(&url, &dex.issuer, &["--leaderboard-secs", "1"]);
+    let mut last =
+        call("GET", s.url("/leaderboard"), Some(token.clone()), None).body["as_of"].clone();
+    let mut seen_at = Vec::new();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(6) {
+        let now = call("GET", s.url("/leaderboard"), Some(token.clone()), None);
+        assert_eq!(now.status, 200);
+        if now.body["as_of"] != last {
+            last = now.body["as_of"].clone();
+            seen_at.push(Instant::now());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        seen_at.len() >= 3,
+        "at least three rebuilds in 6 s: {}",
+        seen_at.len()
+    );
+    for w in seen_at.windows(2) {
+        let gap = w[1] - w[0];
+        assert!(
+            gap > Duration::from_millis(800) && gap < Duration::from_millis(1_600),
+            "a rebuild gap of {gap:?}"
+        );
+    }
+    s.signal("INT");
+    assert_eq!(s.exit(PATIENCE).0, 0);
+}
