@@ -92,6 +92,7 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | uuid | =1.28.0 (std, v7; default features off) | server: draws each new player's UUIDv7 | P3.3 | D-047 |
 | insta | =1.46.1 (json; default features off) | server, dev-dependency only: the routes' contract snapshots | P3.4 | D-049 |
 | log | =0.4.34 (std; default features off) | server, dev-dependency only: the privacy test captures sqlx's `log` events | P3.3 | D-047 |
-| tower-sessions | =0.15.0 (memory-store, axum-core; default features off) | web, the session and its cookie; brings tower-cookies, cookie and the time crates | P4.1 | D-057 |
+| tower-sessions | =0.15.0 (axum-core; default features off: our own bounded store replaces its memory-store) | web, the session and its cookie; brings tower-cookies, cookie and the time crates | P4.1 | D-057 |
+| async-trait | =0.1.92 | web, the bounded session store implements tower-sessions' `SessionStore`; already in the tree, so no new crate | P4.1 | D-057 |
 | maud | =0.27.0 (axum; default features off) | web, the pages | P4.1 | D-057 |
 | base64 | =0.23.1 (std; default features off) | web, state, nonce, the verifier and the challenge; already in the tree under reqwest, so no new version | P4.1 | D-057 |
