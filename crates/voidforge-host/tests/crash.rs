@@ -20,6 +20,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command as Process, Stdio};
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Poll;
 
 use common::filelog::FileLog;
 use common::{EPOCH, build, settle};
@@ -28,7 +31,7 @@ use voidforge_core::command::Command;
 use voidforge_core::quantity::MS_PER_HOUR;
 use voidforge_core::rules::Rules;
 use voidforge_core::state::{DomainEvent, PlayerId};
-use voidforge_host::{HostConfig, ManualClock};
+use voidforge_host::{HostConfig, HostError, HostHandle, ManualClock, Receipt};
 use voidforge_store::log::{
     IdempotencyKey, LogError, LogRecord, LogStore, MemoryLog, Outcome, PgLog, SnapshotMeta,
     SnapshotRow,
@@ -148,6 +151,43 @@ fn die(point: &str, batch: usize, seq: i64) -> ! {
     std::process::abort()
 }
 
+/// The child's turn gate (OPR.42): it holds the host's next append while the child fills the
+/// inbox, so which commands share a turn is fixed by the protocol, not by how the host's thread and
+/// the child's happen to be scheduled. Without it, a slow runner let the host take each command
+/// alone, and no seeded `append.*` kill met a multi-command turn (`mid_turn: false` on a0a6e6b's
+/// CI). The host forms a turn's batch the moment it takes the first command, so a pair can't be
+/// made certain without a hook in the host; the gate makes the shape `[first]`, then `[the rest]`.
+/// Test code only: the host runs unchanged (D-042).
+struct Gate {
+    /// Set by the child before a submit; the next append takes it and holds.
+    armed: AtomicBool,
+    /// The host is held inside an append.
+    entered: tokio::sync::Notify,
+    /// The child has filled the inbox: the held append goes on.
+    release: tokio::sync::Notify,
+}
+
+static GATE: LazyLock<Gate> = LazyLock::new(|| Gate {
+    armed: AtomicBool::new(false),
+    entered: tokio::sync::Notify::new(),
+    release: tokio::sync::Notify::new(),
+});
+
+/// Submits `command` and polls it once in place, so on return it's in the host's inbox (or
+/// refused at once), whatever the scheduler does next; the rest of the wait runs as a task.
+async fn enqueue(
+    handle: &HostHandle,
+    command: Command,
+    key: IdempotencyKey,
+) -> tokio::task::JoinHandle<Result<Receipt, HostError>> {
+    let h = handle.clone();
+    let mut submit = Box::pin(async move { h.submit_with_key(command, key).await });
+    match std::future::poll_fn(|cx| Poll::Ready(submit.as_mut().poll(cx))).await {
+        Poll::Ready(r) => tokio::spawn(async move { r }),
+        Poll::Pending => tokio::spawn(submit),
+    }
+}
+
 impl KillStore {
     fn open(at: &Where, kill: Option<(String, u32)>, recovering: bool) -> Self {
         let (file, pg, url) = match at {
@@ -209,6 +249,11 @@ impl LogStore for KillStore {
     }
 
     async fn append(&mut self, records: &[LogRecord]) -> Result<(), LogError> {
+        // Before the kill points count, so a kill at a held append still fires, after the release.
+        if GATE.armed.swap(false, Ordering::SeqCst) {
+            GATE.entered.notify_one();
+            GATE.release.notified().await;
+        }
         let batch = records.len();
         let seq = records.first().map_or(0, |r| r.seq);
         if self.hit("append.before") {
@@ -327,7 +372,7 @@ fn economy(seed: u64, commands: u64) -> Economy {
     }
 }
 
-fn got(receipt: &voidforge_host::Receipt) -> Got {
+fn got(receipt: &Receipt) -> Got {
     Got {
         seq: receipt.seq,
         t: receipt.t,
@@ -396,18 +441,36 @@ fn crash_child() {
                     send_line(&mut out, &FromChild::Commands(commands));
                 }
                 ToChild::Submit(planned) => {
-                    // Every command is in the inbox before any reply is awaited, so they can
-                    // share a turn.
-                    let tasks: Vec<_> = planned
-                        .into_iter()
-                        .map(|p| {
-                            let h = handle.clone();
-                            tokio::spawn(async move {
-                                h.submit_with_key(p.command, IdempotencyKey::new(p.key).unwrap())
-                                    .await
-                            })
-                        })
-                        .collect();
+                    // A fixed shape for every submit (OPR.42): commands go one at a time until
+                    // one's append is held at the gate (a retry of a durable command replies
+                    // without appending, so the next one goes); then every other command goes
+                    // into the inbox before the release. So the held turn has exactly its own
+                    // commands and the next turn has all the rest: multi-command turns, the same
+                    // on every run.
+                    GATE.armed.store(true, Ordering::SeqCst);
+                    let mut held = false;
+                    let mut tasks = Vec::new();
+                    for p in planned {
+                        let key = IdempotencyKey::new(p.key).unwrap();
+                        let mut t = enqueue(&handle, p.command, key).await;
+                        if !held {
+                            tokio::select! {
+                                biased;
+                                () = GATE.entered.notified() => held = true,
+                                r = &mut t => {
+                                    let r = r.unwrap();
+                                    t = tokio::spawn(async move { r });
+                                }
+                            }
+                        }
+                        tasks.push(t);
+                    }
+                    if held {
+                        GATE.release.notify_one();
+                    } else {
+                        // Every command was answered without an append: nothing is held.
+                        GATE.armed.store(false, Ordering::SeqCst);
+                    }
                     for t in tasks {
                         let reply = match t.await.unwrap() {
                             Ok(r) => FromChild::Receipt(got(&r)),
@@ -550,7 +613,8 @@ async fn read_records(at: &Where) -> Vec<LogRecord> {
 struct Seen {
     /// Deaths per kill point.
     kills: BTreeMap<String, u32>,
-    mid_turn: bool,
+    /// `append.*` kills of a batch of more than one record: inside a multi-command turn.
+    mid_turn: u32,
     lives: u64,
     commands: usize,
 }
@@ -560,7 +624,7 @@ impl Seen {
         for (p, n) in other.kills {
             *self.kills.entry(p).or_default() += n;
         }
-        self.mid_turn |= other.mid_turn;
+        self.mid_turn += other.mid_turn;
         self.lives += other.lives;
         self.commands += other.commands;
     }
@@ -693,7 +757,7 @@ async fn run_seed(at: &Where, points: &[&str], seed: u64, commands: u64) -> Seen
                 _ => {}
             }
             if point.starts_with("append.") && batch > 1 {
-                seen.mid_turn = true;
+                seen.mid_turn += 1;
             }
             after_death(at, &point).await;
             *seen.kills.entry(point).or_default() += 1;
@@ -900,14 +964,17 @@ async fn file_seeds(seeds: std::ops::Range<u64>, commands: u64) -> Seen {
     all
 }
 
-/// Per PR: 12 fixed seeds on the file store; every kill point is reached.
+/// Per PR: 12 fixed seeds on the file store; every kill point is reached, and a kill lands inside
+/// a multi-command turn. With the turn gate, the counts are the same on every run (OPR.42). A
+/// multi-command turn needs a group of three commands (the gate's second turn carries all but the
+/// first), so the seeds run 60 commands: at 40 they have groups of one and two only.
 #[tokio::test]
 async fn every_retried_command_ends_with_exactly_one_outcome_on_the_file_store() {
-    let seen = file_seeds(0..12, 40).await;
+    let seen = file_seeds(0..12, 60).await;
     eprintln!("file store, 12 seeds: {seen:?}");
     let want: BTreeSet<String> = FILE_POINTS.iter().map(|p| (*p).to_owned()).collect();
     assert_eq!(seen.points(), want, "every kill point is hit");
-    assert!(seen.mid_turn, "a kill inside a multi-command turn");
+    assert!(seen.mid_turn > 0, "a kill inside a multi-command turn");
 }
 
 /// The nightly shape (P5.3): seeds from VOIDFORGE_CRASH_SEED_BASE, VOIDFORGE_CRASH_SEEDS of them,
