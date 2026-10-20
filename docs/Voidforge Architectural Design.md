@@ -373,6 +373,7 @@ Example planet view, with illustrative values. It's abridged: the full view also
 | `GET /players/me` | Profile, homeworld and score |
 | `GET /players/me/fleets` | The player's fleets |
 | `GET /leaderboard` | Ranked scores with `as_of` |
+| `GET /rules` | The rules the universe runs: costs, times, flows, speeds, capacities, slots, caps, the homeworld start and the score's weights; public, needs no token (D-058) |
 | `GET /openapi.json` | The contract itself; public, needs no token (D-049) |
 
 All writes go through the single `POST /commands` endpoint. Its body names one of the ten player actions from Commands, so every write maps one-to-one onto a log record; the player comes from the auth token, never from the body. Join game isn't in the public body: the server issues it on a player's first call (D-045).
