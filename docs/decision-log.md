@@ -885,9 +885,9 @@ Each entry records its date, the package that made it, the decision, the reasons
     - `verify_log` from the seq-0 snapshot (D-041);
     - gap-free seqs;
     - the log and the World at the end equal a reference host that never died, given the logged commands at their logged times.
-  - **Determinism:** each life's kill point and N are functions of the seed. How a turn's commands are batched depends on scheduling, so the records inside a multi-command turn may differ between runs of one seed. The checks don't depend on it, and a failure names its seed.
+  - **Determinism:** each life's kill point and N are functions of the seed. How a turn's commands are batched depends on scheduling, so the records inside a multi-command turn may differ between runs of one seed. The checks don't depend on it, and a failure names its seed. **Amended (OPR.42, test only):** the mid-turn coverage assertion did depend on it, and it failed once in CI (a0a6e6b), when the host took each command alone. The child's store wrapper now holds the host's next append while the child fills the inbox, so every submit's turns are `[first]`, then `[the rest]`, on every run. The host forms a batch when it takes its first command, so only a group of three commands makes a multi-command turn, and the per-PR seeds run 60 commands. The per-PR file-store run is now the same on every run (200 of 200 under load, one mid-turn kill each).
   - **Bounds:**
-    - per PR, 12 seeds of 40 commands on the file store in `test` (about 5 s), and 4 seeds of 30 commands on Postgres in the database stage (about 6 s; the filter gains the crash binary's Postgres test);
+    - per PR, 12 seeds of 40 commands on the file store in `test` (about 5 s; **60 commands, about 7 s, since OPR.42**), and 4 seeds of 30 commands on Postgres in the database stage (about 6 s; the filter gains the crash binary's Postgres test);
     - the nightly shape (P5.3 schedules it) is the ignored `crash_nightly`, with `VOIDFORGE_CRASH_SEED_BASE`, `VOIDFORGE_CRASH_SEEDS` and `VOIDFORGE_CRASH_COMMANDS`.
 - Where it's enforced: `crates/voidforge-host/tests/{crash.rs, common/filelog.rs}`, `.github/scripts/database.sh`.
 
