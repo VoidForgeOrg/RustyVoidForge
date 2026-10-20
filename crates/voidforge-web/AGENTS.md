@@ -23,7 +23,8 @@ A binary over a library (`src/lib.rs`), so tests drive the router directly. P4.1
 - Logging in joins the game: the first `/players/me` creates the account (D-047).
 - The API is reached only through `src/api.rs`'s `Api` (D-059): never hand-rolled HTTP. Authenticated methods take the session's token; `rules` takes none. Every call ends in a view or an `ApiError`, and nothing on the path panics.
 - A failed call is shown through `src/messages.rs`: phase4-ux §6.1's copy for every `ErrorCode`, matched with no wildcard arm, and the code beside it; the API's `message` is never shown. 401 ends the session; 429, 500, 503 and an unreachable or unexpected API are the retry page with the API's status (502 for the last two). `tests/fixtures/copy.json` is §6.1 and §6.2 extracted from dev-design's document by `tests/fixtures/extract_copy.py`: when the copy changes there, rerun it.
-- Every page reads the public `/rules` for the fast-rules line, and a failed read only drops the line.
+- Every page reads the public `/rules` for the fast-rules line, beside its own reads and within its own 2 s bound; a failed read only drops the line. HEAD is 404 on every path, before any handler.
+- Tests that read the log go in `tests/logs.rs` (one global subscriber, one test at a time), so they hold under plain `cargo test` too.
 - Every form carries a fresh idempotency key in a hidden field, and posts to the web app, which sends one `POST /commands` and redirects back. A double submit runs once.
 - A rejected command shows its reason code at the top of the page.
 
