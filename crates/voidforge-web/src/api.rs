@@ -383,6 +383,15 @@ mod tests {
         assert!(!Route::Planet.sends(ErrorCode::Busy, 404));
     }
 
+    /// The ruled numbers themselves (T4, the body cap, the server's longest Retry-After).
+    #[test]
+    fn the_bounds_are_the_ruled_numbers() {
+        assert_eq!(API_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(2));
+        assert_eq!(MAX_BODY_BYTES, 4 * 1024 * 1024);
+        assert_eq!(MAX_RETRY_AFTER_SECS, 30);
+    }
+
     #[test]
     fn debug_shows_no_more_than_the_base() {
         let api = Api::new("http://localhost:8080".to_owned()).unwrap();
