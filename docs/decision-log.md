@@ -1703,6 +1703,22 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **G5, publish, then reply:** D-036 and the host's module doc said "reply, then publish". The code has always published first, and Phase 3 relies on it (read-your-writes; a new player's first view finds it joined). The docs are corrected, and a host test pins the order with certainty: while the test holds a borrow of the read model, `watch` can't publish, so the reply mustn't arrive; released, it arrives with its effect visible.
   - **G6, record hygiene:** "Amended by" markers on D-045's six paths (D-049 T2), D-046's and D-047's P3.4 items (D-048), and D-044's epoch lines in D-031, D-036 and D-044 (D-048, D-050). The Architectural Design's endpoint table gains `GET /openapi.json`, and its privacy line says roster ships are owner-only, as the Game Design does. `HostConfig::epoch_unix_ms`'s stale comment is corrected.
   - **G8, layering by machine:** the dependency checker (`tests/guardrails/check_web_deps.py`) now also checks **voidforge-bots** like web (no workspace crate but api-types and telemetry, through any kind, transitively), and **voidforge-server never depending on voidforge-core directly** as a normal dependency (its tests may; a build-dependency links nothing in). The fixtures add failing cases for each, and the cases that inject into api-types or telemetry now report the bots' paths too. The "unreachable crate" case moved from server to replay, since the server is governed now.
+- Tests:
+  - New:
+    - `head_is_not_found_and_runs_nothing` (routes);
+    - `seed_never_reads_database_url` (cli);
+    - `an_unmigrated_database_with_other_tables_is_refused_and_gets_no_schema` and `a_refused_seed_on_a_partly_migrated_database_changes_no_schema` (postgres);
+    - `a_reply_never_arrives_before_its_read_model` (the host's first unit test);
+    - the header parity in every routes test;
+    - the new dependency fixtures.
+  - Locally on 542f3bc: workspace tests 531 of 531, the database stage 130 of 130, and lint with all 143 guardrail cases. CI 6 of 6 (run 39414905982).
+  - **Targeted mutations** (`missions/voidforge-mvp/proof/phase3-gate-repair/mutate.py`): on 542f3bc, all three controls passed (server, host and guard layers), and **11 of 11 were caught**:
+    - G1: the GET routes' 503 declaring no Retry-After (the header parity);
+    - G2: HEAD not refused, and the wrong method refused;
+    - G3: seed reading `DATABASE_URL`, the emptiness check after migrating, other tables ignored, and existing accounts not read before migrating;
+    - G5: reply, then publish;
+    - G8: the server's rule dropped, the bots not isolated, and the server's rule counting dev-dependencies.
+  - The first run's guard layer couldn't start (`run_fixtures.py` lists its workspace with git, and the copy had none): its control failed, and the harness reported HARNESS ERROR, never a catch. The copy is now a fresh repository, and the whole table was rerun.
 - Where it's enforced:
   - `crates/voidforge-server/{src/main.rs, src/api/{mod.rs, error.rs}, tests/{dex.rs, routes.rs, cli.rs, postgres.rs, serve.rs}}` and its AGENTS.md;
   - `crates/voidforge-store/src/lib.rs` and `.sqlx/`;
