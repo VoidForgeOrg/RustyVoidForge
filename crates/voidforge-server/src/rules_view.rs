@@ -12,10 +12,9 @@ use voidforge_api_types::rules::{
     BuildingRules, DrillRules, HomeworldRules, MassPointsRules, PlanetRules, RefineryRules,
     RulesView, ScoringRules, ShipKindRules, ShipRules, ShipyardRules,
 };
-use voidforge_host::Rules;
-use voidforge_host::rules::{
+use voidforge_host::{
     BuildCost, BuildingSpecs, DrillSpec, HomeworldSpec, MassPoints, PlanetSpec, RefinerySpec,
-    ScoringSpecs, ShipSpec, ShipSpecs, ShipyardSpec,
+    Rules, ScoringSpecs, ShipSpec, ShipSpecs, ShipyardSpec,
 };
 
 /// The view of `rules`, every field named.
