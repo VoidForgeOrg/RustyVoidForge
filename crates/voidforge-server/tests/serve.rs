@@ -1344,6 +1344,62 @@ async fn a_second_serve_on_the_same_universe_is_refused(pool: PgPool) {
     assert_eq!(again.exit(PATIENCE).0, 0);
 }
 
+// --- The rate limits inside serve (P3.8, D-054) ---
+
+/// serve's flags reach the limiter, by effect on the real binary: each budget is its own, a burst
+/// over it is 429 with Retry-After 1, and waiting that long succeeds. The effective limits are
+/// logged at startup. (The mutation table's "flags ignored" survivor: nothing else ran serve with
+/// limits a test could reach.)
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_rate_limit_flags_reach_the_limiter(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    let s = serve(
+        &url,
+        &dex.issuer,
+        &[
+            "--read-rate",
+            "1",
+            "--read-burst",
+            "2",
+            "--write-rate",
+            "1",
+            "--write-burst",
+            "1",
+        ],
+    );
+    s.logged("read_rate=1 read_burst=2 write_rate=1 write_burst=1");
+    for _ in 0..2 {
+        let r = call("GET", s.url("/players/me"), Some(token.clone()), None);
+        assert_eq!(r.status, 200, "{:?}", r.body);
+    }
+    let limited = call("GET", s.url("/players/me"), Some(token.clone()), None);
+    assert_eq!(limited.status, 429, "{:?}", limited.body);
+    assert_eq!(limited.body["code"], "rate_limited");
+    assert_eq!(limited.retry_after.as_deref(), Some("1"));
+    // The write budget is its own: one command, then 429.
+    let first = call(
+        "POST",
+        s.url("/commands"),
+        Some(token.clone()),
+        Some("rl-1"),
+    );
+    assert_ne!(first.status, 429, "{:?}", first.body);
+    let second = call(
+        "POST",
+        s.url("/commands"),
+        Some(token.clone()),
+        Some("rl-2"),
+    );
+    assert_eq!(second.status, 429, "{:?}", second.body);
+    std::thread::sleep(Duration::from_millis(1_050));
+    let again = call("GET", s.url("/players/me"), Some(token.clone()), None);
+    assert_eq!(again.status, 200, "{:?}", again.body);
+    s.signal("INT");
+    assert_eq!(s.exit(PATIENCE).0, 0);
+}
+
 // --- The leaderboard job inside serve (P3.5, D-051) ---
 
 /// The board exists from the first request (the first build runs before `ready:`), and with
