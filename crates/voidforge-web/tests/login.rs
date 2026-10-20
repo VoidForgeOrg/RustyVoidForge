@@ -337,7 +337,9 @@ async fn a_failed_exchange_is_refused() {
 
 #[tokio::test]
 async fn a_redirect_on_the_token_post_is_not_followed() {
-    refused_with(|b| b.token_redirect = Some("http://127.0.0.1:9/elsewhere".to_owned())).await;
+    // The redirect's target issues a real token for the same code, so only the client's refusal
+    // to follow redirects keeps this from logging in.
+    refused_with(|b| b.token_redirect = true).await;
 }
 
 #[tokio::test]
@@ -429,6 +431,20 @@ async fn concurrent_first_logins_share_one_key_fetch() {
         assert_eq!(h.await.unwrap(), 303);
     }
     assert_eq!(w.dex.key_fetches.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_missing_or_malformed_kid_is_refused_before_any_key_fetch() {
+    // On a first login nothing is cached and no floor applies, so a kid that reached the key
+    // lookup would fetch: refusing it first means no fetch at all.
+    for kid in [
+        String::new(),
+        "a kid with spaces".to_owned(),
+        "k".repeat(129),
+    ] {
+        let (w, _) = refused_with(|b| b.kid = Some(kid.clone())).await;
+        assert_eq!(w.dex.key_fetches.load(Ordering::SeqCst), 0, "{kid:?}");
+    }
 }
 
 #[tokio::test]

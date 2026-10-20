@@ -104,8 +104,9 @@ pub struct Behaviour {
     pub omit_id_token: bool,
     /// Answer the token POST with this status and no tokens.
     pub token_status: Option<StatusCode>,
-    /// Answer the token POST with a redirect to this URL.
-    pub token_redirect: Option<String>,
+    /// Answer the token POST with a 307 to `/dex/token-moved`, which issues a real token: a
+    /// web app that followed it would log in.
+    pub token_redirect: bool,
 }
 
 impl Default for Behaviour {
@@ -119,7 +120,7 @@ impl Default for Behaviour {
             token_type: "bearer".to_owned(),
             omit_id_token: false,
             token_status: None,
-            token_redirect: None,
+            token_redirect: false,
         }
     }
 }
@@ -212,7 +213,18 @@ pub fn urlencode(s: &str) -> String {
         .collect()
 }
 
-async fn token(State(d): State<Arc<Dex>>, headers: HeaderMap, RawForm(raw): RawForm) -> Response {
+async fn token(State(d): State<Arc<Dex>>, headers: HeaderMap, raw: RawForm) -> Response {
+    if d.behaviour.lock().unwrap().token_redirect {
+        return Redirect::temporary(&format!("{}/token-moved", d.issuer)).into_response();
+    }
+    issue(d, headers, raw)
+}
+
+async fn token_moved(State(d): State<Arc<Dex>>, headers: HeaderMap, raw: RawForm) -> Response {
+    issue(d, headers, raw)
+}
+
+fn issue(d: Arc<Dex>, headers: HeaderMap, RawForm(raw): RawForm) -> Response {
     let f: HashMap<String, String> =
         reqwest::Url::parse(&format!("http://x/?{}", String::from_utf8_lossy(&raw)))
             .unwrap()
@@ -220,9 +232,6 @@ async fn token(State(d): State<Arc<Dex>>, headers: HeaderMap, RawForm(raw): RawF
             .into_owned()
             .collect();
     let b = d.behaviour.lock().unwrap();
-    if let Some(to) = &b.token_redirect {
-        return Redirect::temporary(to).into_response();
-    }
     let basic = format!("Basic {}", STANDARD.encode(format!("{CLIENT}:{SECRET}")));
     if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(basic.as_str()) {
         return (
@@ -339,6 +348,7 @@ async fn stand_ins() -> (Arc<Dex>, Arc<Api>, SocketAddr) {
         .route("/dex/keys", get(keys))
         .route("/dex/auth", get(auth))
         .route("/dex/token", post(token))
+        .route("/dex/token-moved", post(token_moved))
         .with_state(dex.clone());
     tokio::spawn(async move { axum::serve(dex_l, dex_app).await.unwrap() });
     let (api_l, api_a) = listen().await;
