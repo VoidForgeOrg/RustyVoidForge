@@ -7,7 +7,7 @@
 #   3. creates this run's own database, voidforge_e2e_<time>_<pid>, and seeds it on the fast rules;
 #   4. starts the serve binary as a host process (never through just or cargo run: D-050 I5) on a
 #      free port, and waits for its ready line and GET /openapi.json;
-#   5. runs `voidforge-bots e2e`;
+#   5. runs `voidforge-bots e2e`, then the terminal login check (.github/scripts/device-login.py);
 #   6. stops serve with one SIGTERM and requires exit 0 (the final snapshot at the log head);
 #   7. drops this run's database, on every exit.
 #
@@ -128,6 +128,15 @@ say "serve is ready on $addr (pid $serve_pid)"
 set +e
 "$bots" e2e --api "http://$addr" --issuer "$issuer" --run "$run" 2>&1 | tee "$log_dir/bots.log"
 bots_code=${PIPESTATUS[0]}
+# 5b. The terminal login (P3.7, D-053): bob logs in through dex's device code flow, approved by
+# driving dex's own pages, then plays a little with the saved login. It runs after the scenario,
+# so it can't disturb it.
+device_code=0
+if [ "$bots_code" = 0 ]; then
+    python3 .github/scripts/device-login.py --bots "$bots" --api "http://$addr" --issuer "$issuer" \
+        2>&1 | tee "$log_dir/device-login.log"
+    device_code=${PIPESTATUS[0]}
+fi
 set -e
 
 # 6. One SIGTERM: serve drains and stops with its final snapshot, exit 0 (D-050). A serve that
@@ -155,6 +164,10 @@ else
 fi
 # serve has been reaped on every path above, so cleanup has nothing left to kill.
 serve_pid=
+if [ "$bots_code" = 0 ] && [ "$device_code" != 0 ]; then
+    say "FAILED: the scenario passed, but the terminal login check exited $device_code; its log is $log_dir/device-login.log"
+    exit 1
+fi
 if [ "$bots_code" != 0 ]; then
     say "FAILED: the bots exited $bots_code; serve exited $serve_code after $stopped_by; serve's log is $log_dir/serve.log"
     exit 1
@@ -164,4 +177,4 @@ if [ "$serve_code" != 0 ]; then
     tail -n 40 "$log_dir/serve.log" >&2
     exit 1
 fi
-say "PASSED: the scenario passed and serve stopped cleanly"
+say "PASSED: the scenario and the terminal login passed, and serve stopped cleanly"

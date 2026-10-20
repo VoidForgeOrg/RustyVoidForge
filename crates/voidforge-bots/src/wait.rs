@@ -46,6 +46,28 @@ pub fn unix_ms(time: &Timestamp) -> i64 {
     days * 86_400_000 + ms_of_day
 }
 
+/// A Unix time in seconds as RFC 3339 UTC (`2026-10-20T07:23:26Z`), for messages: Howard
+/// Hinnant's civil_from_days, the inverse of [`unix_ms`]'s date arithmetic.
+#[must_use]
+pub fn utc(unix_s: i64) -> String {
+    let (days, secs) = (unix_s.div_euclid(86_400), unix_s.rem_euclid(86_400));
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        secs / 3_600,
+        secs % 3_600 / 60,
+        secs % 60
+    )
+}
+
 /// How long from `as_of` to `until`, never negative.
 #[must_use]
 pub fn between(as_of: &Timestamp, until: &Timestamp) -> Duration {
@@ -121,6 +143,20 @@ mod tests {
         assert_eq!(unix_ms(&t("2000-02-29T00:00:00.000Z")), 951_782_400_000);
         assert_eq!(unix_ms(&t("2024-12-31T23:59:59.999Z")), 1_735_689_599_999);
         assert_eq!(unix_ms(&t("2099-12-31T23:59:59.999Z")), 4_102_444_799_999);
+    }
+
+    #[test]
+    fn utc_inverts_unix_ms() {
+        for text in [
+            "1970-01-01T00:00:00.000Z",
+            "2000-02-29T23:59:59.000Z",
+            "2026-10-20T07:23:26.000Z",
+            "2024-12-31T23:59:59.000Z",
+            "2099-12-31T23:59:59.000Z",
+        ] {
+            let ms = unix_ms(&t(text));
+            assert_eq!(utc(ms / 1_000), text.replace(".000", ""));
+        }
     }
 
     #[test]

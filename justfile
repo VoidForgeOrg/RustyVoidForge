@@ -101,7 +101,8 @@ bless:
     VOIDFORGE_BLESS=1 cargo nextest run -p voidforge-host --test golden --locked --run-ignored only -E 'test(=bless)' --no-capture
 
 # The CI e2e job's scenario (decision log D-052): bots log in through dex, join, build, race to
-# colonize and transport cargo, against a fresh universe and the real serve binary. Needs the CI
+# colonize and transport cargo, against a fresh universe and the real serve binary; then the
+# terminal's device code login (D-053). Needs the CI
 # dex config: DEX_CONFIG=config.ci.yaml just up (or E2E_ISSUER naming another such dex). It uses
 # only its own voidforge_e2e_<time>_<pid> database, dropped on exit, never voidforge.
 e2e:

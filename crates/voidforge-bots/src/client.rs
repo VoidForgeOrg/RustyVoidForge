@@ -88,6 +88,14 @@ impl Player {
         self.get("/leaderboard").await
     }
 
+    /// A `GET` of any API `path` (one starting with `/`), as JSON: the terminal's `get` (D-053).
+    ///
+    /// # Errors
+    /// See [`Player::get`].
+    pub async fn get_json(&self, path: &str) -> Result<Reply<serde_json::Value>, Failure> {
+        self.get(path).await
+    }
+
     /// `POST /commands` with `key` as the `Idempotency-Key`.
     ///
     /// # Errors
