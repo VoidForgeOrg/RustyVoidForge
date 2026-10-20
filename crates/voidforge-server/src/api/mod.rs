@@ -369,8 +369,6 @@ async fn fleets(
     }
 }
 
-/// Until P3.5 builds the leaderboard job: 503 `unavailable`, with no Retry-After, so no client
-/// polls (D-049, T5). The path and its schema stay in the document.
 /// Seconds a client waits after the 503 for a board not built yet: the job retries every second
 /// until the first build succeeds (D-051).
 pub const LEADERBOARD_RETRY_AFTER_SECS: u64 = 1;

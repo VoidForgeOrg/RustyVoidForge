@@ -1369,6 +1369,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **In `serve`:** the first build runs before `ready:`, so the board exists from the first request. If it fails, `serve` still starts, logs it, and **`GET /leaderboard` answers 503 `unavailable` with `Retry-After: 1`** until a build succeeds (D-049 T5 amended). The document already declared the 503, and `openapi.json` doesn't change.
     - `--leaderboard-secs` / `VOIDFORGE_LEADERBOARD_SECS`: default 60 (the Game Design's), from 1 to 3,600, exit 2 outside.
     - The job is a task on the **server runtime**, so D-050's shutdown drops it, and its host handle, with the connections. There's no new mechanism. The CPU part of a build holds only the `Arc<ReadModel>`.
+  - **Logging** (repair round 1, the lead's option on dev-qa's I2): the first failure in a run logs at error level, later ones at debug with a count, and the next success at info with the count. A host stuck for minutes gives one ERROR, not about 30 a minute. No test pins the levels; they're log-only.
   - **The route** serves the latest build's bytes, with the build's own `as_of`: up to the interval old by design, while a player's own score is current through `/players/me`.
   - **Measured** (the lead's condition; release build, solved homeworlds, at `t` = 1 h):
 
@@ -1377,7 +1378,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     | 250 (the default cube's practical limit) | 0.25 ms | 18.8 KB |
     | 5,000 (the cap) | 113 ms | 375 KB |
 
-    Under the ruling's 1 s threshold, so the build stays inline on the server runtime. The growth is superlinear (20 times the players costs about 450 times the time), which is worth remembering if the cap ever rises.
+    Under the ruling's 1 s threshold, so the build stays inline on the server runtime. **Scaling** (review-r1's R1-2): a build is O(players × (planets + fleets)), because each player's view walks the World. That gives 0.24 ms at 250 players, 113 to 132 ms at 5,000, and about 1 s near 14,000. **Rerun `build_time` before any rise in the player cap**, and move the build to `spawn_blocking` if it nears 1 s.
   - **Dependencies:** `jsonschema` (D-045's pin, already in the graph) becomes a server dev-dependency, for the schema check below. There's no new crate.
 - Tests:
   - **`src/leaderboard.rs`:** the ranking table (ties in the middle and at the end; all tied; strictly ordered; empty), and a property test over 500 generated boards (each rank is 1 plus the count strictly ahead; the order; every player once). Also the ignored measurement, `build_time`.
@@ -1388,6 +1389,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - the job on a 50 ms interval rebuilding as the clock moves;
     - **the job's own error path keeps the board** (added for the mutation table's one survivor, "a failed build clears the board": the direct-build test never ran the job): on a 50 ms interval with the host held stale for 2.5 s, the route serves the previous board unchanged, and the job's next build advances it once released;
     - the build's `as_of` kept when read later (not the request's time), and the job retrying every second until its first board;
+    - **the interval pinned** (repair round 1, dev-qa's Q1, in `tests/serve.rs`): with `--leaderboard-secs 1`, every gap between new `as_of`s over 6 s lies between 0.8 and 1.6 s;
     - before any build, 503 with `Retry-After: 1`.
   - **`tests/serve.rs`** (the real binary):
     - with `--leaderboard-secs 1`, the board is 200 at `ready:` and its `as_of` advances;
