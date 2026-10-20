@@ -1637,6 +1637,48 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Logging:** a limited client mustn't flood the log (P3.5's lesson). A refusal logs at WARN at most once a minute, counting the refusals since the last WARN, and at debug otherwise, with no identity.
   - **The contract** (T4): each authenticated route declares 429 "rate_limited, with Retry-After" with a `Retry-After` header (integer seconds). **`/openapi.json` no longer declares 429**: it's never limited. D-049's parity rule (observed statuses ⊆ declared) covers the new 429s.
   - **The bots and the terminal honour Retry-After** (the advisor's A4 note, SPEC item 6). Their client retries a 429 after its Retry-After, at most 3 times and only for a Retry-After of 60 s or less, logging each wait; a command keeps its idempotency key. Each 429 is counted, and **the e2e scenario fails if either bot met one**, since the defaults must leave the bots margin.
+- Tests:
+  - **The limiter's unit tests** (`limit.rs`, on a stepped clock):
+    - a burst of exactly B, then one every T: a nanosecond early is refused;
+    - waiting the Retry-After given succeeds;
+    - a hundred refusals don't move the next slot (refused at 499 ms, accepted at 500);
+    - principals, issuers and classes are independent;
+    - after an idle spell, with the old entry still held, the burst is exactly B;
+    - the map stays bounded under 65,536 principals, and a sweep keeps a live entry;
+    - the subject appears in no Debug and no log line;
+    - one WARN a minute, counting the refusals between.
+  - **The router, on a stepped clock** (`tests/routes.rs`, database stage):
+    - **every route in D-049's table answers 429 once its budget is spent, and `/openapi.json` never does** (the lead's T3 addition; a new route must be added to the test);
+    - one player's burst doesn't limit another;
+    - a limited command appends nothing, and its key, retried a Retry-After later, gets the real first outcome, which a repeat returns again;
+    - a limited new principal makes no account and joins nothing;
+    - a refused account's 422s are counted, and 401s are not;
+    - **the budget is chosen by the method:** a probe `POST` on another path spends the write budget.
+  - **serve:**
+    - the flags parse to their own budgets, with inclusive bounds (unit);
+    - out of range is exit 2 (`tests/cli.rs`);
+    - **by effect on the real binary:** tight flags give 429 with Retry-After 1 per budget, success after the wait, and the logged limits (`tests/serve.rs`).
+  - **The bots' client, against a scripted stand-in:**
+    - it waits Retry-After, then retries;
+    - at most 3 retries;
+    - a missing, malformed or over-60 s Retry-After isn't waited;
+    - a retried command keeps its key.
+  - **By effect, `e2e.sh` through a counting proxy:**
+    - under the defaults it PASSED, with 0 of 228 requests answered 429;
+    - **under tight limits** (`VOIDFORGE_READ_RATE=5 VOIDFORGE_READ_BURST=8`), alice's one 429 was retried 1.004 s later and got 200, and the run **FAILED at the rate-limit step**, as designed;
+    - serve logged one WARN, with the class and a count and no identity.
+  - **CI:** 6 of 6 green on 3073cbf (run 39401932735) and 40b1820 (run 39405954414). The e2e job logs "neither bot met a 429".
+  - **The mutation table** (`slices/39-p3-8-rate-limits/proof/mutate.py`; layers: the server's lib, routes, serve and cli against Postgres, and the bots' unit tests). **On 40b1820, both controls passed and 23 of 24 were caught:**
+    - the lead's named mutants: a refusal advancing the TAT; the class taken from the path; eviction removing a live entry;
+    - the burst one larger; no burst; an old TAT kept, banking idle time; never sweeping;
+    - one budget for both classes; the issuer left out of the key; every method a read;
+    - the limit after the account lookup; a 429 without Retry-After; a message that isn't an instruction; every refusal logged at WARN;
+    - the flags ignored; the read and write flags swapped; `--read-rate` unbounded;
+    - the bots: no retry, unbounded retries, no wait, any Retry-After waited, a 429 not counted;
+    - and "Retry-After rounded down" without the floor of 1.
+  - **One equivalent mutant, as predicted:** "Retry-After rounded down" with the floor of 1 kept. A refusal waits at most T ≤ 1 s, so both forms give 1 at every allowed rate.
+  - **The first table, on 3073cbf, had a real survivor:** "the flags ignored". No test ran serve with limits it could reach; the leaderboard test's 20 polls a second sit right at the default, so it caught the mutant only in some runs. The by-effect serve test above closes it.
+  - The first attempt at that table stopped at a stale anchor (rustfmt had reflowed a line); every anchor is now checked against the formatted file.
 - Where it's enforced:
   - `crates/voidforge-server/src/{limit.rs, accounts.rs, api/mod.rs, serve.rs}` and its AGENTS.md;
   - `crates/voidforge-api-types/src/lib.rs` and `openapi.json`;
