@@ -37,7 +37,7 @@ use std::io::Write as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use voidforge_host::{Clock, HostConfig, HostHandle, HostTask, RecoverError, Rules, SystemClock};
@@ -51,6 +51,7 @@ use crate::accounts::Players;
 use crate::api::{self, AppState};
 use crate::auth::{AuthArgs, TokenVerifier};
 use crate::leaderboard;
+use crate::limit::{Budget, Limiter, Limits};
 
 /// The default bind address: loopback, so a local run is never exposed by accident.
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -60,6 +61,12 @@ pub const MAX_LEADERBOARD_SECS: u64 = 3_600;
 
 /// The longest drain `--drain-secs` accepts.
 pub const MAX_DRAIN_SECS: u64 = 60;
+
+/// The highest steady rate `--read-rate` and `--write-rate` accept, a second.
+pub const MAX_RATE: u32 = 1_000;
+
+/// The largest burst `--read-burst` and `--write-burst` accept.
+pub const MAX_BURST: u32 = 10_000;
 
 /// How long the host may take to stop and write its snapshot once every handle is gone.
 pub const JOIN_BOUND: Duration = Duration::from_secs(10);
@@ -98,9 +105,58 @@ pub struct ServeArgs {
         value_parser = clap::value_parser!(u64).range(1..=MAX_LEADERBOARD_SECS)
     )]
     pub leaderboard_secs: u64,
+    /// Each player's steady read rate, a second (1 to 1,000; D-054).
+    #[arg(
+        long,
+        env = "VOIDFORGE_READ_RATE",
+        default_value_t = Limits::DEFAULT.read.per_sec,
+        value_parser = clap::value_parser!(u32).range(1..=i64::from(MAX_RATE))
+    )]
+    pub read_rate: u32,
+    /// Each player's reads back to back (1 to 10,000).
+    #[arg(
+        long,
+        env = "VOIDFORGE_READ_BURST",
+        default_value_t = Limits::DEFAULT.read.burst,
+        value_parser = clap::value_parser!(u32).range(1..=i64::from(MAX_BURST))
+    )]
+    pub read_burst: u32,
+    /// Each player's steady command rate, a second (1 to 1,000).
+    #[arg(
+        long,
+        env = "VOIDFORGE_WRITE_RATE",
+        default_value_t = Limits::DEFAULT.write.per_sec,
+        value_parser = clap::value_parser!(u32).range(1..=i64::from(MAX_RATE))
+    )]
+    pub write_rate: u32,
+    /// Each player's commands back to back (1 to 10,000).
+    #[arg(
+        long,
+        env = "VOIDFORGE_WRITE_BURST",
+        default_value_t = Limits::DEFAULT.write.burst,
+        value_parser = clap::value_parser!(u32).range(1..=i64::from(MAX_BURST))
+    )]
+    pub write_burst: u32,
     /// The token checks (D-046).
     #[command(flatten)]
     pub auth: AuthArgs,
+}
+
+impl ServeArgs {
+    /// The rate limits the flags name.
+    #[must_use]
+    pub fn limits(&self) -> Limits {
+        Limits {
+            read: Budget {
+                per_sec: self.read_rate,
+                burst: self.read_burst,
+            },
+            write: Budget {
+                per_sec: self.write_rate,
+                burst: self.write_burst,
+            },
+        }
+    }
 }
 
 /// How `serve` ended: its exit code.
@@ -274,6 +330,7 @@ async fn serve(args: &ServeArgs) -> ServeExit {
         auth,
         epoch,
         Duration::from_secs(args.leaderboard_secs),
+        args.limits(),
     ));
     let Started {
         task,
@@ -376,6 +433,7 @@ async fn start(
     auth: crate::auth::AuthConfig,
     epoch: i64,
     leaderboard_every: Duration,
+    limits: Limits,
 ) -> Result<Started, ServeExit> {
     let build =
         EngineBuild::new(ENGINE_BUILD).map_err(|e| fail(ServeExit::Input, &e.to_string()))?;
@@ -457,7 +515,15 @@ async fn start(
         now_unix_ms,
         epoch_unix_ms: epoch,
         leaderboard: board,
+        limiter: Arc::new(Limiter::new(limits, Arc::new(Instant::now))),
     };
+    tracing::info!(
+        read_rate = limits.read.per_sec,
+        read_burst = limits.read.burst,
+        write_rate = limits.write.per_sec,
+        write_burst = limits.write.burst,
+        "each player's rate limits"
+    );
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|e| fail(ServeExit::Input, &format!("bind {bind}: {e}")))?;
@@ -511,5 +577,70 @@ async fn snapshot_at_head(url: &str) -> ServeExit {
                 snapshot.map_or_else(|| "none".to_owned(), |s| s.to_string())
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        serve: ServeArgs,
+    }
+
+    fn parse(extra: &[&str]) -> Result<ServeArgs, clap::Error> {
+        let base = [
+            "serve",
+            "--database-url",
+            "postgres://x/y",
+            "--rules",
+            "r.toml",
+        ];
+        let base = base.iter().chain(["--issuer", "http://dex/dex"].iter());
+        Cli::try_parse_from(base.chain(extra.iter())).map(|c| c.serve)
+    }
+
+    /// The rate-limit flags (D-054): the advisor's defaults, each flag landing in its own budget,
+    /// and the ranges inclusive at both ends.
+    #[test]
+    fn the_rate_limit_flags() {
+        assert_eq!(parse(&[]).unwrap().limits(), Limits::DEFAULT);
+        let set = parse(&[
+            "--read-rate",
+            "3",
+            "--read-burst",
+            "4",
+            "--write-rate",
+            "5",
+            "--write-burst",
+            "6",
+        ])
+        .unwrap()
+        .limits();
+        let budget = |per_sec, burst| Budget { per_sec, burst };
+        assert_eq!(
+            set,
+            Limits {
+                read: budget(3, 4),
+                write: budget(5, 6)
+            }
+        );
+        for (flag, max) in [
+            ("--read-rate", 1_000),
+            ("--write-rate", 1_000),
+            ("--read-burst", 10_000),
+            ("--write-burst", 10_000),
+        ] {
+            for ok in [1, max] {
+                assert!(parse(&[flag, &ok.to_string()]).is_ok(), "{flag} {ok}");
+            }
+            for bad in [0, max + 1] {
+                assert!(parse(&[flag, &bad.to_string()]).is_err(), "{flag} {bad}");
+            }
+        }
     }
 }

@@ -61,7 +61,7 @@ Every pick favors widely used, well-documented crates, because agents write most
 | Supply chain | cargo-deny | Licenses, advisories and a dependency allowlist |
 | Task runner | just | One `justfile`: up, test, e2e, replay |
 | Images | Multi-stage Docker builds with cargo-chef | Small runtime images running as a non-root user |
-| Rate limits | tower\_governor | Per-player request limits on the API |
+| Rate limits | Our own GCRA limiter in the server ([D-054](decision-log.md#d-054-rate-limits-per-principal-gcra-read-and-write-budgets); tower\_governor was named first) | Per-player request limits on the API |
 
 ## Project layering
 

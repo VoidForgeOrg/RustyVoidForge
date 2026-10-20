@@ -39,7 +39,8 @@ mod paths {
             (status = 400, description = "malformed_body, missing_idempotency_key, invalid_idempotency_key, duplicate_ship_ids", body = ErrorBody),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
             (status = 422, description = "A game rule's reason code, or idempotency_key_conflict", body = ErrorBody),
-            (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody),
+            (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "busy (with Retry-After) or unavailable", body = ErrorBody),
         ),
@@ -58,7 +59,8 @@ mod paths {
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
             (status = 404, description = "unknown_planet", body = ErrorBody),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
-            (status = 429, description = "rate_limited", body = ErrorBody),
+            (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
         ),
@@ -83,7 +85,8 @@ mod paths {
             (status = 400, description = "invalid_query", body = ErrorBody),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
-            (status = 429, description = "rate_limited", body = ErrorBody),
+            (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
         ),
@@ -99,7 +102,8 @@ mod paths {
             (status = 200, description = "The player", body = PlayerView),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
-            (status = 429, description = "rate_limited", body = ErrorBody),
+            (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
         ),
@@ -115,7 +119,8 @@ mod paths {
             (status = 200, description = "The fleets", body = FleetsView),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
-            (status = 429, description = "rate_limited", body = ErrorBody),
+            (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
         ),
@@ -132,7 +137,8 @@ mod paths {
             (status = 200, description = "The leaderboard", body = Leaderboard),
             (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
-            (status = 429, description = "rate_limited", body = ErrorBody),
+            (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
             (status = 503, description = "unavailable", body = ErrorBody),
         ),
@@ -141,13 +147,12 @@ mod paths {
     pub fn get_leaderboard() {}
 
     /// This document: the API's contract. Public: it needs no token, so reading it never joins
-    /// anyone (D-049).
+    /// anyone (D-049), and it's never rate limited (D-054).
     #[utoipa::path(
         get,
         path = "/openapi.json",
         responses(
             (status = 200, description = "The OpenAPI document", content_type = "application/json"),
-            (status = 429, description = "rate_limited", body = ErrorBody),
             (status = 500, description = "internal", body = ErrorBody),
         )
     )]

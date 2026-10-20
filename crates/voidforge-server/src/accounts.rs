@@ -29,6 +29,7 @@ use crate::api::error::{ApiError, host_error};
 pub use crate::api::error::{BUSY_RETRY_AFTER_SECS, UNAVAILABLE_RETRY_AFTER_SECS};
 use crate::auth::{Principal, Refusal, TokenVerifier};
 use crate::codes::game_code;
+use crate::limit::{Class, Limiter, RetryAfter};
 
 /// The player a request acts as. Its ID is the public identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,10 +147,13 @@ fn player_uuid(id: PlayerId) -> uuid::Uuid {
 
 // --- The extractor ---
 
+/// The token, then the principal's rate limit (P3.8, D-054), then the account: a 429 comes before
+/// any lookup or join, and before the handler reads a body or an idempotency key.
 impl<S> FromRequestParts<S> for Player
 where
     Arc<TokenVerifier>: FromRef<S>,
     Arc<Players<PgAccounts>>: FromRef<S>,
+    Arc<Limiter>: FromRef<S>,
     S: Send + Sync,
 {
     type Rejection = Response;
@@ -158,6 +162,16 @@ where
         let principal = Principal::from_request_parts(parts, state)
             .await
             .map_err(Refusal::into_response)?;
+        Arc::<Limiter>::from_ref(state)
+            .check(&principal, Class::of(&parts.method))
+            .map_err(|RetryAfter(secs)| {
+                ApiError::new(
+                    ErrorCode::RateLimited,
+                    format!("too many requests; retry after {secs} s"),
+                )
+                .retry_after(secs)
+                .into_response()
+            })?;
         Arc::<Players<PgAccounts>>::from_ref(state)
             .player(&principal)
             .await

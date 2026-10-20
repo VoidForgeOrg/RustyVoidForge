@@ -14,7 +14,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::dex::{Dex, TestKey, claims, discovery, jwks};
 use reqwest::Method;
@@ -28,6 +28,7 @@ use voidforge_host::{
 use voidforge_server::accounts::Players;
 use voidforge_server::api::{AppState, MAX_NEAR_RESULTS, router, routes};
 use voidforge_server::auth::{AuthConfig, TokenVerifier};
+use voidforge_server::limit::{Budget, Limiter, Limits};
 use voidforge_store::MIGRATOR;
 use voidforge_store::accounts::PgAccounts;
 use voidforge_store::log::{
@@ -249,8 +250,33 @@ struct Api {
     seen: Mutex<BTreeSet<(String, String, u16)>>,
 }
 
+/// Limits no test here reaches, so only the rate-limit tests meet a 429 (P3.8).
+const GENEROUS: Limits = Limits {
+    read: Budget {
+        per_sec: 1_000,
+        burst: 10_000,
+    },
+    write: Budget {
+        per_sec: 1_000,
+        burst: 10_000,
+    },
+};
+
 /// Seeds `world`, maps Alice's and Bob's subjects to their players, and serves the router.
-async fn api(pool: &PgPool, (w, ids): (World, Ids), config: impl FnOnce(&mut HostConfig)) -> Api {
+async fn api(pool: &PgPool, world: (World, Ids), config: impl FnOnce(&mut HostConfig)) -> Api {
+    api_with(pool, world, config, None, None).await
+}
+
+/// The same, with `limiter` instead of [`GENEROUS`] limits on the system clock, and `extra`
+/// routes beside the real ones (P3.8's probes; they're outside the document, so a test calls them
+/// directly, never through [`Api::send`]).
+async fn api_with(
+    pool: &PgPool,
+    (w, ids): (World, Ids),
+    config: impl FnOnce(&mut HostConfig),
+    limiter: Option<Arc<Limiter>>,
+    extra: Option<axum::Router<AppState>>,
+) -> Api {
     let url = url(pool);
     let snap = snapshot::encode(&w, &build()).unwrap();
     voidforge_store::bootstrap(&url, &snap, EPOCH)
@@ -333,10 +359,15 @@ async fn api(pool: &PgPool, (w, ids): (World, Ids), config: impl FnOnce(&mut Hos
         now_unix_ms: Arc::new(move || voidforge_host::Clock::now_unix_ms(&c)),
         epoch_unix_ms: EPOCH,
         leaderboard,
+        limiter: limiter
+            .unwrap_or_else(|| Arc::new(Limiter::new(GENEROUS, Arc::new(Instant::now)))),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let app = router(state);
+    let app = match extra {
+        Some(extra) => router(state.clone()).merge(extra.with_state(state)),
+        None => router(state),
+    };
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Api {
         base,
@@ -1732,4 +1763,278 @@ async fn the_job_keeps_the_previous_board_when_its_builds_fail(pool: PgPool) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     job.abort();
+}
+
+// --- Rate limits (P3.8, D-054) ---
+
+/// A monotonic clock the test steps, for the limiter.
+#[derive(Clone)]
+struct Stepped(Arc<Mutex<Instant>>);
+
+impl Stepped {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(Instant::now())))
+    }
+
+    fn step(&self, by: Duration) {
+        *self.0.lock().unwrap() += by;
+    }
+
+    fn limiter(&self, read: (u32, u32), write: (u32, u32)) -> Arc<Limiter> {
+        let c = self.0.clone();
+        let budget = |(per_sec, burst)| Budget { per_sec, burst };
+        Arc::new(Limiter::new(
+            Limits {
+                read: budget(read),
+                write: budget(write),
+            },
+            Arc::new(move || *c.lock().unwrap()),
+        ))
+    }
+}
+
+/// A limited answer: 429 `rate_limited`, D-045's body, an instruction, and a true Retry-After.
+fn assert_limited(r: &Reply) {
+    assert_error(r, 429, "rate_limited");
+    assert_eq!(r.retry_after.as_deref(), Some("1"), "{r:?}");
+    assert_eq!(r.body["message"], "too many requests; retry after 1 s");
+}
+
+impl Api {
+    /// Sends `method path` as `sub`, a command with a fresh key and a valid body.
+    async fn call(&self, method: &Method, path: &str, sub: &str, n: usize) -> Reply {
+        let token = self.token(sub);
+        let key = format!("rl-{sub}-{n}");
+        let body = build_drill(self.ids.alice_home).to_string();
+        let post = *method == Method::POST;
+        let keyed = [("idempotency-key", key.as_str())];
+        let headers: &[(&str, &str)] = if post { &keyed } else { &[] };
+        self.send(
+            method.clone(),
+            path,
+            Some(&token),
+            headers,
+            post.then_some(body.as_str()),
+        )
+        .await
+    }
+}
+
+/// D-049's route table, every route: an authenticated one answers 429 once its class's budget is
+/// spent, and succeeds again a Retry-After later; `/openapi.json` never does. A new route must be
+/// added to `concrete`, so none can bypass the limiter by not taking `Player` unnoticed (the
+/// lead's T3 addition).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn every_authenticated_route_is_limited_and_the_contract_never_is(pool: PgPool) {
+    let clock = Stepped::new();
+    let limiter = clock.limiter((1, 3), (1, 2));
+    let api = api_with(&pool, world(0, 0), |_| {}, Some(limiter), None).await;
+    let concrete = |path: &str| -> String {
+        match path {
+            "/commands" | "/players/me" | "/players/me/fleets" | "/leaderboard"
+            | "/openapi.json" => path.to_owned(),
+            "/planets/{id}" => format!("/planets/{}", api.ids.alice_home.0),
+            "/planets" => "/planets?near=0,0,0&radius=1".to_owned(),
+            other => panic!("a new route, {other}: say here how to call it"),
+        }
+    };
+    let mut n = 0;
+    let all = routes();
+    assert_eq!(all.len(), 7, "the table this test was written against");
+    for route in all {
+        let path = concrete(route.path);
+        // A full budget for each route.
+        clock.step(Duration::from_secs(10));
+        let burst = if route.method == Method::POST { 2 } else { 3 };
+        if !route.authenticated {
+            for _ in 0..50 {
+                n += 1;
+                let r = api.call(&route.method, &path, ALICE_SUB, n).await;
+                assert_eq!(r.status, 200, "{} {path}: {r:?}", route.method);
+            }
+            continue;
+        }
+        for _ in 0..burst {
+            n += 1;
+            let r = api.call(&route.method, &path, ALICE_SUB, n).await;
+            assert_ne!(
+                r.status, 429,
+                "{} {path}: within the burst: {r:?}",
+                route.method
+            );
+        }
+        n += 1;
+        assert_limited(&api.call(&route.method, &path, ALICE_SUB, n).await);
+        clock.step(Duration::from_secs(1));
+        n += 1;
+        let r = api.call(&route.method, &path, ALICE_SUB, n).await;
+        assert_ne!(
+            r.status, 429,
+            "{} {path}: after Retry-After: {r:?}",
+            route.method
+        );
+    }
+}
+
+/// One player's spent budget doesn't limit another.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn one_players_burst_doesnt_limit_another(pool: PgPool) {
+    let clock = Stepped::new();
+    let api = api_with(
+        &pool,
+        world(0, 0),
+        |_| {},
+        Some(clock.limiter((1, 2), (1, 1))),
+        None,
+    )
+    .await;
+    for _ in 0..2 {
+        assert_eq!(api.get("/players/me", ALICE_SUB).await.status, 200);
+    }
+    assert_limited(&api.get("/players/me", ALICE_SUB).await);
+    for _ in 0..2 {
+        assert_eq!(api.get("/players/me", BOB_SUB).await.status, 200);
+    }
+    assert_limited(&api.get("/players/me", BOB_SUB).await);
+}
+
+/// A 429'd command never reaches the host and never consumes its key: retried later with the same
+/// key, it gets its real first outcome, and a repeat of that is the same answer (D-037).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_limited_command_appends_nothing_and_its_key_gets_the_real_outcome(pool: PgPool) {
+    let clock = Stepped::new();
+    let api = api_with(
+        &pool,
+        world(0, 0),
+        |_| {},
+        Some(clock.limiter((100, 100), (1, 1))),
+        None,
+    )
+    .await;
+    let drill = build_drill(api.ids.alice_home);
+    let first = api.command(ALICE_SUB, "first", &drill).await;
+    assert_eq!(first.status, 200, "{first:?}");
+    let records = api.records().await;
+    let limited = api.command(ALICE_SUB, "second", &drill).await;
+    assert_limited(&limited);
+    assert_eq!(api.records().await, records, "a 429 appended nothing");
+    // The Retry-After it was given; the key was never seen, so this is its first outcome.
+    clock.step(Duration::from_secs(1));
+    let real = api.command(ALICE_SUB, "second", &drill).await;
+    assert_ne!(real.status, 429, "{real:?}");
+    assert_eq!(
+        api.records().await,
+        records + 1,
+        "the retry was applied, once"
+    );
+    clock.step(Duration::from_secs(1));
+    let repeat = api.command(ALICE_SUB, "second", &drill).await;
+    assert_eq!((repeat.status, &repeat.body), (real.status, &real.body));
+    assert_eq!(api.records().await, records + 1, "a repeat writes nothing");
+}
+
+/// The limit comes before the account: a limited new principal makes no account and joins
+/// nothing, and is joined on its first call within budget.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_limited_principal_makes_no_account_and_joins_nothing(pool: PgPool) {
+    let clock = Stepped::new();
+    let limiter = clock.limiter((1, 2), (1, 1));
+    let api = api_with(&pool, world(1, 0), |_| {}, Some(limiter.clone()), None).await;
+    let carol = voidforge_server::auth::Principal {
+        issuer: api.issuer.clone(),
+        subject: CAROL_SUB.to_owned(),
+    };
+    for _ in 0..2 {
+        limiter
+            .check(&carol, voidforge_server::limit::Class::Read)
+            .unwrap();
+    }
+    let (accounts, records) = (api.accounts().await, api.records().await);
+    assert_limited(&api.get("/players/me", CAROL_SUB).await);
+    assert_eq!(api.accounts().await, accounts, "no account was made");
+    assert_eq!(api.records().await, records, "no join was appended");
+    clock.step(Duration::from_secs(1));
+    assert_eq!(api.get("/players/me", CAROL_SUB).await.status, 200);
+    assert_eq!(api.accounts().await, accounts + 1);
+}
+
+/// A refused account's 422s spend its budget (the advisor's A3); 401s have no principal and are
+/// never counted, so they can't spend anyone's.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn refused_accounts_are_counted_and_unauthenticated_requests_are_not(pool: PgPool) {
+    let clock = Stepped::new();
+    let api = api_with(
+        &pool,
+        world(0, 0),
+        |_| {},
+        Some(clock.limiter((1, 2), (1, 1))),
+        None,
+    )
+    .await;
+    for _ in 0..2 {
+        assert_error(
+            &api.get("/players/me", CAROL_SUB).await,
+            422,
+            "no_free_homeworld",
+        );
+    }
+    assert_limited(&api.get("/players/me", CAROL_SUB).await);
+    for _ in 0..10 {
+        let r = api.send(Method::GET, "/players/me", None, &[], None).await;
+        assert_error(&r, 401, "missing_token");
+        let r = api
+            .send(Method::GET, "/players/me", Some("e30.e30.e30"), &[], None)
+            .await;
+        assert_error(&r, 401, "invalid_token");
+    }
+    for _ in 0..2 {
+        assert_eq!(api.get("/players/me", ALICE_SUB).await.status, 200);
+    }
+}
+
+/// The class is the method's, never the path's: a `POST` to any route taking `Player` spends the
+/// write budget, and a `GET` the read budget (the lead's named mutant). The probes sit beside
+/// the real router; they're outside the document, so they're called directly.
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_budget_is_chosen_by_the_method(pool: PgPool) {
+    use voidforge_server::accounts::Player;
+    let clock = Stepped::new();
+    let probe = axum::Router::new().route(
+        "/probe",
+        axum::routing::post(|_: Player| async { "posted" }).get(|_: Player| async { "got" }),
+    );
+    let api = api_with(
+        &pool,
+        world(0, 0),
+        |_| {},
+        Some(clock.limiter((1, 3), (1, 2))),
+        Some(probe),
+    )
+    .await;
+    let token = api.token(ALICE_SUB);
+    let probe = |method: Method| {
+        api.http
+            .request(method, format!("{}/probe", api.base))
+            .bearer_auth(&token)
+            .send()
+    };
+    for _ in 0..2 {
+        assert_eq!(probe(Method::POST).await.unwrap().status(), 200);
+    }
+    assert_eq!(probe(Method::POST).await.unwrap().status(), 429);
+    // The write budget is the one /commands spends too.
+    assert_limited(
+        &api.command(ALICE_SUB, "k", &build_drill(api.ids.alice_home))
+            .await,
+    );
+    for _ in 0..3 {
+        assert_eq!(probe(Method::GET).await.unwrap().status(), 200);
+    }
+    assert_limited(&api.get("/players/me", ALICE_SUB).await);
 }

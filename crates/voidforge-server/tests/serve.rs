@@ -1421,7 +1421,20 @@ async fn the_host_joins_with_the_job_mid_wait(pool: PgPool) {
 async fn the_job_rebuilds_on_its_interval_and_no_faster(pool: PgPool) {
     let (url, dex) = seeded(&pool).await;
     let token = dex.token(ALICE_SUB);
-    let s = serve(&url, &dex.issuer, &["--leaderboard-secs", "1"]);
+    // It polls at 20 a second, over the default read rate (D-054): this test is about the
+    // board's interval, so its reads get room.
+    let s = serve(
+        &url,
+        &dex.issuer,
+        &[
+            "--leaderboard-secs",
+            "1",
+            "--read-rate",
+            "1000",
+            "--read-burst",
+            "10000",
+        ],
+    );
     let mut last =
         call("GET", s.url("/leaderboard"), Some(token.clone()), None).body["as_of"].clone();
     let mut seen_at = Vec::new();
