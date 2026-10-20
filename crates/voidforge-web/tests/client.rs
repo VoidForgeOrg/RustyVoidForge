@@ -469,10 +469,11 @@ async fn a_connect_that_hangs_ends_at_the_connect_bound() {
     )
     .unwrap();
     let started = std::time::Instant::now();
-    let got = api.rules().await;
+    // `me`, bounded only by the total: `rules` has its own 2 s bound, which would hide this one.
+    let got = api.me(&token()).await;
     let took = started.elapsed();
     eprintln!("held {} connections; {got:?} after {took:?}", held.len());
     assert_eq!(got, Err(ApiError::Unreachable(Unreachable::Timeout)));
-    assert!(took < Duration::from_secs(3), "{took:?}");
+    assert!(took < Duration::from_secs(1), "{took:?}");
     drop((listener, held));
 }
