@@ -1585,11 +1585,18 @@ Each entry records its date, the package that made it, the decision, the reasons
     - runs `voidforge-bots login`;
     - reads the link from stderr;
     - **approves the code by driving dex's own pages** (the verification page, `POST /device/auth/verify_code`, the local login form as bob, then "Login Successful");
-    - then checks: the prompt; exit 0 with nothing on stdout; the file 0600 in 0700; the token's `aud` and `iss`; `me` (the API accepts the device-flow token); `get /leaderboard` and `/players/me/fleets`; `get` refusing a URL; `command` with its printed key, and a `--key` repeat answering the same; a typo refused locally; a tampered token, an expired login, a readable file and no login after `logout`, each exit 8 with its message; **and no output from any command containing the token or its subject**.
+    - then checks: **login prints exactly its five expected lines and nothing else** (the script never knows the device code, so a leak of it, or of anything, is caught this way); exit 0 with nothing on stdout; the file 0600 in 0700; the token's `aud` and `iss`; `me` (the API accepts the device-flow token); `get /leaderboard` and `/players/me/fleets`; `get` refusing a URL; `command` with its printed key, and a `--key` repeat answering the same, **then the drill undone** (cancelled, or demolished if it already finished), so a run leaves the player's slots as it found them; a typo refused locally; a tampered token, an expired login, a readable file and no login after `logout`, each exit 8 with its message; **and no output from any command containing the token or its subject**.
     - A refused approval is a failure with dex's own words, and kills the waiting `login`.
     - **Against a dex with the old config it fails** with "HTTP 400 at …/device/auth/verify_code: Unregistered redirect_uri", so it guards the Phase 0 defect.
   - **In CI:** `e2e.sh` runs the script after the scenario, against the same serve, at about 6 s. The job's dex is the CI config, the default plus only the password grant (D-052's parity check), so the device flow is the default config's. Its log is printed on failure.
-  - **Measured locally:** the scenario PASSED in 119.1 s and the terminal login's 15 checks passed, with serve stopping cleanly.
+  - **Measured:** locally and in CI (65fb961, run 39387846280), the scenario PASSED in 119.1 s, then the terminal login's checks passed, with serve stopping cleanly. 17 checks now, with the exact-output check and the undo.
+  - **The mutation table** (`slices/38-p3-7-terminal-login/proof/mutate.py`, two layers: the unit tests, and the script against a real dex and serve):
+    - **The control passed, and 13 of 13 were caught, each by every layer it names:**
+      - unit: slow_down not lengthening the interval; the code's lifetime not bounding the wait; a declined login reading as expired;
+      - both layers: the file written 0644; a readable login used; an expired login used; logout deleting nothing; a 401 kept as the API's refusal; `get` taking any URL;
+      - script: login printing the token; printing the device code; not saying it's waiting; `command` not printing its key.
+    - **Run 1 was confounded:** each run's build used up the reused universe's homeworld slots, so the script's `command` failed with `no_free_slot` and "command doesn't print its key" was a void catch. The script now undoes its drill, and the table was rerun in full on a fresh universe.
+    - **By hand:** the script against a dex with the old config fails with "Unregistered redirect_uri", and `verify_stack.py`'s completion check fails against the unfixed stack dex. The fixed probe passes both.
 - Where it's enforced:
   - `crates/voidforge-bots/src/{login.rs, session.rs, terminal.rs, client.rs, wait.rs, main.rs}` and its AGENTS.md;
   - `deploy/dex/config.yaml` and `config.ci.yaml` (the callback), `deploy/verify_stack.py`, `deploy/README.md`;

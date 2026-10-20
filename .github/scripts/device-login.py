@@ -128,10 +128,17 @@ def main():
     out, err = proc.stdout.read(), proc.stderr.read()
     OUTPUTS.append("".join(shown) + out + err)
     said = "".join(shown) + err
-    if "Waiting for you to approve the login; the code expires in" in said and "enter the code" in said:
-        ok("login showed the link, the plain URL with the code, and that it was waiting")
+    # Exactly these lines and nothing else, so nothing secret (the device code, the token) can be
+    # printed beside them: the device code is never known to this script, so it's caught this way.
+    expected = [r"To log in, open this link in a browser:", r"    https?://\S+\?user_code=[A-Z]{4}-[A-Z]{4}",
+                r"Or open https?://\S+ and enter the code [A-Z]{4}-[A-Z]{4}\.",
+                r"Waiting for you to approve the login; the code expires in \d+ minutes\.",
+                r"Logged in\. Your login is valid until \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ and is saved in \S+\."]
+    lines = [line for line in said.splitlines() if line.strip()]
+    if len(lines) == len(expected) and all(re.fullmatch(e, l) for e, l in zip(expected, lines)):
+        ok("login printed exactly the link, the URL with the code, the wait, and the result: nothing else")
     else:
-        fail("login's prompt: %r" % said[:400])
+        fail("login's output isn't exactly the expected lines: %r" % lines)
     if proc.returncode == 0 and "Logged in." in err and out == "":
         ok("login: the code approved through dex's pages, exit 0, nothing on stdout")
     else:
@@ -180,6 +187,21 @@ def main():
         ok("command: accepted, its key printed, and a repeat with --key answers the same")
     else:
         fail("command: exit %s, %r %r" % (first.returncode, first.stdout[:200], first.stderr[-200:]))
+    # Cancel the drill, so a run leaves the player's slots as it found them: a run's build would
+    # otherwise use up the homeworld's slots in a reused universe.
+    home = json.loads(bots(["get", "/planets/%d" % player["homeworld_id"]], env).stdout or "{}")
+    # The newest drill: still under construction (cancel it), or already done on a slow runner,
+    # since a drill takes 3 s on the fast rules (demolish it). Either frees the slot.
+    drills = [b for b in home.get("buildings", []) if b["type"] == "drill" and b["state"] != "demolishing"]
+    newest = max(drills, key=lambda b: b["id"]) if drills else None
+    undo = None
+    if newest is not None:
+        kind = "cancel_construction" if newest["state"] == "under_construction" else "demolish_building"
+        undo = bots(["command", json.dumps({"type": kind, "payload": {"building_id": newest["id"]}})], env)
+    if undo is not None and undo.returncode == 0:
+        ok("command: the drill undone again (exit 0), so the run leaves the slots as it found them")
+    else:
+        fail("undoing the drill: %s" % (undo.stderr[-200:] if undo else "no drill: %r" % home.get("buildings")))
     typo = bots(["command", '{"type":"build_building","payload":{"planet":1}}'], env)
     if typo.returncode == 2 and "not a command" in typo.stderr:
         ok("command refuses JSON that isn't a command (exit 2), before calling the API")
