@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -140,6 +140,10 @@ pub struct Dex {
     attempts: Mutex<HashMap<String, Attempt>>,
     codes: AtomicUsize,
     pub key_fetches: AtomicUsize,
+    /// How long the key set takes to answer, in milliseconds.
+    pub key_delay_ms: AtomicU64,
+    /// Whether the key set answers 500.
+    pub keys_fail: AtomicBool,
     /// Every token the token endpoint issued, for the leak checks.
     pub issued: Mutex<Vec<String>>,
     /// Discovery's overrides: replace these fields in the document.
@@ -170,9 +174,16 @@ async fn discovery(State(d): State<Arc<Dex>>) -> axum::Json<Value> {
     axum::Json(doc)
 }
 
-async fn keys(State(d): State<Arc<Dex>>) -> axum::Json<Value> {
+async fn keys(State(d): State<Arc<Dex>>) -> Response {
     d.key_fetches.fetch_add(1, Ordering::SeqCst);
-    axum::Json(json!({ "keys": [d.key.jwk] }))
+    let delay = d.key_delay_ms.load(Ordering::SeqCst);
+    if delay > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+    }
+    if d.keys_fail.load(Ordering::SeqCst) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "down").into_response();
+    }
+    axum::Json(json!({ "keys": [d.key.jwk] })).into_response()
 }
 
 async fn auth(State(d): State<Arc<Dex>>, Query(q): Query<HashMap<String, String>>) -> Response {
@@ -340,6 +351,8 @@ async fn stand_ins() -> (Arc<Dex>, Arc<Api>, SocketAddr) {
         attempts: Mutex::new(HashMap::new()),
         codes: AtomicUsize::new(0),
         key_fetches: AtomicUsize::new(0),
+        key_delay_ms: AtomicU64::new(0),
+        keys_fail: AtomicBool::new(false),
         issued: Mutex::new(Vec::new()),
         discovery: Mutex::new(json!({})),
     });
@@ -373,17 +386,25 @@ pub struct World {
 
 pub struct Options {
     pub secure_cookie: bool,
+    /// The session store's cap.
+    pub max_sessions: usize,
+    /// The key refetch floor, when a test needs it short.
+    pub key_floor: Option<std::time::Duration>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            secure_cookie: false,
+            max_sessions: voidforge_web::store::MAX_SESSIONS,
+            key_floor: None,
+        }
+    }
 }
 
 impl World {
     pub async fn start() -> Self {
-        Self::start_with(
-            Options {
-                secure_cookie: false,
-            },
-            |_| {},
-        )
-        .await
+        Self::start_with(Options::default(), |_| {}).await
     }
 
     /// Starts the stand-ins, lets `tweak` change discovery before the web app reads it, then
@@ -402,11 +423,15 @@ impl World {
             api_url: format!("http://{api_a}"),
             secure_cookie: options.secure_cookie,
         };
-        let provider = Provider::discover(&config).await.expect("discovery");
+        let mut provider = Provider::discover(&config).await.expect("discovery");
+        if let Some(floor) = options.key_floor {
+            provider = provider.with_key_refetch_floor(floor);
+        }
         let state = AppState {
             provider: Arc::new(provider),
             api: voidforge_web::api::client().unwrap(),
             api_url: config.api_url.clone(),
+            sessions: voidforge_web::store::BoundedStore::new(options.max_sessions),
         };
         let app = routes::app(state, config.secure_cookie);
         tokio::spawn(async move { axum::serve(web_l, app).await.unwrap() });

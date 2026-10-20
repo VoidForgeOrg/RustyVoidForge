@@ -115,6 +115,7 @@ async fn the_cookie_is_http_only_lax_and_secure_only_when_configured() {
     let w = World::start_with(
         Options {
             secure_cookie: true,
+            ..Options::default()
         },
         |_| {},
     )
@@ -582,4 +583,155 @@ async fn no_token_code_or_secret_reaches_a_page_or_the_log() {
             assert!(!p.contains(s.as_str()), "a page holds a secret: {s:.12}…");
         }
     }
+}
+
+// --- The session store's bound (R1-1) ---
+
+fn max_age(set_cookie: &str) -> u64 {
+    set_cookie
+        .to_ascii_lowercase()
+        .split(';')
+        .find_map(|a| a.trim().strip_prefix("max-age=").map(str::to_owned))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("no max-age: {set_cookie}"))
+}
+
+#[tokio::test]
+async fn an_anonymous_session_lives_ten_minutes() {
+    let w = World::start().await;
+    let mut b = w.browser();
+    b.get("/login").await;
+    assert_eq!(max_age(b.set_cookies.last().unwrap()), 600);
+}
+
+#[tokio::test]
+async fn past_the_cap_a_new_login_is_refused_and_stored_sessions_keep_working() {
+    let w = World::start_with(
+        Options {
+            max_sessions: 3,
+            ..Options::default()
+        },
+        |_| {},
+    )
+    .await;
+    let mut alice = logged_in_browser(&w).await;
+    for _ in 0..2 {
+        assert_eq!(w.browser().get("/login").await.status, 303);
+    }
+    // Three sessions stored: a fourth anonymous /login is refused, and stores nothing.
+    let mut late = w.browser();
+    let busy = late.get("/login").await;
+    assert_eq!(busy.status, 503);
+    assert!(
+        busy.body.contains("Try again in a few minutes"),
+        "{}",
+        busy.body
+    );
+    assert!(late.cookie.is_none());
+    // The stored sessions are untouched: alice is logged in, can start another login, and can
+    // log out.
+    assert!(logged_in(&alice.get("/").await.body));
+    assert_eq!(alice.get("/login").await.status, 303);
+    assert_eq!(alice.post("/logout").await.status, 303);
+    // Her logout freed a place.
+    assert_eq!(w.browser().get("/login").await.status, 303);
+}
+
+#[tokio::test]
+async fn a_logged_in_session_keeps_its_lifetime_when_changed() {
+    // A save recomputes the expiry from the anonymous default unless the handler sets it again:
+    // /login and a refused callback both change a logged-in session.
+    let w = World::start().await;
+    let mut b = w.browser();
+    let callback = b.start_login("/login").await;
+    b.get(&callback).await;
+    let want = 3600 + voidforge_web::routes::EXPIRED_GRACE_SECS;
+    let lifetime = |b: &Browser| max_age(b.set_cookies.last().unwrap());
+    assert!((want - 5..=want).contains(&lifetime(&b)));
+    b.get("/login").await;
+    assert!(
+        (want - 5..=want).contains(&lifetime(&b)),
+        "after /login: {}",
+        lifetime(&b)
+    );
+    assert_eq!(b.get(&callback).await.status, 400);
+    assert!(
+        (want - 5..=want).contains(&lifetime(&b)),
+        "after a replay: {}",
+        lifetime(&b)
+    );
+    assert!(logged_in(&b.get("/").await.body));
+}
+
+// --- Slow and failing key fetches (R1-2: W1 and W2; R1's INFO) ---
+
+#[tokio::test]
+async fn the_refetch_floor_counts_from_the_end_of_a_slow_fetch() {
+    // W2 (D-046 R1-1): with a 2 s floor and a 1.5 s fetch, a login 2.5 s after the fetch
+    // started but 1 s after it ended must not fetch again. A floor stamped at the start would.
+    let w = World::start_with(
+        Options {
+            key_floor: Some(Duration::from_secs(2)),
+            ..Options::default()
+        },
+        |d| d.key_delay_ms.store(1500, Ordering::SeqCst),
+    )
+    .await;
+    w.behave(|b| b.kid = Some("rotated-in".to_owned()));
+    let start = std::time::Instant::now();
+    assert_eq!(w.browser().login().await.status, 400);
+    assert_eq!(w.dex.key_fetches.load(Ordering::SeqCst), 1);
+    let ended = start.elapsed();
+    assert!(
+        ended >= Duration::from_millis(1500),
+        "the fetch was slow: {ended:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(2500).saturating_sub(start.elapsed())).await;
+    assert_eq!(w.browser().login().await.status, 400);
+    assert_eq!(
+        w.dex.key_fetches.load(Ordering::SeqCst),
+        1,
+        "within the floor after the fetch's end"
+    );
+    // Past the floor from the end, it fetches again.
+    tokio::time::sleep((ended + Duration::from_millis(2100)).saturating_sub(start.elapsed())).await;
+    w.dex.key_delay_ms.store(0, Ordering::SeqCst);
+    assert_eq!(w.browser().login().await.status, 400);
+    assert_eq!(w.dex.key_fetches.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_token_is_judged_after_the_wait_for_keys() {
+    // W1: a token valid when the callback arrives (exp + leeway is one second away) but expired
+    // by the time a 2.2 s key fetch returns is refused: the clock is read after the lookup.
+    let w = World::start().await;
+    w.dex.key_delay_ms.store(2200, Ordering::SeqCst);
+    w.behave(|b| b.claims = json!({ "exp": now() - 29 }));
+    assert_eq!(w.browser().login().await.status, 400);
+    // The same claims, judged at once with the keys cached, are accepted: the wait refused it.
+    w.dex.key_delay_ms.store(0, Ordering::SeqCst);
+    w.behave(|b| b.claims = json!({ "exp": now() - 29 }));
+    assert_eq!(w.browser().login().await.status, 303);
+}
+
+#[tokio::test]
+async fn while_keys_cant_be_fetched_the_page_says_so() {
+    // R1's INFO: after a failed fetch, an unknown kid within the floor is "can't check now"
+    // (503), as the server answers, not "rejected".
+    let w = World::start().await;
+    w.dex.keys_fail.store(true, Ordering::SeqCst);
+    for _ in 0..2 {
+        let page = w.browser().login().await;
+        assert_eq!(page.status, 503, "{}", page.body);
+        assert!(
+            page.body.contains("can't be reached right now"),
+            "{}",
+            page.body
+        );
+    }
+    assert_eq!(
+        w.dex.key_fetches.load(Ordering::SeqCst),
+        1,
+        "the floor holds after a failure too"
+    );
 }

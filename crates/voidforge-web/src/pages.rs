@@ -154,6 +154,18 @@ pub fn refused(why: Refusal, logged_in: bool) -> Markup {
     )
 }
 
+/// The page when the session store is full (R1-1): try again later.
+#[must_use]
+pub fn busy() -> Markup {
+    layout(
+        "Busy",
+        html! {
+            h1 { "Too many logins at once" }
+            p { "The web app is holding as many login attempts as it can. Try again in a few minutes. " a href="/" { "Home" } }
+        },
+    )
+}
+
 /// A page for a failure of the web app itself.
 #[must_use]
 pub fn internal() -> Markup {

@@ -84,6 +84,7 @@ fn run() -> ExitCode {
             provider: Arc::new(provider),
             api,
             api_url: config.api_url.clone(),
+            sessions: voidforge_web::store::BoundedStore::default(),
         };
         let app = routes::app(state, config.secure_cookie);
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();

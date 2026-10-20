@@ -10,3 +10,4 @@ pub mod oidc;
 pub mod pages;
 pub mod routes;
 pub mod session;
+pub mod store;

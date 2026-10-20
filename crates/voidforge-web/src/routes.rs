@@ -24,12 +24,13 @@ use maud::Markup;
 use serde::Deserialize;
 use tower_sessions::cookie::SameSite;
 use tower_sessions::cookie::time::{Duration as CookieDuration, OffsetDateTime};
-use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
+use tower_sessions::{Expiry, Session, SessionManagerLayer};
 
 use crate::api::{self, MeAnswer};
 use crate::oidc::{self, LoginError, Provider};
 use crate::pages::{self, Notice, Refusal};
 use crate::session::{self, LOGIN_KEY, LoggedIn, PENDING_KEY, PENDING_LIFETIME_SECS};
+use crate::store::BoundedStore;
 
 /// The session cookie's name.
 pub const COOKIE_NAME: &str = "voidforge_session";
@@ -49,11 +50,17 @@ pub struct AppState {
     pub api: reqwest::Client,
     /// The API's base URL.
     pub api_url: String,
+    /// The bounded session store (R1-1).
+    pub sessions: BoundedStore,
 }
 
 /// The web app: the routes, the session layer and the headers.
 pub fn app(state: AppState, secure_cookie: bool) -> Router {
-    let sessions = SessionManagerLayer::new(MemoryStore::default())
+    // A session nobody logged in lives 10 minutes after its last change, as its login attempts
+    // do; a login sets its own expiry (`login_expiry`), and every handler that changes a
+    // logged-in session sets it again, since a save recomputes the expiry from this default.
+    let sessions = SessionManagerLayer::new(state.sessions.clone())
+        .with_expiry(anonymous_expiry())
         .with_name(COOKIE_NAME)
         .with_http_only(true)
         .with_same_site(SameSite::Lax)
@@ -114,6 +121,32 @@ fn login_href(next: &str) -> String {
     }
 }
 
+fn anonymous_expiry() -> Expiry {
+    Expiry::OnInactivity(CookieDuration::seconds(
+        i64::try_from(PENDING_LIFETIME_SECS).unwrap_or(i64::MAX),
+    ))
+}
+
+/// A logged-in session's expiry: the token's `exp` plus the grace, or None past the calendar.
+fn login_expiry(exp: u64) -> Option<Expiry> {
+    let until = exp.saturating_add(EXPIRED_GRACE_SECS);
+    OffsetDateTime::from_unix_timestamp(i64::try_from(until).ok()?)
+        .ok()
+        .map(Expiry::AtDateTime)
+}
+
+/// Sets the expiry a changed session must keep: a logged-in one its login's, any other the
+/// anonymous one. A save recomputes the expiry from the layer's default otherwise, which would
+/// cut a logged-in session to 10 minutes.
+async fn keep_expiry(session: &Session) -> Result<(), session::SessionError> {
+    let expiry = match session.get::<LoggedIn>(LOGIN_KEY).await? {
+        Some(l) => login_expiry(l.exp).unwrap_or_else(anonymous_expiry),
+        None => anonymous_expiry(),
+    };
+    session.set_expiry(Some(expiry));
+    Ok(())
+}
+
 /// Ends the session and shows the expired notice, offering to return to `next`.
 async fn expired(session: &Session, next: &str) -> Response {
     if let Err(e) = session.flush().await {
@@ -170,6 +203,11 @@ async fn login(
         .and_then(local_path)
         .unwrap_or("/")
         .to_owned();
+    // A new session past the store's cap is refused here, before anything is stored (R1-1).
+    if session.id().is_none() && !s.sessions.has_room() {
+        tracing::warn!(outcome = "busy", "the session store is full");
+        return page(StatusCode::SERVICE_UNAVAILABLE, pages::busy());
+    }
     let Some(now) = oidc::unix_now() else {
         return internal();
     };
@@ -184,17 +222,9 @@ async fn login(
         tracing::error!(error = %e, "storing the login attempt failed");
         return internal();
     }
-    // A session that isn't logged in lives as long as its attempts; a logged-in one keeps the
-    // expiry its token gave it.
-    match session.get::<LoggedIn>(LOGIN_KEY).await {
-        Ok(None) => session.set_expiry(Some(Expiry::OnInactivity(CookieDuration::seconds(
-            i64::try_from(PENDING_LIFETIME_SECS).unwrap_or(i64::MAX),
-        )))),
-        Ok(Some(_)) => {}
-        Err(e) => {
-            tracing::error!(error = %e, "reading the session failed");
-            return internal();
-        }
+    if let Err(e) = keep_expiry(&session).await {
+        tracing::error!(error = %e, "reading the session failed");
+        return internal();
     }
     tracing::info!(outcome = "redirected", "a login started");
     see_other(&url)
@@ -228,7 +258,14 @@ async fn callback(
     // twice.
     let pending = match q.state.as_deref() {
         Some(state) => match session::take_pending(&session, state, now).await {
-            Ok(p) => p,
+            // Taking it changed the session: keep a login it already had.
+            Ok(p) => match keep_expiry(&session).await {
+                Ok(()) => p,
+                Err(e) => {
+                    tracing::error!(error = %e, "reading the session failed");
+                    return internal();
+                }
+            },
             Err(e) => {
                 tracing::error!(error = %e, "reading the session failed");
                 return internal();
@@ -261,10 +298,7 @@ async fn callback(
             return refusal(&session, StatusCode::BAD_REQUEST, Refusal::Rejected).await;
         }
     };
-    let until = identity.exp.saturating_add(EXPIRED_GRACE_SECS);
-    let Ok(session_end) =
-        OffsetDateTime::from_unix_timestamp(i64::try_from(until).unwrap_or(i64::MAX))
-    else {
+    let Some(expiry) = login_expiry(identity.exp) else {
         return refusal(&session, StatusCode::BAD_REQUEST, Refusal::Rejected).await;
     };
     // A new session id at login, so an id planted before it is worthless (fixation).
@@ -277,7 +311,7 @@ async fn callback(
         tracing::error!(error = %e, "storing the login failed");
         return internal();
     }
-    session.set_expiry(Some(Expiry::AtDateTime(session_end)));
+    session.set_expiry(Some(expiry));
     tracing::info!(outcome = "logged_in", "a login completed");
     see_other(&pending.next)
 }

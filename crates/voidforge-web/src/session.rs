@@ -1,6 +1,7 @@
 //! What the session holds (P4.1, D-057): the login attempts waiting for their callback, and
-//! after a login, the ID token and what Home shows. The store is tower-sessions' in-memory one,
-//! so every session ends when the process does. The browser holds only the session cookie.
+//! after a login, the ID token and what Home shows. The store is our own bounded in-memory one
+//! ([`crate::store`]), so every session ends when the process does. The browser holds only the
+//! session cookie.
 
 use std::fmt;
 
@@ -105,7 +106,7 @@ pub async fn take_pending(
 mod tests {
     use std::sync::Arc;
 
-    use tower_sessions::MemoryStore;
+    use crate::store::BoundedStore;
 
     use super::*;
 
@@ -120,7 +121,7 @@ mod tests {
     }
 
     fn session() -> Session {
-        Session::new(None, Arc::new(MemoryStore::default()), None)
+        Session::new(None, Arc::new(BoundedStore::default()), None)
     }
 
     #[tokio::test]

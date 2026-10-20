@@ -7,7 +7,7 @@ A binary over a library (`src/lib.rs`), so tests drive the router directly. P4.1
 ## Allowed dependencies
 
 - Workspace: `voidforge-api-types` and `voidforge-telemetry` only.
-- External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): axum, maud, tower-sessions (in-memory store), reqwest, clap, jsonwebtoken, aws-lc-rs and base64 (the OIDC client, our own: [D-057](../../docs/decision-log.md#d-057-web-login-our-own-code-flow-with-pkce-and-the-session)), plus tower-http when it's needed and scraper for smoke tests. Errors are typed with thiserror; there's no anyhow.
+- External, per the [Tech stack](../../docs/Voidforge%20Technical%20Plan.md#tech-stack): axum, maud, tower-sessions (with our own bounded store, `src/store.rs`), reqwest, clap, jsonwebtoken, aws-lc-rs and base64 (the OIDC client, our own: [D-057](../../docs/decision-log.md#d-057-web-login-our-own-code-flow-with-pkce-and-the-session)), plus tower-http when it's needed and scraper for smoke tests. Errors are typed with thiserror; there's no anyhow.
 - Never: core, host, store or server, directly or anywhere in its dependency tree. `tests/guardrails/check_web_deps.py` fails CI on any workspace crate other than api-types and telemetry in this crate's resolved dependencies, or in the declarations of this crate or any workspace crate it reaches, of any kind ([D-011](../../docs/decision-log.md#d-011-web-dependency-isolation-check)).
 - Every new dependency needs a [decision log](../../docs/decision-log.md) entry, and its version goes in the [version table](../../docs/versions.md).
 
@@ -19,6 +19,7 @@ A binary over a library (`src/lib.rs`), so tests drive the router directly. P4.1
 - `src/oidc.rs` is security code: endpoints only from discovery and on the issuer's origin, no redirects followed, CSPRNG state, nonce and verifier, and an ID token check at least as strict as the server's (D-046). Each check has a test that fails without it; keep it that way (D-057).
 - The ID token, the code, state, nonce, the verifier and the client secret never reach a page, a log, a URL the app builds or a `Debug`. The secret comes from `VOIDFORGE_WEB_CLIENT_SECRET` only, never a flag.
 - A login attempt is used once, and the session gets a new id at login. Logout is a POST.
+- The session store is bounded (D-057): an anonymous session lives 10 minutes, and a handler that changes a logged-in session calls `keep_expiry`, or the save cuts it to that default.
 - Logging in joins the game: the first `/players/me` creates the account (D-047).
 - Every form carries a fresh idempotency key in a hidden field, and posts to the web app, which sends one `POST /commands` and redirects back. A double submit runs once.
 - A rejected command shows its reason code at the top of the page.

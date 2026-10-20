@@ -315,9 +315,10 @@ allow = [
     { crate = "unicode-general-category" },
     { crate = "uuid-simd" },
     { crate = "vsimd" },
-    # voidforge-web's login (P4.1, decision log D-057): tower-sessions with its in-memory store,
-    # its cookie layer (tower-cookies, cookie) and the time crates cookie expiry uses; maud and
-    # its macros for the pages; futures under tower-sessions. All MIT or MIT/Apache-2.0.
+    # voidforge-web's login (P4.1, decision log D-057): tower-sessions (with our own bounded
+    # store, not its memory-store), its cookie layer (tower-cookies, cookie) and the time crates
+    # cookie expiry uses; maud and its macros for the pages; futures under tower-sessions. All MIT
+    # or MIT/Apache-2.0.
     { crate = "cookie" },
     { crate = "deranged" },
     { crate = "futures" },
@@ -332,7 +333,6 @@ allow = [
     { crate = "tower-cookies" },
     { crate = "tower-sessions" },
     { crate = "tower-sessions-core" },
-    { crate = "tower-sessions-memory-store" },
     # tokio's signal feature, for serve's SIGINT and SIGTERM (P3.4s, decision log D-050):
     # signal-hook-registry, with errno and libc already in the graph.
     { crate = "signal-hook-registry" },

@@ -219,6 +219,13 @@ struct Claims {
     name: Option<String>,
 }
 
+/// When the last key fetch finished, and whether it succeeded.
+#[derive(Clone, Copy)]
+struct LastFetch {
+    at: Instant,
+    ok: bool,
+}
+
 enum Lookup {
     Found(DecodingKey),
     Unknown,
@@ -238,7 +245,9 @@ pub struct Provider {
     validation: Validation,
     keys: RwLock<HashMap<String, DecodingKey>>,
     /// Single flight: one fetch at a time, and when the last one finished.
-    fetch: tokio::sync::Mutex<Option<Instant>>,
+    fetch: tokio::sync::Mutex<Option<LastFetch>>,
+    /// The shortest time between two key fetches ([`MIN_REFRESH`] unless a test sets it).
+    min_refresh: Duration,
 }
 
 impl fmt::Debug for Provider {
@@ -399,7 +408,16 @@ impl Provider {
             validation,
             keys: RwLock::new(HashMap::new()),
             fetch: tokio::sync::Mutex::new(None),
+            min_refresh: MIN_REFRESH,
         })
+    }
+
+    /// Sets the shortest time between two key fetches; [`MIN_REFRESH`] by default. Tests use a
+    /// shorter one to pin when the floor starts.
+    #[must_use]
+    pub fn with_key_refetch_floor(mut self, floor: Duration) -> Self {
+        self.min_refresh = floor;
+        self
     }
 
     /// The issuer.
@@ -589,12 +607,24 @@ impl Provider {
         if let Some(key) = self.cached(kid) {
             return Lookup::Found(key);
         }
-        let due = last.is_none_or(|at| at.elapsed() >= MIN_REFRESH);
-        if !due {
-            return Lookup::Unknown;
+        if let Some(l) = *last
+            && l.at.elapsed() < self.min_refresh
+        {
+            // Within the floor: the last fetch decides. It succeeded without this kid, so the
+            // kid is unknown; it failed, so dex can't be asked now (the server's 503, D-046).
+            return if l.ok {
+                Lookup::Unknown
+            } else {
+                Lookup::Unavailable
+            };
         }
         let fetched = self.fetch_keys().await;
-        *last = Some(Instant::now());
+        // The floor counts from the fetch's end, so a slow dex can't let queued logins each
+        // fetch (D-046 R1-1).
+        *last = Some(LastFetch {
+            at: Instant::now(),
+            ok: fetched.is_ok(),
+        });
         drop(last);
         match fetched {
             Ok(keys) => {

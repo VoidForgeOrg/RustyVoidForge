@@ -50,7 +50,8 @@ insta = { version = "=1.46.1", default-features = false, features = ["json"] }
 uuid = { version = "=1.28.0", default-features = false, features = ["std", "v7"] }
 base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 maud = { version = "=0.27.0", default-features = false, features = ["axum"] }
-tower-sessions = { version = "=0.15.0", default-features = false, features = ["memory-store", "axum-core"] }
+tower-sessions = { version = "=0.15.0", default-features = false, features = ["axum-core"] }
+async-trait = "=0.1.92"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

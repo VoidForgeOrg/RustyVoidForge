@@ -2514,7 +2514,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tower-sessions-core",
- "tower-sessions-memory-store",
  "tracing",
 ]
 
@@ -2537,18 +2536,6 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "tower-sessions-memory-store"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "713fabf882b6560a831e2bbed6204048b35bdd60e50bbb722902c74f8df33460"
-dependencies = [
- "async-trait",
- "time",
- "tokio",
- "tower-sessions-core",
 ]
 
 [[package]]
@@ -2898,6 +2885,7 @@ dependencies = [
 name = "voidforge-web"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "aws-lc-rs",
  "axum",
  "base64 0.23.1",
