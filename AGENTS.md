@@ -51,6 +51,7 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 | --- | --- |
 | lint | `.github/scripts/check-no-managed-blocks.sh` |
 | lint | `.github/scripts/test-check-no-managed-blocks.sh` |
+| lint | `.github/scripts/check-dex-parity.sh` and its cases, `.github/scripts/test-check-dex-parity.sh`: the CI dex config is the local one plus exactly the password grant ([D-052](docs/decision-log.md#d-052-the-end-to-end-scenario-the-bots-and-the-e2e-job)) |
 | lint | `cargo fmt --all --check` |
 | lint | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | lint | `python3 tests/guardrails/check_no_floats.py` |
@@ -62,8 +63,12 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 | database | `.github/scripts/check-migrations-only-add.sh <base>` and its cases, `.github/scripts/test-check-migrations-only-add.sh` ([D-034](docs/decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)) |
 | database | `.github/scripts/test-database-lock.sh` against a Postgres service: the database stage's lock refuses a stale holder and keeps out a second run ([D-044](docs/decision-log.md#d-044-phase-2-gate-repair-verification-failures-the-record-pin-the-database-stage-lock-and-the-epoch)) |
 | database | `.github/scripts/database.sh` against a Postgres service: the migrations on an empty database twice, `cargo sqlx prepare --check`, then the Postgres tests of store and host; needs [sqlx-cli](docs/versions.md) |
+| e2e | `.github/scripts/e2e.sh` against compose's Postgres and dex with the CI config: bots play the scenario through the API against a fresh universe and the real `serve` ([D-052](docs/decision-log.md#d-052-the-end-to-end-scenario-the-bots-and-the-e2e-job)) |
+| e2e | `cargo nextest run -p voidforge-server --test dex --locked --run-ignored only`: the token checks against the real dex ([D-046](docs/decision-log.md#d-046-token-checks)) |
 
 `cargo build` builds everything. The [`justfile`](justfile) has the same commands as `just lint`, `just supply-chain`, `just test`, `just determinism` and `just db-test`. `just db-test` needs the local stack (`just up`). It uses only a dedicated `voidforge_test` database, the `_sqlx_test_*` databases it creates and drops, its lock database `voidforge_test_lock` and the lock self-test's per-run `voidforge_test_lock_selftest_<pid>`, and never touches `voidforge`. One run at a time uses a server (a second run waits; a lock left by a killed run is refused with the command that clears it), and its cleanup never ends another session. A direct `cargo nextest` against `voidforge_test` doesn't take the lock; `just db-test` refuses to start while one is using a test database ([D-034](docs/decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)). The store's Postgres tests are `#[ignore]`d, so `just test` compiles them but only `just db-test` runs them. `just migrate` applies the migrations to an explicit `DATABASE_URL`, and has no default.
+
+`just e2e` runs the e2e job's scenario. It needs the local stack with the CI dex config (`DEX_CONFIG=config.ci.yaml just up`; `E2E_ISSUER` names another dex with that config instead), and refuses with that hint when dex lacks the password grant; it never reconfigures dex. It uses only its own per-run database `voidforge_e2e_<time>_<pid>`, dropped on exit, and never touches `voidforge`. At start it drops leftovers whose creating pid is gone and lists the rest with the command that drops them ([D-052](docs/decision-log.md#d-052-the-end-to-end-scenario-the-bots-and-the-e2e-job)).
 
 ### Local stack
 
@@ -78,7 +83,7 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 
 Binaries export traces when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and log locally without it. `just trace-check` runs every binary against the stack and finds each one's span through Grafana's trace backend.
 
-The credentials and the static dex users and clients are test-only values ([deploy/README.md](deploy/README.md)). Recipes for later packages (`e2e`, `replay`, `seed`, `bless`) are added by those packages, not stubbed ([D-014](docs/decision-log.md#d-014-local-stack)).
+The credentials and the static dex users and clients are test-only values ([deploy/README.md](deploy/README.md)). Recipes are added by the packages that implement them, not stubbed ([D-014](docs/decision-log.md#d-014-local-stack)).
 
 Never add a repository-wide nextest override such as `NEXTEST_NO_TESTS`, and never add placeholder tests to satisfy the runner. The command-local `--no-tests=warn` used while the workspace had no tests ended in P0.6, with the first real tests ([D-004](docs/decision-log.md#d-004-zero-test-runs-before-the-first-real-test)). A crate with no tests yet makes `cargo nextest run -p <crate>` exit 4, so use the workspace command for it.
 

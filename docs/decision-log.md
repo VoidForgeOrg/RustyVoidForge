@@ -1397,3 +1397,131 @@ Each entry records its date, the package that made it, the decision, the reasons
     - **Honest scope:** this pins the job's sleep, its usual wait. The other wait, the up-to-1 s stale wait inside a build, is an await point of the same task, dropped the same way, but no test parks a real build in it.
   - **`tests/cli.rs`:** `--leaderboard-secs` 0 and 3,601 are exit 2.
 - Where it's enforced: `crates/voidforge-server/src/{leaderboard.rs, api/mod.rs, serve.rs, lib.rs}`, `crates/voidforge-server/tests/{routes.rs, serve.rs, cli.rs}`, `crates/voidforge-server/Cargo.toml`, D-049, and the server's AGENTS.md.
+
+### D-052: The end-to-end scenario, the bots and the e2e job
+
+- Date and package: 2026-10-20, P3.6. Proposed by dev-build (`slices/37-p3-6-e2e/proposal-e2e.md`), from a measured prototype run. The lead approved T1 to T7 with notes (`ruling-lead.md`). The advisor ruled on the spec questions (S1 to S3), and SPEC item 56 was reworded to match.
+- Decision:
+  - **The shape:** one harness, `.github/scripts/e2e.sh`, run by the CI `e2e` job and by `just e2e`. It:
+    - checks dex's password grant;
+    - builds the server and the bots;
+    - creates its own database and seeds it (seed 20261020, 2 players, `rules/v0-fast.toml`);
+    - starts **the `serve` binary as a host process** (never `just` or `cargo run`, D-050 I5) on port 0, with `--leaderboard-secs 1`, and waits for its `ready:` line and `GET /openapi.json`;
+    - runs `voidforge-bots e2e`;
+    - stops serve with **one** SIGTERM and requires exit 0, so a run whose scenario passed but whose serve stopped uncleanly fails;
+    - drops its database on every exit.
+    - There's no server image until P5 (T1). The Technical Plan already says so: "CI runs the server and web app as cargo-built binaries beside" compose.
+  - **The bots (`voidforge-bots e2e`):**
+    - One process plays alice and bob, each with its own token and its own views.
+    - Modules: `login` (the password grant; P3.7's device code goes beside it), `client` (a typed client over reqwest: every request and answer is a `voidforge-api-types` value, and every non-2xx reply is D-045's `ErrorBody` with its status), `wait` and `scenario`.
+    - Exit codes: 0 passed, 1 a check failed, 2 usage, 3 not ready or a deadline passed, 4 login, transport or protocol error, 5 telemetry.
+    - Idempotency keys are `e2e-<run>-<player>-<step>`: unique per run, and readable in the server's log.
+  - **Login:** the password grant as the **public `voidforge-cli` client**, with no secret (measured: aud `voidforge-cli`; a wrong secret is `invalid_client`). It's the client the bots and the terminal use, and the grant exists only in `config.ci.yaml`. The static users' credentials are TEST-ONLY constants.
+  - **Waiting:**
+    - Every wait is bounded, and **the bots never read the rules file**.
+    - A deadline is what a view says is left (`eta` or `arrives_at` minus its `as_of`) plus 10 s, measured from when the bot read it, so the two clocks never need to agree. Where a view has no fixed time (queued or throttled ship builds), the bound is fixed: 90 s for the ships, against a measured 37 s.
+    - The next poll is at the view's `valid_until`, between 100 ms and 1 s away.
+    - The whole scenario has a 5-minute deadline (`--deadline-secs`). A 503 `unavailable` (dex's keys not loaded yet, or no board yet) means "not ready", and is retried within its step's bound.
+  - **The scenario, and what each check rests on:**
+    1. **Login.**
+    2. **Join** (D-047):
+       - each homeworld is in its player's `planet_ids` and owned by that player;
+       - a second `/players/me` is the same player;
+       - the two players and their homeworlds differ;
+       - the board lists both, once its `as_of` is after both joins.
+    3. **Build:**
+       - a Shipyard each (S2: that's the "builds something, and it completes" building);
+       - **alice's command repeated under its key returns the first answer, and the homeworld then holds exactly one Shipyard** (checked by effect);
+       - the same key with another command is 422 `idempotency_key_conflict`.
+    4. **Ships:** a Colony Ship and a Cargo Vessel each. Both players build the same ships, so the transport below is one path whoever wins (repair round 1, F3).
+    5. **The race** (S1, S3):
+       - **The target:** a free planet near the homeworlds' midpoint, whose two predicted trips differ by at least 3 s.
+       - **Setup checks:** both fleets are in transit to it, the planet is unowned, and the reported arrivals are at least 2 s apart.
+       - **The winner is the earlier `arrives_at` in its owner's fleet view, never the send order.**
+       - **The outcome is checked through state:** an event feed is post-MVP (the Game Design's "not in the MVP" list), and arrival events never reach a player through `CommandAccepted` (D-045). So:
+         - the target's owner is the winner;
+         - the target is in the winner's `planet_ids`, and not in the loser's;
+         - the winner's colony fleet, whose only ship was the Colony Ship, is gone;
+         - the loser's fleet is stationed at the target with its Colony Ship aboard.
+       - A same-millisecond tie stays with the core's tests.
+    6. **Transport:**
+       - the winner assembles its Cargo Vessel with 400,000,000 g of ingots. The fleet shows that cargo, and **the homeworld is debited by exactly it** (repair round 1, F1; tightened in round 2). The winner then sends the fleet, `transport`, to its colony.
+         - **The bound's derivation:** a stock reads `value + floor((rate·(t − checkpoint) + remainder) / 3,600,000)`, and loading subtracts whole grams without touching the remainder or the checkpoint. So between the two reads, `after − before + cargo` is within 1 g of `rate·elapsed / 3,600,000`. The check is the integer form, `|3,600,000·(after − before + cargo) − rate·elapsed| < 3,600,000`: under 1 g, with no tolerance to choose.
+         - **A setup check first:** the flow must be constant across the window (the same rate in both views, and the first view's `valid_until` not before the second's `as_of`, so no completion or cap falls between them). Otherwise the step fails as "transport (setup)", loudly and never vacuously. With the fixed seed, nothing is scheduled in that window of about 12 ms.
+       - on arrival the fleet carries nothing, and the colony's ingots rose by exactly that amount. The colony has no buildings: a setup check confirms its rate is 0, so the delta is exact.
+    7. **Privacy** (D-030, D-049 S1), while alice's colony fleet is in flight:
+       - a setup check: alice's own fleets list that fleet;
+       - bob's fleets name none of alice's;
+       - bob's `send_fleet` naming her fleet gets **the same status, code and message** as a fleet ID no one has (`unknown_fleet`).
+    8. **The board at the end:**
+       - **it lists exactly the two joined players, each once** (repair round 1, review-r2's L1: the rank checks hold for any subset of the board);
+       - each rank is 1 plus the number of players strictly ahead;
+       - the winner is first, by about 600 points: both built the same ships, and the winner traded its Colony Ship (400) for a planet (1,000).
+  - **The CI `e2e` job:**
+    - It runs on `pull_request` and on push to main, like the other jobs, with the name `e2e`, not a matrix, so a ruleset can require it (T3). Until Tom adds it to the main ruleset, it's must-pass by team discipline.
+    - **Its steps:**
+      1. compose's **Postgres and dex only**, with `DEX_CONFIG=config.ci.yaml`. There's no otel-lgtm and no `verify_stack.py` (T2): nothing exports spans, and dex is proven by effect through the login;
+      2. the build;
+      3. `e2e.sh`;
+      4. **`tests/dex.rs` against the real dex** (the D-046 carry);
+      5. on failure, serve's, the bots', seed's, dex's and Postgres's logs, in groups.
+    - `timeout-minutes: 20`.
+  - **No collector** (T2), confirmed by effect: with no `OTEL_EXPORTER_OTLP_ENDPOINT`, serve and the bots log only locally and exit 0. serve's log of a full run has no warning or error.
+  - **`just e2e`, and owner safety** (T4, T7):
+    - It needs the local stack with the CI dex config (`DEX_CONFIG=config.ci.yaml just up`), or `E2E_ISSUER` naming another dex with that config. If dex doesn't grant alice a token, it stops at once (exit 3) with that hint. **It never reconfigures dex:** dex's config is owner state.
+    - **The database** is `voidforge_e2e_<UTC time>_<pid>`, the only name the script creates, drops or names. Two runs on one machine can't touch each other's universe.
+    - At start it looks only at `voidforge_e2e_*` names. It drops a leftover whose creating pid is gone, and lists a live-pid leftover with the command that drops it.
+    - serve binds port 0, so it never collides with `just serve` on 8080.
+  - **dex config parity** (D-033's carry, T5):
+    - `.github/scripts/check-dex-parity.sh`, in the lint job and `just lint`, requires `config.ci.yaml` to be `config.yaml` plus exactly `    - password` and `  passwordConnector: local`, once each, with comments and blank lines ignored.
+    - `test-check-dex-parity.sh` proves it on 9 cases: an extra client, a changed hash, local drift, a missing or doubled grant line, the grant in the local config, a missing file, and comment-only changes, which pass.
+  - **Dependencies** (T6): the bots gain `serde` (derive) for dex's token response and `serde_json` to decode a reply after reading its text, so a failure prints what came back. Both are pinned workspace crates already in the tree. tokio's `test-util` is a dev-only feature for paused time, and adds no crate. No anyhow. The bots' AGENTS.md allowlist is amended.
+  - **Measured** (2026-10-20, a local debug build):
+    - the scenario takes **119 s** of wall time: join 1 s, Shipyard 12 s, ships 37 s, race 44 s, transport 24 s, board 1 s;
+    - the whole script takes 127 s with an incremental build.
+    - Game time is the wall clock, so the scenario's length doesn't depend on the runner's speed; the build does.
+    - **CI** (PR #43, 5dd6b37): the job took 4m25s. Compose up 15 s, build 68 s, the scenario PASSED in 119.0 s, and the real-dex tests passed 2 of 2. The 20-minute timeout is well above that.
+  - **`e2e.sh`'s cleanup is honest** (repair round 1, dev-qa's F2):
+    - a serve that doesn't stop within 20 s of its SIGTERM is SIGKILLed and reaped, so it's never orphaned;
+    - "dropped" is printed only after a drop succeeds. A failed drop of the run's own database prints the reason and the command, and fails the run;
+    - the leftover sweep reports a leftover it can't drop (its pid gone, but something still holds it) with the reason and the command, and carries on, never dying on a raw psql error under `set -e`.
+  - **A serve that died during the scenario** is reported as such: `e2e.sh` sends its SIGTERM only to a live serve, and names what stopped it in the failure line. (Before, the `kill` of a dead pid ended the script under `set -e` with no message.)
+  - **Carried drift, not fixed here** (the lead's ruling): `just trace-check` (`deploy/verify_trace.py`) runs each binary with no arguments and expects its `stub_startup` span.
+    - `voidforge-server` exits 2 that way since P2.9, and `voidforge-replay` since P2.7 (confirmed on a fresh build: both exit 2 with no subcommand), because both gained subcommands. P3.6 extends that to `voidforge-bots`, whose stub was also the binary for the offline and unreachable cases. Only `voidforge-web` still runs its stub.
+    - trace-check isn't in CI.
+    - The lead carries a real per-binary telemetry check to P5's observability work.
+  - **D-015's note**, that the CI end-to-end stage would be the first host-network container on Linux, no longer holds: serve runs on the host. The first such container comes with P5's images; `deploy/README.md` says so.
+- Tests:
+  - **The scenario is the test.** It passes locally (`e2e.sh`) and in CI on the exact head.
+  - **The bots' unit tests:**
+    - `unix_ms` on known instants, leap days included;
+    - `between` never negative;
+    - on paused time, a passed deadline names its step and the last view, and polls follow `valid_until` between 100 ms and 1 s;
+    - the form encoding of the login.
+  - **The CI negative control:** a throwaway draft PR (#44), whose one commit makes the bots expect the later arrival to win, failed red at the race with a readable log and every service's log printed. It was then closed and its branch deleted.
+  - **The mutation table** (`slices/37-p3-6-e2e/proof/mutate.py`):
+    - Each case is a full `e2e.sh` run in a fresh copy with one planted bug, and counts as caught only when it fails **at the step it names**. Compile errors are unproven and never counted.
+    - **The control passed, and every mutant was caught at its named step:** 21 of 21 on repair round 2's head (20 of 20 on round 1's b14572f; 16 of 16 on 0e74bcb). That's 15 product bugs, the spec's 2 negative controls and 4 harness cases:
+      - join: every call joins a new player; the board leaves a player off;
+      - leaderboard: ranks from 0; the board keeps only the leader after a colonize (review-r2's L1);
+      - build: a repeated key applies the command again;
+      - race: an owned planet is colonized again; a colonization uses no Colony Ship; a failed colonization uses the Colony Ship; a player's planets are only its homeworld;
+      - transport: Transport doesn't unload; a fleet is assembled without its cargo; the cargo isn't debited from the planet (dev-qa's M1); the planet is debited 99.5% of the cargo (review-r2, round 2);
+      - privacy: everyone's fleets are listed; a foreign fleet is `not_owner`;
+      - the spec's two negative controls: serve accepts only the web client's tokens (join, 401); the bots expect the later arrival to win (race);
+      - the harness: serve killed instead of stopped, and serve dying during the scenario (both exit 137, named); serve ignoring SIGTERM (exit 124: killed, reaped, its database dropped); the run's database failing to drop (the run fails with the reason).
+    - **Two harness lessons, both recorded in the proof:**
+      - run 1 used `shutil.copy2`, which kept the old file times, so cargo reused the previous case's mutated core for the last three cases. The copy now gives fresh times, and the table was rerun in full;
+      - a "SIGTERM twice" mutant didn't plant its bug: serve stopped in about 50 ms, before the second signal. It was replaced by SIGKILL.
+- **Repair round 1** (folded after QA PASS and review-r2's functional PASS on 0e74bcb; `repair-assignment.md`):
+  - **F1 (dev-qa, LOW):** the homeworld's debit for the cargo, as above. QA's mutant, cargo loaded without debiting the planet, survived before; it's caught now.
+  - **F2 (dev-qa, LOW):** the cleanup, as above. The harness cases are a serve that ignores SIGTERM (SIGSTOP), a failed drop of the run's own database, and, by hand, an in-use leftover with a dead pid (reported, and the run passed).
+  - **L1 (review-r2, LOW):** the final board's exact membership. R2's mutant, the board keeping only the leader once anyone has two planets, survived before; it's caught now.
+  - **F3 (dev-qa, INFO), my call: correct by construction, not removed.** The fixed seed makes alice win every run, so the old bob-only path (queue a Cargo Vessel after the race) never ran. Now both players build the same ships before the race, and the winner's vessel is picked with its other data. The transport has one path, and nothing is left that only a bob win would run.
+  - **F4 (dev-qa, INFO):** `SHIPS_WITHIN`'s comment names its measurement: the ships step takes 37 s. The prototype's 19 s came after about 20 s of extra refining.
+- **Repair round 2** (review-r2 on 6b9f868; `repair-assignment-r2.md`): F1's 1% bound (4,000,000 g) let a 99.5% debit through (2 t duplicated). A clean run shows the exact debit, with no residual, at 16,000 g/ms. The bound is now under 1 g, derived above, with the constant-flow setup check. R2's partial-debit mutant joins the table: "the planet paid 398000000 g" is caught at transport, and so is QA's M1 ("paid 0 g").
+- Where it's enforced:
+  - `crates/voidforge-bots/` (src, Cargo.toml, AGENTS.md);
+  - `.github/scripts/{e2e.sh, check-dex-parity.sh, test-check-dex-parity.sh}` and `.github/workflows/ci.yml` (the lint steps, the `e2e` job);
+  - the `justfile` (`e2e`, lint);
+  - the root AGENTS.md, `deploy/README.md` and `docs/versions.md`.
