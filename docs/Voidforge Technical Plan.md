@@ -52,7 +52,7 @@ Every pick favors widely used, well-documented crates, because agents write most
 | Errors | thiserror in libraries, anyhow in binaries | Library errors stay typed for tests |
 | Configuration | clap reading environment variables | One config struct per binary |
 | Token checks | jsonwebtoken with a cached copy of dex's signing keys | API side |
-| OIDC client | openidconnect | Web side: discovery, PKCE and ID token checks |
+| OIDC client | Our own authorization code flow with PKCE, on jsonwebtoken and aws-lc-rs ([D-057](decision-log.md#d-057-web-login-our-own-code-flow-with-pkce-and-the-session); openidconnect was named first) | Web side: discovery, PKCE and ID token checks |
 | HTML | maud | Markup written and checked in Rust at compile time |
 | Web sessions | tower-sessions with the in-memory store | Sessions reset on restart, which is fine for testing |
 | API description | utoipa | OpenAPI built from the types the server already uses |
