@@ -1499,15 +1499,15 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **The CI negative control:** a throwaway draft PR (#44), whose one commit makes the bots expect the later arrival to win, failed red at the race with a readable log and every service's log printed. It was then closed and its branch deleted.
   - **The mutation table** (`slices/37-p3-6-e2e/proof/mutate.py`):
     - Each case is a full `e2e.sh` run in a fresh copy with one planted bug, and counts as caught only when it fails **at the step it names**. Compile errors are unproven and never counted.
-    - **The control passed, and 16 of 16 mutants were caught at their named steps (12 product bugs, the spec's 2 negative controls, 2 harness cases):**
+    - **The control passed, and 20 of 20 mutants were caught at their named steps** on repair round 1's head (b14572f; 0e74bcb before it: 16 of 16). That's 14 product bugs, the spec's 2 negative controls and 4 harness cases:
       - join: every call joins a new player; the board leaves a player off;
-      - leaderboard: ranks from 0;
+      - leaderboard: ranks from 0; the board keeps only the leader after a colonize (review-r2's L1);
       - build: a repeated key applies the command again;
       - race: an owned planet is colonized again; a colonization uses no Colony Ship; a failed colonization uses the Colony Ship; a player's planets are only its homeworld;
-      - transport: Transport doesn't unload; a fleet is assembled without its cargo;
+      - transport: Transport doesn't unload; a fleet is assembled without its cargo; the cargo isn't debited from the planet (dev-qa's M1);
       - privacy: everyone's fleets are listed; a foreign fleet is `not_owner`;
       - the spec's two negative controls: serve accepts only the web client's tokens (join, 401); the bots expect the later arrival to win (race);
-      - the harness's clean-stop check: serve killed instead of stopped, and serve dying during the scenario (both exit 137, named).
+      - the harness: serve killed instead of stopped, and serve dying during the scenario (both exit 137, named); serve ignoring SIGTERM (exit 124: killed, reaped, its database dropped); the run's database failing to drop (the run fails with the reason).
     - **Two harness lessons, both recorded in the proof:**
       - run 1 used `shutil.copy2`, which kept the old file times, so cargo reused the previous case's mutated core for the last three cases. The copy now gives fresh times, and the table was rerun in full;
       - a "SIGTERM twice" mutant didn't plant its bug: serve stopped in about 50 ms, before the second signal. It was replaced by SIGKILL.
