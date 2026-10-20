@@ -7,7 +7,8 @@ Checks:
   compose    postgres, dex and otel-lgtm are running and healthy
   postgres   a TCP connection from the host, and `select 1` through psql in the container
   dex        from the host: discovery has the expected issuer, PKCE S256 and grant types, and
-             the JWKS has keys; the CLI client gets a device code; the web client's PKCE
+             the JWKS has keys; the CLI client's device code flow completes (a code approved
+             through dex's own pages as a static user yields an ID token); the web client's PKCE
              authorization request is accepted and a foreign redirect is refused; client
              credentials are refused; the password grant is refused, or with
              DEX_CONFIG=config.ci.yaml it issues an ID token for a static test user
@@ -21,12 +22,14 @@ import base64
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.cookiejar import CookieJar  # by name: this module's http() shadows the package
 
 COMPOSE = ["docker", "compose", "-f", "deploy/compose.yaml"]
 SERVICES = ["postgres", "dex", "otel-lgtm"]
@@ -170,11 +173,12 @@ def check_dex():
     else:
         fail("dex: JWKS at %r returned %s" % (jwks_uri, status))
 
-    # The public CLI client can start the device flow.
+    # The public CLI client's device flow completes, not just starts (decision log D-053: its
+    # callback was once registered without the issuer's /dex path, so every approval failed).
     status, body, _ = http(disco.get("device_authorization_endpoint", ISSUER + "/device/code"),
                            data={"client_id": CLI_CLIENT, "scope": "openid email profile"})
     if status == 200 and "device_code" in body:
-        ok("dex: public client %s starts the device code flow" % CLI_CLIENT)
+        complete_device_flow(json.loads(body), disco.get("token_endpoint", ISSUER + "/token"))
     else:
         fail("dex: device code request for %s returned %s: %s" % (CLI_CLIENT, status, body[:200]))
 
@@ -222,6 +226,44 @@ def check_dex():
     else:
         fail("dex: password grant was not refused in the local config (HTTP %s)" % status)
     return kids
+
+
+def complete_device_flow(code, token_endpoint):
+    """Approves `code` as a browser would, through dex's own pages as the static test user, then
+    requires the token endpoint to issue an ID token."""
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
+    origin = ISSUER.split("/dex")[0]
+
+    def page(url, data=None):
+        body = urllib.parse.urlencode(data).encode() if data is not None else None
+        try:
+            with opener.open(url, body, timeout=10) as resp:
+                return resp.read().decode(errors="replace")
+        except urllib.error.HTTPError as exc:
+            text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", exc.read().decode(errors="replace")))
+            raise RuntimeError("HTTP %s at %s: %s" % (exc.code, url.split("?")[0], text.strip()[:200]))
+
+    try:
+        verify = page(code.get("verification_uri_complete")
+                      or code["verification_uri"] + "?user_code=" + code["user_code"])
+        action = re.search(r'<form[^>]*action="([^"]+)"', verify).group(1).replace("&amp;", "&")
+        login = page(origin + action, {"user_code": code["user_code"]})
+        form = re.search(r'<form method="post" action="([^"]+)"', login)
+        if not form:
+            raise RuntimeError("no login form after the user code")
+        done = page(origin + form.group(1).replace("&amp;", "&"), {"login": TEST_USER, "password": TEST_PASSWORD})
+        if "Login Successful" not in done:
+            raise RuntimeError("dex didn't confirm the login")
+    except (RuntimeError, AttributeError, urllib.error.URLError, OSError) as exc:
+        fail("dex: the device code flow for %s doesn't complete: %s" % (CLI_CLIENT, exc))
+        return
+    status, body, _ = http(token_endpoint, data={"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                                                 "device_code": code["device_code"], "client_id": CLI_CLIENT})
+    if status == 200 and "id_token" in body:
+        ok("dex: public client %s completes the device code flow (approved as %s, ID token issued)"
+           % (CLI_CLIENT, TEST_USER))
+    else:
+        fail("dex: device flow approved but the token endpoint returned %s: %s" % (status, body[:200]))
 
 
 def check_container_view(host_kids):

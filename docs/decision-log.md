@@ -1525,3 +1525,96 @@ Each entry records its date, the package that made it, the decision, the reasons
   - `.github/scripts/{e2e.sh, check-dex-parity.sh, test-check-dex-parity.sh}` and `.github/workflows/ci.yml` (the lint steps, the `e2e` job);
   - the `justfile` (`e2e`, lint);
   - the root AGENTS.md, `deploy/README.md` and `docs/versions.md`.
+
+### D-053: Terminal login, the device code flow and the saved login
+
+- Date and package: 2026-10-20, P3.7. Proposed by dev-build (`slices/38-p3-7-terminal-login/proposal-terminal-login.md`), from a measured prototype against a real dex. The lead approved Q1 to Q5 with notes (`ruling-lead.md`), and the advisor agreed with the spec questions with conditions.
+- **A Phase 0 defect, fixed here:** the device flow could never complete.
+  - dex builds its device callback from the issuer's path, `/dex/device/callback`, but both dex configs registered `voidforge-cli`'s redirect as `/device/callback`. After the user code was entered, dex answered 400 "Unregistered redirect_uri", logging `redirect_uri=/dex/device/callback`.
+  - `verify_stack.py` only checked that the flow *starts*.
+  - Both configs now register `/dex/device/callback`, and D-052's parity check keeps them equal. `verify_stack.py` now requires the flow to *complete*: it approves a code through dex's own pages as a static user and requires an ID token.
+  - Run against the stack's own dex before the fix reaches it, that check fails with dex's reason. **The stack's dex keeps the old config until it's rebuilt** (`just up`). The lead approved that rebuild after the merge: test-only, memory storage, still `config.yaml` with no password grant.
+- Decision:
+  - **The device flow** (RFC 8628) is `login::device`, beside `login::password` (D-052), as a function with no trait.
+    - It requests a device code as the public `voidforge-cli` client (no secret, scope `openid email`).
+    - It shows the person, on stderr, `verification_uri_complete` when dex offers it, the plain URL with the user code, and one line saying it's waiting and when the code expires (the advisor's conditions).
+    - It polls the token endpoint at dex's `interval`, adding 5 s after each `slow_down` (RFC 8628 3.5). `authorization_pending` continues.
+    - The wait is bounded by the code's `expires_in`: a poll that would land past it isn't sent.
+    - **dex's numbers are bounded** (repair round 1, review-r1's R1-1). Without this, an `interval` of 0 polled about 600 times a second, and `u64::MAX` panicked on `Instant` overflow.
+      - An interval of 0 (or none) is RFC 8628's 5 s. Any other interval, `slow_down`s included, is clamped to 1 to 60 s.
+      - The lifetime is capped at 30 minutes (dex's default is 5).
+      - The deadline and each next poll use checked arithmetic, so an overflow is `Failure::Http` (exit 4), never a panic.
+    - `access_denied` is exit 6 ("declined"); `expired_token` or the lifetime passing is exit 7 ("expired"); any other refusal shows dex's error and description (exit 4).
+    - **Measured on dex v2.46.0:**
+      - `expires_in` 300 and `interval` 5;
+      - a poll inside the interval really gets `slow_down`;
+      - the ID token lasts 86,400 s;
+      - no refresh token without `offline_access`.
+  - **The terminal surface** (the lead's Q2):
+    - `login`, `logout`;
+    - `me` (`GET /players/me`; the first call joins);
+    - `get <path>`: **only API paths** (a leading `/`; no scheme, host, `//`, backslash or whitespace), never a general HTTP client;
+    - `command '<json>' [--key]`: the JSON is parsed as an api-types `CommandRequest` locally first, so a typo is exit 2 before any call. The idempotency key is `--key`, or a fresh `cli-<ns>-<pid>-<n>`, and **the key used is printed** so the person can retry the exact command.
+    - Answers are JSON on stdout; everything for the person goes to stderr. `e2e` is unchanged.
+  - **The saved login** (Q3, the advisor's Q2):
+    - **Where:** `$VOIDFORGE_TOKEN_FILE`, else `$XDG_CONFIG_HOME/voidforge/token.json`, else `~/.config/voidforge/token.json`.
+    - **What:** `{issuer, id_token, expires_at}`, the expiry being now plus dex's `expires_in`.
+    - **Permissions:** the directory is created 0700 and the file 0600 from the start, written to a temporary name beside it and renamed. The temporary file is opened `create_new` (`O_EXCL`), so a symlink planted at its predictable name in a shared directory is never followed; the save fails instead. review-r1's test pins it (R1-2). **A file with any group or other permission bit is refused** (exit 8), with `chmod 600 <path>` in the message. `logout` deletes it.
+    - **No refresh token:** a login lasts dex's 24 h. Refresh tokens and longer sessions are post-MVP.
+    - **When a login stops working** (exit 8, never a raw 401):
+      - past the saved expiry, the message is "your login has expired; log in again: voidforge-bots login";
+      - **a 401 `invalid_token` or `missing_token` within the saved lifetime** (repair round 1, dev-qa's F2) says "the API refused your saved login (it may be from another dex: you logged in at <saved issuer>); log in again". The likeliest cause is a login from a dex the server doesn't trust, so calling it "expired" would mislead. The saved issuer is the only file field it prints.
+    - **Never printed or logged:** the token, its subject and the device code. The session's and the token's `Debug` forms hide the token.
+  - **One exit-code table for the whole binary** (Q5: no collisions with D-052's), listed in every subcommand's `--help`:
+    - 0 done;
+    - 1 an e2e check failed;
+    - 2 usage;
+    - 3 not ready or a deadline passed;
+    - 4 login, transport or protocol error;
+    - 5 telemetry;
+    - **6 declined, 7 the code expired, 8 log in again, 9 the API refused the request.**
+  - **Dependencies:** none new. The stand-in tests use `std::net::TcpListener` and a thread; the script is stdlib Python.
+- Tests:
+  - **Unit tests** (`voidforge-bots`, 22 in all), **against a dex stand-in that's faithful to the measured dex:**
+    - pending then approved: the token, the prompt (URL, complete link, code, expiry), no client secret in any request, and the device code only in the polls;
+    - **the poll gaps:** 1 s, then 6 s after a `slow_down`, then 6 s again, measured;
+    - **the server's own interval** (repair round 1, dev-qa's F1): at a 3 s interval, the first wait and the gap are both 3 to 4 s. A client hardcoded to 1 s passed the 1 s test above, and fails this;
+    - **dex's numbers bounded** (R1-1, review-r1's probes as tests): an interval of 0 is 5 s, so a 2 s code expires with no poll, where it once took about 1,225 polls. A `u64::MAX` lifetime is capped and the login succeeds. A `u64::MAX` interval is capped at 60 s, outlives a 30 s code, and expires with no panic;
+    - **a planted symlink at the temporary name is never followed** (R1-2): the save fails, and the other file stays empty;
+    - `access_denied` is Declined; `expired_token` is CodeExpired;
+    - an unknown error shows dex's description, never the device code;
+    - **the code's lifetime bounds the wait:** 2 s of life at a 1 s interval allows exactly one poll.
+    - The token file:
+      - 0600 in 0700, replaced with no leftover temporary file;
+      - modes 640, 604, 620 and 602 refused with the chmod fix;
+      - expired and missing say "log in again";
+      - delete;
+      - Debug hides the token.
+    - Also: `get` takes only API paths; fresh keys are valid and differ; a 401 is "log in again", and other refusals are the API's code; `utc` inverts `unix_ms`.
+  - **Against a real dex, by effect: `.github/scripts/device-login.py`** (stdlib Python). It:
+    - runs `voidforge-bots login`;
+    - reads the link from stderr;
+    - **approves the code by driving dex's own pages** (the verification page, `POST /device/auth/verify_code`, the local login form as bob, then "Login Successful");
+    - then checks: **login prints exactly its five expected lines and nothing else** (the script never knows the device code, so a leak of it, or of anything, is caught this way); exit 0 with nothing on stdout; the file 0600 in 0700; the token's `aud` and `iss`; `me` (the API accepts the device-flow token); `get /leaderboard` and `/players/me/fleets`; `get` refusing a URL; `command` with its printed key, and a `--key` repeat answering the same, **then the drill undone** (cancelled, or demolished if it already finished), so a run leaves the player's slots as it found them; a typo refused locally; a tampered token, an expired login, a readable file and no login after `logout`, each exit 8 with its message; **and no output from any command containing the token or its subject**.
+    - A refused approval is a failure with dex's own words, and kills the waiting `login`.
+    - **Against a dex with the old config it fails** with "HTTP 400 at …/device/auth/verify_code: Unregistered redirect_uri", so it guards the Phase 0 defect.
+  - **In CI:** `e2e.sh` runs the script after the scenario, against the same serve, at about 6 s. The job's dex is the CI config, the default plus only the password grant (D-052's parity check), so the device flow is the default config's. Its log is printed on failure.
+  - **Measured:** locally and in CI (65fb961, run 39387846280), the scenario PASSED in 119.1 s, then the terminal login's checks passed, with serve stopping cleanly. 17 checks now, with the exact-output check and the undo.
+  - **The mutation table** (`slices/38-p3-7-terminal-login/proof/mutate.py`, two layers: the unit tests, and the script against a real dex and serve):
+    - **On repair round 1 (a9a0b45): the control passed, and 18 of 18 were caught** (`mutation-table-r1b.txt`). They add five mutants to 2eee48b's 13, which are listed below:
+      - dev-qa's F1 mutant, a hardcoded 1 s interval (caught by the unit layer);
+      - F2's always-"expired" message (caught by both layers);
+      - review-r1's R1-1 pair, an interval of 0 not floored and a huge lifetime not capped (both unit);
+      - R1's S3, the temporary file opened with create + truncate, so a planted symlink is followed (unit).
+    - **The first round-1 run crashed at case 6** (`mutation-table-r1b-crashed.txt`). Under "the lifetime doesn't bound the wait", my new zero-interval test hung on 1,000 scripted pendings. Every stand-in run is now bounded at 30 s, that test scripts 3, and the harness records a timed-out layer as failed.
+    - **The control passed, and 13 of 13 were caught, each by every layer it names:**
+      - unit: slow_down not lengthening the interval; the code's lifetime not bounding the wait; a declined login reading as expired;
+      - both layers: the file written 0644; a readable login used; an expired login used; logout deleting nothing; a 401 kept as the API's refusal; `get` taking any URL;
+      - script: login printing the token; printing the device code; not saying it's waiting; `command` not printing its key.
+    - **Run 1 was confounded:** each run's build used up the reused universe's homeworld slots, so the script's `command` failed with `no_free_slot` and "command doesn't print its key" was a void catch. The script now undoes its drill, and the table was rerun in full on a fresh universe.
+    - **By hand:** the script against a dex with the old config fails with "Unregistered redirect_uri", and `verify_stack.py`'s completion check fails against the unfixed stack dex. The fixed probe passes both.
+- Where it's enforced:
+  - `crates/voidforge-bots/src/{login.rs, session.rs, terminal.rs, client.rs, wait.rs, main.rs}` and its AGENTS.md;
+  - `deploy/dex/config.yaml` and `config.ci.yaml` (the callback), `deploy/verify_stack.py`, `deploy/README.md`;
+  - `.github/scripts/{device-login.py, e2e.sh}` and `.github/workflows/ci.yml` (the failure logs);
+  - the `justfile` and the root AGENTS.md.

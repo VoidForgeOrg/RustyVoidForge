@@ -34,7 +34,7 @@ These values exist only for local runs and CI. They are not secrets, and they mu
 | dex user | `alice@voidforge.test` / `alice-local-test-password` |
 | dex user | `bob@voidforge.test` / `bob-local-test-password` |
 | Web client (confidential, authorization code with PKCE) | `voidforge-web` / `voidforge-web-local-test-secret`, redirect `http://localhost:8081/callback` |
-| CLI client (public, device code) | `voidforge-cli` |
+| CLI client (public, device code) | `voidforge-cli`, device callback `/dex/device/callback` (the issuer's path plus `/device/callback`: dex builds it that way, so a bare `/device/callback` refuses every approval, D-053) |
 
 The password grant for the static users is enabled only in `dex/config.ci.yaml`. Client credentials are never enabled.
 
@@ -56,4 +56,5 @@ The issuer is `http://localhost:5556/dex` everywhere. A container that needs it 
 - **"A host-network container could not reach dex"**: Docker Desktop needs Settings > Resources > Network > "Enable host networking". This stack is verified with colima; Docker on a Linux host supports host networking by design; no container uses it there yet. The CI e2e job (P3.6) runs the server on the host beside compose's Postgres and dex, so the first host-network container on Linux comes with the images (P5).
 - **"docker: unknown command: docker compose"**: install the Compose plugin (Compose 2.17 or later for `up --wait`).
 - **A port is already in use**: something else listens on 5432, 5556, 3000, 4317 or 4318. Stop it, or stop the other stack; this stack never stops containers that are not its own.
+- **"Unregistered redirect_uri" after entering a device code**: dex's device callback is the issuer's path plus `/device/callback`, so `voidforge-cli` must register `/dex/device/callback`. A running dex keeps the config it was built with: run `just up` to rebuild it after the config changes (D-053).
 - **Why dex is built, not mounted**: the dex config is copied into a small local image, because some Docker VMs cannot read the checkout (for example colima with the repository under `~/Documents`) (D-014).

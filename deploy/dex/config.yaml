@@ -46,4 +46,4 @@ staticClients:
     name: Voidforge CLI
     public: true
     redirectURIs:
-      - /device/callback
+      - /dex/device/callback

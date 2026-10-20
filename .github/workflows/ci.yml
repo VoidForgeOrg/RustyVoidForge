@@ -164,10 +164,10 @@ jobs:
         run: .github/scripts/e2e.sh
       - name: Token checks against the real dex
         run: SQLX_OFFLINE=true cargo nextest run -p voidforge-server --test dex --locked --run-ignored only --no-capture
-      - name: On failure, the logs (serve, the bots, seed, dex, Postgres)
+      - name: On failure, the logs (serve, the bots, the terminal login, seed, dex, Postgres)
         if: failure()
         run: |
-          for f in serve bots seed; do
+          for f in serve bots device-login seed; do
             echo "::group::$f.log"
             cat "$E2E_LOG_DIR/$f.log" 2>/dev/null || echo "(no $f.log)"
             echo "::endgroup::"
