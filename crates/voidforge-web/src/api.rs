@@ -30,6 +30,9 @@ use crate::config::Secret;
 pub const API_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long connecting may take, so a dead API is reported in seconds, not after the total.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long the public `/rules` read may take. A page only drops its fast-rules line when it
+/// fails (§2, §5.7), so it never holds a page past this (QA's F1).
+pub const RULES_TIMEOUT: Duration = Duration::from_secs(2);
 /// The largest body read. The largest view, 1,000 planets near a point, is far below it.
 pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// The longest Retry-After kept: the server's own maximum (`MAX_RETRY_SECS`).
@@ -110,6 +113,8 @@ impl Route {
 pub struct Api {
     http: reqwest::Client,
     base: String,
+    /// [`RULES_TIMEOUT`], or the total bound when that's shorter.
+    rules_timeout: Duration,
 }
 
 impl fmt::Debug for Api {
@@ -141,7 +146,11 @@ impl Api {
             .connect_timeout(connect)
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
-        Ok(Self { http, base })
+        Ok(Self {
+            http,
+            base,
+            rules_timeout: RULES_TIMEOUT.min(total),
+        })
     }
 
     /// `GET /players/me`: the player, joining on first use (D-047).
@@ -222,12 +231,16 @@ impl Api {
             .await
     }
 
-    /// `GET /rules`: public, so it takes no token and sends none (D-058).
+    /// `GET /rules`: public, so it takes no token and sends none (D-058), bounded by
+    /// [`RULES_TIMEOUT`].
     ///
     /// # Errors
     /// See [`ApiError`].
     pub async fn rules(&self) -> Result<RulesView, ApiError> {
-        let req = self.http.get(format!("{}/rules", self.base));
+        let req = self
+            .http
+            .get(format!("{}/rules", self.base))
+            .timeout(self.rules_timeout);
         self.send(Route::Rules, req).await
     }
 
@@ -390,6 +403,7 @@ mod tests {
         assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(2));
         assert_eq!(MAX_BODY_BYTES, 4 * 1024 * 1024);
         assert_eq!(MAX_RETRY_AFTER_SECS, 30);
+        assert_eq!(RULES_TIMEOUT, Duration::from_secs(2));
     }
 
     #[test]

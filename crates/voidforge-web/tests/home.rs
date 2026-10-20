@@ -78,13 +78,14 @@ async fn the_fast_rules_line_follows_the_rules_name_and_a_failed_read_only_drops
             home.body
         );
     }
-    // `/rules` is read before `/players/me` (D3), with no token.
+    // A logged-in render reads both, side by side (QA's F1); `/rules` without a token.
     let requests = w.api.requests.lock().unwrap().clone();
-    let last_two: Vec<_> = requests[requests.len() - 2..]
+    let mut last_two: Vec<_> = requests[requests.len() - 2..]
         .iter()
         .map(|r| (r.uri.as_str(), r.authorization.is_some()))
         .collect();
-    assert_eq!(last_two, [("/rules", false), ("/players/me", true)]);
+    last_two.sort_unstable();
+    assert_eq!(last_two, [("/players/me", true), ("/rules", false)]);
 }
 
 #[tokio::test]
@@ -230,4 +231,96 @@ async fn a_refusal_a_page_cant_act_on_is_shown_with_its_code() {
         "{}",
         home.body
     );
+}
+
+/// An API that accepts connections and never answers.
+async fn hung_api() -> String {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((s, _)) = l.accept().await {
+            held.push(s);
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// QA's F1: the decorative `/rules` read has its own short bound, and a logged-in render reads
+/// it beside `/players/me`, so a hung API holds Home for one bound, not two.
+#[tokio::test]
+async fn a_hung_api_holds_home_for_one_bound_at_most() {
+    use std::time::{Duration, Instant};
+    use voidforge_web::api::RULES_TIMEOUT;
+
+    // The standard bounds: logged out, Home waits only for `/rules`'s 2 s, not the 10 s total.
+    let w = World::start_with(
+        Options {
+            api_url: Some(hung_api().await),
+            ..Options::default()
+        },
+        |_| {},
+    )
+    .await;
+    let started = Instant::now();
+    let home = w.browser().get("/").await;
+    let took = started.elapsed();
+    assert_eq!(home.status, 200);
+    assert!(home.body.contains(r#"href="/login""#) && !home.body.contains("Fast test rules"));
+    assert!(
+        took >= RULES_TIMEOUT && took < RULES_TIMEOUT + Duration::from_secs(1),
+        "{took:?}"
+    );
+
+    // A 1 s total bound: logged in, both reads end at 1 s together; one after the other would
+    // take 2 s.
+    let w = World::start_with(
+        Options {
+            api_url: Some(hung_api().await),
+            api_timeout: Duration::from_secs(1),
+            ..Options::default()
+        },
+        |_| {},
+    )
+    .await;
+    let mut b = logged_in(&w).await;
+    let started = Instant::now();
+    let home = b.get("/").await;
+    let took = started.elapsed();
+    assert_eq!(home.status, 502, "{}", home.body);
+    assert!(
+        took >= Duration::from_secs(1) && took < Duration::from_millis(1_600),
+        "{took:?}"
+    );
+}
+
+/// QA's I1: HEAD is refused before any handler, so it calls no API, spends no read, joins no
+/// one, and makes no session.
+#[tokio::test]
+async fn head_is_refused_and_calls_no_api() {
+    let w = World::start().await;
+    let mut b = logged_in(&w).await;
+    let before = w.api.requests.lock().unwrap().len();
+    let cookie = format!(
+        "{}={}",
+        voidforge_web::routes::COOKIE_NAME,
+        b.cookie.clone().unwrap()
+    );
+    let http = reqwest::Client::new();
+    for path in ["/", "/login", "/callback", "/logout", "/nowhere"] {
+        let r = http
+            .head(format!("{}{path}", w.web))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 404, "{path}");
+        assert!(r.headers().get("set-cookie").is_none(), "{path}");
+    }
+    let anonymous = http.head(format!("{}/", w.web)).send().await.unwrap();
+    assert_eq!(anonymous.status().as_u16(), 404);
+    assert!(anonymous.headers().get("set-cookie").is_none());
+    assert_eq!(w.api.requests.lock().unwrap().len(), before, "no API call");
+    // GET is unchanged, and the login survived.
+    assert!(b.get("/").await.body.contains("Score: 42"));
 }
