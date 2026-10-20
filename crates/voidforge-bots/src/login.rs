@@ -474,6 +474,29 @@ mod tests {
         }
     }
 
+    /// dev-qa's F1: a client that always polled every second matched the 1 s stand-in above, so
+    /// the gap is pinned at an interval no hardcoded value would hit.
+    #[tokio::test]
+    async fn polls_wait_the_servers_own_interval() {
+        let stand_in = StandIn::start(
+            &code(300, 3),
+            vec![error("authorization_pending"), ok_token()],
+        );
+        let started = std::time::Instant::now();
+        assert!(run(&stand_in).await.0.is_ok());
+        let polls = stand_in.polls();
+        assert_eq!(polls.len(), 2);
+        // The first poll waits the interval too, and so does the second.
+        let first = polls[0] - started;
+        let gap = polls[1] - polls[0];
+        for wait in [first, gap] {
+            assert!(
+                wait >= Duration::from_secs(3) && wait < Duration::from_secs(4),
+                "{first:?} {gap:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn declined_and_expired_are_their_own_failures() {
         let declined = StandIn::start(&code(300, 0), vec![error("access_denied")]);

@@ -79,8 +79,8 @@ pub fn logout(file: &Path) -> Result<(), Failure> {
 /// # Errors
 /// [`Failure::LogInAgain`] without a usable login; [`Failure::Refused`] when the API refuses.
 pub async fn me(http: &reqwest::Client, api: &str, file: &Path) -> Result<(), Failure> {
-    let player = player(http, api, file)?;
-    print_json(answer(player.get_json("/players/me").await?)?)
+    let (player, saved) = player(http, api, file)?;
+    print_json(answer(player.get_json("/players/me").await?, &saved)?)
 }
 
 /// `get`: any `GET` the API offers, by its path. Only a path on the configured API: never a URL,
@@ -95,8 +95,8 @@ pub async fn get(
     path: &str,
 ) -> Result<(), Failure> {
     check_path(path)?;
-    let player = player(http, api, file)?;
-    print_json(answer(player.get_json(path).await?)?)
+    let (player, saved) = player(http, api, file)?;
+    print_json(answer(player.get_json(path).await?, &saved)?)
 }
 
 /// `command`: `POST /commands` with `json`, a `CommandRequest` checked locally first, under `key`
@@ -125,22 +125,43 @@ pub async fn command(
             .to_owned(),
         None => fresh_key(),
     };
-    let player = player(http, api, file)?;
+    let (player, saved) = player(http, api, file)?;
     eprintln!("Idempotency key: {key} (repeat with --key {key} to retry this exact command)");
-    print_json(answer(player.command(&request, &key).await?)?)
+    print_json(answer(player.command(&request, &key).await?, &saved)?)
 }
 
-/// A client with the saved login.
-fn player(http: &reqwest::Client, api: &str, file: &Path) -> Result<Player, Failure> {
-    let saved = session::load(file)?;
-    Ok(Player::new(YOU, http.clone(), api, saved.id_token))
+/// A client with the saved login, and the login's issuer and expiry for the messages.
+fn player(http: &reqwest::Client, api: &str, file: &Path) -> Result<(Player, Saved), Failure> {
+    let session = session::load(file)?;
+    let saved = Saved {
+        issuer: session.issuer,
+        expires_at: session.expires_at,
+    };
+    Ok((Player::new(YOU, http.clone(), api, session.id_token), saved))
 }
 
-/// An API answer: a 401 means the login no longer works; any other refusal is the API's.
-fn answer<T>(reply: Reply<T>) -> Result<T, Failure> {
+/// What a refusal's message needs from the saved login: never the token.
+struct Saved {
+    issuer: String,
+    expires_at: i64,
+}
+
+/// An API answer: a 401 means the login no longer works, and says why as far as the tool can tell
+/// (dev-qa's F2): past its saved expiry it has expired; before it, the API refused a login that
+/// should still be valid, most likely one from another dex, so the message names where it came
+/// from. Any other refusal is the API's.
+fn answer<T>(reply: Reply<T>, saved: &Saved) -> Result<T, Failure> {
     reply.map_err(|Refused { status, body }| {
         if status == 401 && matches!(body.code, ErrorCode::InvalidToken | ErrorCode::MissingToken) {
-            Failure::LogInAgain(format!("your login has expired; {LOG_IN_AGAIN}"))
+            if saved.expires_at <= session::now_unix_s() {
+                Failure::LogInAgain(format!("your login has expired; {LOG_IN_AGAIN}"))
+            } else {
+                Failure::LogInAgain(format!(
+                    "the API refused your saved login (it may be from another dex: you logged in at \
+                     {}); {LOG_IN_AGAIN}",
+                    saved.issuer
+                ))
+            }
         } else {
             Failure::Refused(format!(
                 "the API refused (HTTP {status}): {}: {}",
@@ -232,12 +253,32 @@ mod tests {
                 },
             })
         };
-        let Err(Failure::LogInAgain(m)) = answer(refused(401, ErrorCode::InvalidToken)) else {
+        let saved = |expires_at| Saved {
+            issuer: "http://localhost:5598/dex".to_owned(),
+            expires_at,
+        };
+        // Within its saved lifetime, a refused login names its issuer and doesn't claim expiry.
+        let valid = saved(session::now_unix_s() + 3_600);
+        let Err(Failure::LogInAgain(m)) = answer(refused(401, ErrorCode::InvalidToken), &valid)
+        else {
             panic!("a 401 invalid_token isn't log in again");
+        };
+        assert_eq!(
+            m,
+            format!(
+                "the API refused your saved login (it may be from another dex: you logged in at \
+                 http://localhost:5598/dex); {LOG_IN_AGAIN}"
+            )
+        );
+        // Past it, the login has expired.
+        let past = saved(session::now_unix_s() - 1);
+        let Err(Failure::LogInAgain(m)) = answer(refused(401, ErrorCode::MissingToken), &past)
+        else {
+            panic!("a 401 missing_token isn't log in again");
         };
         assert_eq!(m, format!("your login has expired; {LOG_IN_AGAIN}"));
         assert!(matches!(
-            answer(refused(422, ErrorCode::UnknownFleet)),
+            answer(refused(422, ErrorCode::UnknownFleet), &valid),
             Err(Failure::Refused(m)) if m.contains("unknown_fleet")
         ));
     }

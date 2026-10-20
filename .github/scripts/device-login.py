@@ -221,7 +221,9 @@ def main():
         else:
             fail("%s: exit %s, %r" % (label, got.returncode, got.stderr[-300:]))
     with_saved(lambda d: d.update(id_token=token[:-4] + ("AAAA" if not token.endswith("AAAA") else "BBBB")),
-               "a tampered token", "your login has expired; log in again")
+               "a refused token within its saved lifetime",
+               "the API refused your saved login (it may be from another dex: you logged in at %s); log in again"
+               % ARGS.issuer)
     with_saved(lambda d: d.update(expires_at=int(time.time()) - 1), "an expired login",
                "your login has expired; log in again")
     with open(token_file, "w") as f:

@@ -1556,7 +1556,10 @@ Each entry records its date, the package that made it, the decision, the reasons
     - **Where:** `$VOIDFORGE_TOKEN_FILE`, else `$XDG_CONFIG_HOME/voidforge/token.json`, else `~/.config/voidforge/token.json`.
     - **What:** `{issuer, id_token, expires_at}`, the expiry being now plus dex's `expires_in`.
     - **Permissions:** the directory is created 0700 and the file 0600 from the start, written to a temporary name beside it and renamed. **A file with any group or other permission bit is refused** (exit 8), with `chmod 600 <path>` in the message. `logout` deletes it.
-    - **No refresh token:** a login lasts dex's 24 h. When the saved expiry passes, or the API answers 401 `invalid_token` or `missing_token`, the message is "your login has expired; log in again: voidforge-bots login" (exit 8), never a raw 401. Refresh tokens and longer sessions are post-MVP.
+    - **No refresh token:** a login lasts dex's 24 h. Refresh tokens and longer sessions are post-MVP.
+    - **When a login stops working** (exit 8, never a raw 401):
+      - past the saved expiry, the message is "your login has expired; log in again: voidforge-bots login";
+      - **a 401 `invalid_token` or `missing_token` within the saved lifetime** (repair round 1, dev-qa's F2) says "the API refused your saved login (it may be from another dex: you logged in at <saved issuer>); log in again". The likeliest cause is a login from a dex the server doesn't trust, so calling it "expired" would mislead. The saved issuer is the only file field it prints.
     - **Never printed or logged:** the token, its subject and the device code. The session's and the token's `Debug` forms hide the token.
   - **One exit-code table for the whole binary** (Q5: no collisions with D-052's), listed in every subcommand's `--help`:
     - 0 done;
@@ -1568,9 +1571,10 @@ Each entry records its date, the package that made it, the decision, the reasons
     - **6 declined, 7 the code expired, 8 log in again, 9 the API refused the request.**
   - **Dependencies:** none new. The stand-in tests use `std::net::TcpListener` and a thread; the script is stdlib Python.
 - Tests:
-  - **Unit tests** (`voidforge-bots`, 18 in all), **against a dex stand-in that's faithful to the measured dex:**
+  - **Unit tests** (`voidforge-bots`, 19 in all), **against a dex stand-in that's faithful to the measured dex:**
     - pending then approved: the token, the prompt (URL, complete link, code, expiry), no client secret in any request, and the device code only in the polls;
     - **the poll gaps:** 1 s, then 6 s after a `slow_down`, then 6 s again, measured;
+    - **the server's own interval** (repair round 1, dev-qa's F1): at a 3 s interval, the first wait and the gap are both 3 to 4 s. A client hardcoded to 1 s passed the 1 s test above, and fails this;
     - `access_denied` is Declined; `expired_token` is CodeExpired;
     - an unknown error shows dex's description, never the device code;
     - **the code's lifetime bounds the wait:** 2 s of life at a 1 s interval allows exactly one poll.
@@ -1591,6 +1595,7 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **In CI:** `e2e.sh` runs the script after the scenario, against the same serve, at about 6 s. The job's dex is the CI config, the default plus only the password grant (D-052's parity check), so the device flow is the default config's. Its log is printed on failure.
   - **Measured:** locally and in CI (65fb961, run 39387846280), the scenario PASSED in 119.1 s, then the terminal login's checks passed, with serve stopping cleanly. 17 checks now, with the exact-output check and the undo.
   - **The mutation table** (`slices/38-p3-7-terminal-login/proof/mutate.py`, two layers: the unit tests, and the script against a real dex and serve):
+    - **On repair round 1: the control passed, and 15 of 15 were caught** (`mutation-table-r1.txt`). These add dev-qa's F1 mutant, a 1 s interval caught by the unit layer, and F2's always-"expired" message, caught by both layers. 2eee48b's 13 are as below.
     - **The control passed, and 13 of 13 were caught, each by every layer it names:**
       - unit: slow_down not lengthening the interval; the code's lifetime not bounding the wait; a declined login reading as expired;
       - both layers: the file written 0644; a readable login used; an expired login used; logout deleting nothing; a 401 kept as the API's refusal; `get` taking any URL;
