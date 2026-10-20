@@ -69,6 +69,30 @@
         ],
         "type": "object"
       },
+      "BuildingRules": {
+        "additionalProperties": false,
+        "description": "Each building kind.",
+        "properties": {
+          "drill": {
+            "$ref": "#/components/schemas/DrillRules",
+            "description": "The drill."
+          },
+          "refinery": {
+            "$ref": "#/components/schemas/RefineryRules",
+            "description": "The refinery."
+          },
+          "shipyard": {
+            "$ref": "#/components/schemas/ShipyardRules",
+            "description": "The shipyard."
+          }
+        },
+        "required": [
+          "drill",
+          "refinery",
+          "shipyard"
+        ],
+        "type": "object"
+      },
       "BuildingType": {
         "description": "What a building is.",
         "enum": [
@@ -518,6 +542,47 @@
             "type": "object"
           }
         ]
+      },
+      "DrillRules": {
+        "additionalProperties": false,
+        "description": "A drill: mines Iron Ore.",
+        "properties": {
+          "build_time_ms": {
+            "description": "How long it takes to build, in milliseconds.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "cost_g": {
+            "description": "The ingots it costs to build, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "demolition_time_ms": {
+            "description": "How long it takes to demolish, in milliseconds.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "output_g_per_h": {
+            "description": "The ore it mines, in grams per hour.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cost_g",
+          "build_time_ms",
+          "demolition_time_ms",
+          "output_g_per_h"
+        ],
+        "type": "object"
       },
       "ErrorBody": {
         "additionalProperties": false,
@@ -1145,6 +1210,47 @@
         ],
         "type": "string"
       },
+      "HomeworldRules": {
+        "additionalProperties": false,
+        "description": "A homeworld at the start.",
+        "properties": {
+          "drills": {
+            "description": "Operational drills.",
+            "format": "int32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ingots_g": {
+            "description": "Iron Ingots, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "ore_g": {
+            "description": "Iron Ore, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "refineries": {
+            "description": "Operational refineries.",
+            "format": "int32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "drills",
+          "refineries",
+          "ore_g",
+          "ingots_g"
+        ],
+        "type": "object"
+      },
       "Leaderboard": {
         "additionalProperties": false,
         "description": "`GET /leaderboard`: every player ranked by score, rebuilt every 60 seconds (P3.5).",
@@ -1197,6 +1303,31 @@
         ],
         "type": "object"
       },
+      "MassPointsRules": {
+        "additionalProperties": false,
+        "description": "Points for a stock: `points` for every whole `per_g` grams.",
+        "properties": {
+          "per_g": {
+            "description": "Per this many grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "points": {
+            "description": "The points.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "points",
+          "per_g"
+        ],
+        "type": "object"
+      },
       "Mission": {
         "description": "What a fleet does at its target.",
         "enum": [
@@ -1212,6 +1343,39 @@
         "maximum": 18446744073709551615,
         "minimum": 0,
         "type": "integer"
+      },
+      "PlanetRules": {
+        "additionalProperties": false,
+        "description": "A planet's slots and caps.",
+        "properties": {
+          "ingot_cap_g": {
+            "description": "The most Iron Ingots a planet holds, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "ore_cap_g": {
+            "description": "The most Iron Ore a planet holds, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "slots": {
+            "description": "Building slots per planet.",
+            "format": "int32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slots",
+          "ore_cap_g",
+          "ingot_cap_g"
+        ],
+        "type": "object"
       },
       "PlanetSummary": {
         "additionalProperties": false,
@@ -1482,6 +1646,63 @@
         ],
         "type": "object"
       },
+      "RefineryRules": {
+        "additionalProperties": false,
+        "description": "A refinery: turns Iron Ore into Iron Ingots.",
+        "properties": {
+          "build_time_ms": {
+            "description": "How long it takes to build, in milliseconds.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "cost_g": {
+            "description": "The ingots it costs to build, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "demolition_time_ms": {
+            "description": "How long it takes to demolish, in milliseconds.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "ingots_per_ore": {
+            "description": "Grams of ingots per gram of ore.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "intake_g_per_h": {
+            "description": "The ore it takes, in grams per hour.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "output_g_per_h": {
+            "description": "The ingots it makes, in grams per hour.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cost_g",
+          "build_time_ms",
+          "demolition_time_ms",
+          "intake_g_per_h",
+          "ingots_per_ore",
+          "output_g_per_h"
+        ],
+        "type": "object"
+      },
       "RosterShip": {
         "additionalProperties": false,
         "description": "A ship on a planet's roster.",
@@ -1503,6 +1724,120 @@
           "ship_id",
           "ship_type",
           "owner"
+        ],
+        "type": "object"
+      },
+      "RulesView": {
+        "additionalProperties": false,
+        "description": "`GET /rules`: the rules the running universe was loaded with. Public, and the same for every\nplayer.",
+        "properties": {
+          "buildings": {
+            "$ref": "#/components/schemas/BuildingRules",
+            "description": "Each building kind."
+          },
+          "homeworld": {
+            "$ref": "#/components/schemas/HomeworldRules",
+            "description": "What every player starts with on their homeworld."
+          },
+          "name": {
+            "description": "The rules' name, such as `v0` or `v0-fast` (the fast test rules).",
+            "type": "string"
+          },
+          "planet": {
+            "$ref": "#/components/schemas/PlanetRules",
+            "description": "Every planet's slots and stock caps."
+          },
+          "scoring": {
+            "$ref": "#/components/schemas/ScoringRules",
+            "description": "The score's weights."
+          },
+          "ships": {
+            "$ref": "#/components/schemas/ShipRules",
+            "description": "Each ship kind."
+          },
+          "version": {
+            "description": "The rules version the universe was seeded with.",
+            "format": "int32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "name",
+          "planet",
+          "homeworld",
+          "buildings",
+          "ships",
+          "scoring"
+        ],
+        "type": "object"
+      },
+      "ScoringRules": {
+        "additionalProperties": false,
+        "description": "The score's weights: points per planet, building and ship owned, and per mass of stock.",
+        "properties": {
+          "cargo_vessel": {
+            "description": "Per cargo vessel.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "colony_ship": {
+            "description": "Per colony ship.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "drill": {
+            "description": "Per drill.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "ingots": {
+            "$ref": "#/components/schemas/MassPointsRules",
+            "description": "For Iron Ingots."
+          },
+          "ore": {
+            "$ref": "#/components/schemas/MassPointsRules",
+            "description": "For Iron Ore."
+          },
+          "planet": {
+            "description": "Per planet.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "refinery": {
+            "description": "Per refinery.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "shipyard": {
+            "description": "Per shipyard.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "planet",
+          "drill",
+          "refinery",
+          "shipyard",
+          "colony_ship",
+          "cargo_vessel",
+          "ore",
+          "ingots"
         ],
         "type": "object"
       },
@@ -1628,6 +1963,66 @@
         "minimum": 0,
         "type": "integer"
       },
+      "ShipKindRules": {
+        "additionalProperties": false,
+        "description": "A ship kind.",
+        "properties": {
+          "build_time_ms": {
+            "description": "How long it takes to build, in milliseconds.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "cargo_capacity_g": {
+            "description": "The cargo it carries, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "cost_g": {
+            "description": "The ingots it costs to build, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "speed_du_per_h": {
+            "description": "Its speed, in distance units per hour.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cost_g",
+          "build_time_ms",
+          "speed_du_per_h",
+          "cargo_capacity_g"
+        ],
+        "type": "object"
+      },
+      "ShipRules": {
+        "additionalProperties": false,
+        "description": "Each ship kind.",
+        "properties": {
+          "cargo_vessel": {
+            "$ref": "#/components/schemas/ShipKindRules",
+            "description": "The cargo vessel."
+          },
+          "colony_ship": {
+            "$ref": "#/components/schemas/ShipKindRules",
+            "description": "The colony ship."
+          }
+        },
+        "required": [
+          "colony_ship",
+          "cargo_vessel"
+        ],
+        "type": "object"
+      },
       "ShipType": {
         "description": "What a ship is.",
         "enum": [
@@ -1635,6 +2030,47 @@
           "cargo_vessel"
         ],
         "type": "string"
+      },
+      "ShipyardRules": {
+        "additionalProperties": false,
+        "description": "A shipyard: builds ships.",
+        "properties": {
+          "build_time_ms": {
+            "description": "How long it takes to build, in milliseconds.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "cost_g": {
+            "description": "The ingots it costs to build, in grams.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "demolition_time_ms": {
+            "description": "How long it takes to demolish, in milliseconds.",
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "parallel_builds": {
+            "description": "Ships it builds at once.",
+            "format": "int32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cost_g",
+          "build_time_ms",
+          "demolition_time_ms",
+          "parallel_builds"
+        ],
+        "type": "object"
       },
       "Stock": {
         "additionalProperties": false,
@@ -2472,6 +2908,45 @@
           }
         ],
         "summary": "The player's own fleets; no one sees another player's.",
+        "tags": [
+          "paths"
+        ]
+      }
+    },
+    "/rules": {
+      "get": {
+        "operationId": "get_rules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RulesView"
+                }
+              }
+            },
+            "description": "The rules",
+            "headers": {
+              "Cache-Control": {
+                "description": "no-cache: the rules are fixed for a running server, but a client must not keep them past it",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "internal"
+          }
+        },
+        "summary": "The rules the running universe was loaded with: costs, build and demolition times, flows,\nship speeds and capacities, slots and caps, the homeworld start and the score's weights,\nnamed as in the rules file (D-058). Public: it needs no token, so reading it never joins\nanyone (D-047), and it's never rate limited per player (D-054).",
         "tags": [
           "paths"
         ]

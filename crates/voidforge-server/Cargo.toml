@@ -42,6 +42,8 @@ log.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+# The rules view's test reads the rules files as plain TOML, independent of the mapping (D-058).
+toml.workspace = true
 tracing-subscriber.workspace = true
 voidforge-core.workspace = true
 voidforge-testkit.workspace = true

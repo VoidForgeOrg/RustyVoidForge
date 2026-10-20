@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, FromRef, State};
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, Method};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get, post};
@@ -66,6 +66,9 @@ pub struct AppState {
     pub leaderboard: crate::leaderboard::Board,
     /// The per-principal rate limits (P3.8), checked by the [`Player`] extractor.
     pub limiter: Arc<Limiter>,
+    /// `GET /rules`'s answer (P4.1r): the loaded rules' view as JSON, built once by
+    /// [`crate::rules_view::body`].
+    pub rules: axum::body::Bytes,
 }
 
 impl FromRef<AppState> for Arc<TokenVerifier> {
@@ -92,7 +95,7 @@ pub struct Route {
     pub method: Method,
     /// The path, with `{param}` segments.
     pub path: &'static str,
-    /// Whether it needs a token (only `/openapi.json` doesn't).
+    /// Whether it needs a token (only `/openapi.json` and `/rules` don't).
     pub authenticated: bool,
     handler: MethodRouter<AppState>,
 }
@@ -113,6 +116,7 @@ pub fn routes() -> Vec<Route> {
         route(Method::GET, "/players/me", true, get(player_me)),
         route(Method::GET, "/players/me/fleets", true, get(fleets)),
         route(Method::GET, "/leaderboard", true, get(leaderboard)),
+        route(Method::GET, "/rules", false, get(rules)),
         route(Method::GET, "/openapi.json", false, get(openapi)),
     ]
 }
@@ -407,6 +411,19 @@ async fn openapi() -> Response {
     (
         [(CONTENT_TYPE, HeaderValue::from_static("application/json"))],
         OPENAPI.as_str(),
+    )
+        .into_response()
+}
+
+/// The loaded rules (P4.1r, D-058): public like the contract, so reading them never needs a
+/// token, joins anyone or spends a rate limit. The bytes were built once at startup.
+async fn rules(State(s): State<AppState>) -> Response {
+    (
+        [
+            (CONTENT_TYPE, HeaderValue::from_static("application/json")),
+            (CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
+        s.rules,
     )
         .into_response()
 }

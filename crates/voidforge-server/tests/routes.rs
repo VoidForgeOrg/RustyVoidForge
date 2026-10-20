@@ -358,6 +358,7 @@ async fn api_with(
     ));
     let c = clock.clone();
     let (board, leaderboard) = voidforge_server::leaderboard::channel();
+    let rules_body = voidforge_server::rules_view::body(&v0_rules());
     let state = AppState {
         verifier,
         players,
@@ -367,6 +368,7 @@ async fn api_with(
         leaderboard,
         limiter: limiter
             .unwrap_or_else(|| Arc::new(Limiter::new(GENEROUS, Arc::new(Instant::now)))),
+        rules: rules_body,
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -1270,6 +1272,38 @@ async fn the_contract_is_public_and_joins_nobody(pool: PgPool) {
     assert_eq!(api.accounts().await, accounts, "no account was made");
 }
 
+/// `/rules` is public, the loaded rules exactly, and reading it joins nobody (P4.1r, D-058).
+#[sqlx::test(migrator = "MIGRATOR")]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_rules_are_public_exact_and_join_nobody(pool: PgPool) {
+    let api = api(&pool, world(1, 0), |_| {}).await;
+    let accounts = api.accounts().await;
+    // The harness's host runs v0, so the answer is v0's view (the field-by-field check against
+    // the file is tests/rules_view.rs).
+    let want = serde_json::to_value(voidforge_server::rules_view::view(&v0_rules())).unwrap();
+    for token in [None, Some("not-a-token")] {
+        let r = api.send(Method::GET, "/rules", token, &[], None).await;
+        assert_eq!(r.status, 200, "{r:?}");
+        assert_eq!(r.body, want);
+    }
+    let carol = api.token(CAROL_SUB);
+    let r = api
+        .send(Method::GET, "/rules", Some(&carol), &[], None)
+        .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(api.accounts().await, accounts, "no account was made");
+    assert_eq!(api.records().await, 0, "nobody joined");
+    let r = api
+        .http
+        .get(format!("{}/rules", api.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.headers()["content-type"], "application/json");
+    assert_eq!(r.headers()["cache-control"], "no-cache");
+    insta::assert_json_snapshot!("rules_v0", want);
+}
+
 // --- Auth and accounts on every route ---
 
 fn authenticated(ids: Ids) -> Vec<(Method, String)> {
@@ -1382,6 +1416,7 @@ async fn an_unknown_route_or_method_is_not_found(pool: PgPool) {
         (Method::DELETE, "/players/me"),
         (Method::POST, "/planets"),
         (Method::PUT, "/openapi.json"),
+        (Method::POST, "/rules"),
         (Method::GET, "/planets/1/extra"),
     ] {
         let r = api
@@ -1837,7 +1872,8 @@ impl Api {
 }
 
 /// D-049's route table, every route: an authenticated one answers 429 once its class's budget is
-/// spent, and succeeds again a Retry-After later; `/openapi.json` never does. A new route must be
+/// spent, and succeeds again a Retry-After later; the public `/openapi.json` and `/rules` (D-058)
+/// never do. A new route must be
 /// added to `concrete`, so none can bypass the limiter by not taking `Player` unnoticed (the
 /// lead's T3 addition).
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -1848,7 +1884,7 @@ async fn every_authenticated_route_is_limited_and_the_contract_never_is(pool: Pg
     let api = api_with(&pool, world(0, 0), |_| {}, Some(limiter), None).await;
     let concrete = |path: &str| -> String {
         match path {
-            "/commands" | "/players/me" | "/players/me/fleets" | "/leaderboard"
+            "/commands" | "/players/me" | "/players/me/fleets" | "/leaderboard" | "/rules"
             | "/openapi.json" => path.to_owned(),
             "/planets/{id}" => format!("/planets/{}", api.ids.alice_home.0),
             "/planets" => "/planets?near=0,0,0&radius=1".to_owned(),
@@ -1857,7 +1893,7 @@ async fn every_authenticated_route_is_limited_and_the_contract_never_is(pool: Pg
     };
     let mut n = 0;
     let all = routes();
-    assert_eq!(all.len(), 7, "the table this test was written against");
+    assert_eq!(all.len(), 8, "the table this test was written against");
     for route in all {
         let path = concrete(route.path);
         // A full budget for each route.
@@ -2077,6 +2113,7 @@ async fn head_is_not_found_and_runs_nothing(pool: PgPool) {
         "/players/me".to_owned(),
         "/players/me/fleets".to_owned(),
         "/leaderboard".to_owned(),
+        "/rules".to_owned(),
         "/openapi.json".to_owned(),
         "/nothing".to_owned(),
     ];

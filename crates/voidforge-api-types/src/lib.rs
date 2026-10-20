@@ -9,6 +9,7 @@
 pub mod command;
 pub mod error;
 pub mod event;
+pub mod rules;
 pub mod view;
 pub mod wire;
 
@@ -24,6 +25,7 @@ use utoipa::{Modify, OpenApi};
 mod paths {
     use crate::command::{CommandAccepted, CommandRequest};
     use crate::error::ErrorBody;
+    use crate::rules::RulesView;
     use crate::view::{FleetsView, Leaderboard, PlanetView, PlanetsNearView, PlayerView};
 
     /// Submit a command. Every write goes through here, one command per log record.
@@ -158,6 +160,21 @@ mod paths {
     )]
     pub fn get_leaderboard() {}
 
+    /// The rules the running universe was loaded with: costs, build and demolition times, flows,
+    /// ship speeds and capacities, slots and caps, the homeworld start and the score's weights,
+    /// named as in the rules file (D-058). Public: it needs no token, so reading it never joins
+    /// anyone (D-047), and it's never rate limited per player (D-054).
+    #[utoipa::path(
+        get,
+        path = "/rules",
+        responses(
+            (status = 200, description = "The rules", body = RulesView,
+                headers(("Cache-Control" = String, description = "no-cache: the rules are fixed for a running server, but a client must not keep them past it"))),
+            (status = 500, description = "internal", body = ErrorBody),
+        )
+    )]
+    pub fn get_rules() {}
+
     /// This document: the API's contract. Public: it needs no token, so reading it never joins
     /// anyone (D-049), and it's never rate limited (D-054).
     #[utoipa::path(
@@ -228,6 +245,7 @@ impl Modify for Closed {
         paths::get_player,
         paths::get_fleets,
         paths::get_leaderboard,
+        paths::get_rules,
         paths::get_openapi,
     ),
     components(schemas(error::ErrorCode, event::Event)),
