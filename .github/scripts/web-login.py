@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The web login by effect against a real dex (Technical Plan P4.1; decision log D-057).
+"""The web login by effect against a real dex (Technical Plan P4.1, P4.2; decision log D-057, D-059).
 
 Starts `voidforge-web` on localhost:8081 (dex registers the redirect by exact string), then
 logs alice in and out as a browser would, with two cookie jars: one for dex's pages and one for
@@ -12,13 +12,16 @@ does.
   3  dex:          dex shows its password form, and sends the browser back with a code
   4  callback:     303 to /, with a NEW session id (fixation)
   5  Home:         "Logged in as alice@voidforge.test", the short name and a score, which come
-                   from the API's /players/me: the API accepted the web app's token
+                   from the API's /players/me through the typed client: the API accepted the
+                   web app's token (P4.2: "Your empire", the score and the homeworld)
   6  replay:       the same callback again is refused (400), with or without the cookie
   7  tampered:     a callback whose state was changed is refused (400) and logs nobody in
   8  logout:       a GET can't log out; the POST does, and the old cookie is logged out too
   9  second login: dex shows its password form again (A2: no silent login)
   10 no secrets:   no token, code, state or the client secret in any page or the web app's log
   11 stop:         one SIGTERM, exit 0
+  12 unreachable:  the web app started against a closed port: a logged-in Home is the retry
+                   page at 502 with "Can't reach the game server", never a trace (P4.2)
 
 Usage: web-login.py --web <voidforge-web> --api <url> --issuer <dex issuer> --log <file>
 Exit codes: 0 every check passed; 1 a check failed; 2 the checks couldn't run.
@@ -189,9 +192,11 @@ def run(args):
         # 5. Home, logged in, with the API's answer.
         status, _, body = web.request(WEB + "/")
         check("Logged in as <strong>%s</strong>" % USER in body, "Home shows the viewer's email", body[:300])
-        check(re.search(r"You appear to others as <span title=\"[0-9a-f-]{36}\">player [0-9a-f]{8}</span>", body),
-              "Home shows the viewer's short name, from the API")
-        check(re.search(r"Score: -?\d+", body), "Home shows a score from /players/me: the API took the token")
+        check(re.search(r"You: <span title=\"[0-9a-f-]{36}\">player [0-9a-f]{8}</span> · score -?[\d,]+", body),
+              "Home's frame shows the viewer's short name and score, from the API")
+        check(re.search(r"Score: -?[\d,]+ \(current\)", body) and "<h1>Your empire</h1>" in body,
+              "Home shows a score from /players/me: the API took the token")
+        check(re.search(r'Homeworld: <a href="/planets/\d+">Planet #\d+</a>', body), "Home shows the homeworld")
 
         # 6. Replay.
         status, _, body = web.request(callback)
@@ -255,13 +260,57 @@ def run(args):
             fail("voidforge-web exited early with %s; see %s" % (proc.returncode, args.log))
         log.close()
 
+    # 12. An unreachable API, after the main run so 8081 is free again.
+    unreachable_pages = unreachable(args, issuer, origin, env, secrets_seen)
+
     # 10. No secrets in any page or the log.
     with open(args.log, encoding="utf-8", errors="replace") as f:
         logged = f.read()
-    texts = [("the web app's log", logged)] + [("a page", p) for p in web.pages + other.pages]
+    with open(args.log + ".unreachable", encoding="utf-8", errors="replace") as f:
+        logged_unreachable = f.read()
+    texts = [("the web app's log", logged), ("the unreachable run's log", logged_unreachable)]
+    texts += [("a page", p) for p in web.pages + other.pages + unreachable_pages]
     leaked = [(where, s[:6]) for where, text in texts for s in secrets_seen + [SECRET] if s in text]
     leaked += [(where, "eyJ") for where, text in texts if re.search(r"eyJ[A-Za-z0-9_-]{10,}\.", text)]
     check(not leaked, "no token, code, state, nonce or client secret in any page or the log", repr(leaked[:5]))
+
+
+def unreachable(args, issuer, origin, env, secrets_seen):
+    """Starts the web app against a port nothing listens on, logs in, and reads Home. Returns the
+    pages it saw, for step 10, and adds its login's code to `secrets_seen`."""
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        closed = "http://127.0.0.1:%d" % s.getsockname()[1]
+    log = open(args.log + ".unreachable", "w")
+    proc = subprocess.Popen([args.web, "--issuer", issuer, "--api-url", closed], env=env,
+                            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    try:
+        if not wait_ready(proc):
+            raise RuntimeError("voidforge-web didn't become ready against %s; see %s.unreachable"
+                               % (closed, args.log))
+        web, dex = Browser(), Browser()
+        location, _ = start_login(web, origin)
+        _, callback = dex_login(dex, location, origin)
+        secrets_seen.append(urllib.parse.parse_qs(urllib.parse.urlparse(callback).query)["code"][0])
+        status, _, _ = web.request(callback)
+        check(status == 303, "unreachable: the login completes without the API")
+        status, _, body = web.request(WEB + "/")
+        check(status == 502 and "Can't reach the game server. Try again in a moment." in body
+              and '<a href="/">Try again</a>' in body and "Logged in as" in body,
+              "unreachable: Home is the retry page at 502, logged in", "%s %s" % (status, body[:300]))
+        check("panicked" not in body and "reqwest" not in body and "error" not in body.lower(),
+              "unreachable: the page shows no trace or error detail", body[:300])
+    finally:
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        log.close()
+    return web.pages
 
 
 def main():

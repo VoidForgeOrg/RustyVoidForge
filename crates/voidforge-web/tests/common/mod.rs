@@ -1,7 +1,8 @@
 //! A dex stand-in and an API stand-in for the web app's tests (P4.1, D-057; P4.2, D-059), and
 //! a cookie-holding client. RSA keys are generated at run time, so no private key is committed.
-//! The API stand-in answers every path from a script: `answer` for `/players/me`, `rules` for
-//! `/rules`, and `replies` for any other path, with a raw status, headers, body and delay.
+//! The API stand-in answers every path from a script: `replies` by path first, with a raw
+//! status, headers, body and delay; otherwise `answer` for `/players/me` and `rules` for
+//! `/rules`.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -212,7 +213,7 @@ pub struct Api {
     pub answer: Mutex<(StatusCode, Value)>,
     /// What `/rules` answers.
     pub rules: Mutex<Reply>,
-    /// What any other path answers, by path; 404 `not_found` when it isn't here.
+    /// What a path answers, ahead of `answer` and `rules`; 404 `not_found` for any other path.
     pub replies: Mutex<HashMap<String, Reply>>,
     /// The bearer tokens `/players/me` saw.
     pub seen: Mutex<Vec<String>>,
@@ -415,22 +416,21 @@ async fn api_any(
         idempotency_key: header("idempotency-key"),
         body,
     });
-    let reply = if path == "/players/me" {
+    if path == "/players/me" {
         let bearer = header("authorization")
             .and_then(|v| v.strip_prefix("Bearer ").map(str::to_owned))
             .unwrap_or_default();
         a.seen.lock().unwrap().push(bearer);
-        let (status, body) = a.answer.lock().unwrap().clone();
-        Reply::json(status, &body)
-    } else if path == "/rules" {
-        a.rules.lock().unwrap().clone()
-    } else {
-        a.replies
-            .lock()
-            .unwrap()
-            .get(&path)
-            .cloned()
-            .unwrap_or_else(|| Reply::error(404, "not_found"))
+    }
+    let scripted = a.replies.lock().unwrap().get(&path).cloned();
+    let reply = match scripted {
+        Some(reply) => reply,
+        None if path == "/players/me" => {
+            let (status, body) = a.answer.lock().unwrap().clone();
+            Reply::json(status, &body)
+        }
+        None if path == "/rules" => a.rules.lock().unwrap().clone(),
+        None => Reply::error(404, "not_found"),
     };
     if reply.delay_ms > 0 {
         tokio::time::sleep(std::time::Duration::from_millis(reply.delay_ms)).await;
@@ -538,6 +538,8 @@ pub struct Options {
     pub key_floor: Option<std::time::Duration>,
     /// The web's API time bounds (total and connect).
     pub api_timeout: std::time::Duration,
+    /// Point the web at this API instead of the stand-in (a closed port: unreachable).
+    pub api_url: Option<String>,
 }
 
 impl Default for Options {
@@ -547,6 +549,7 @@ impl Default for Options {
             max_sessions: voidforge_web::store::MAX_SESSIONS,
             key_floor: None,
             api_timeout: voidforge_web::api::API_TIMEOUT,
+            api_url: None,
         }
     }
 }
@@ -559,7 +562,8 @@ impl World {
     /// Starts the stand-ins, lets `tweak` change discovery before the web app reads it, then
     /// starts the web app.
     pub async fn start_with(options: Options, tweak: impl FnOnce(&Dex)) -> Self {
-        let (dex, api, api_url) = stand_ins().await;
+        let (dex, api, stand_in_url) = stand_ins().await;
+        let api_url = options.api_url.clone().unwrap_or(stand_in_url);
         tweak(&dex);
         let (web_l, web_a) = listen().await;
         let web = format!("http://{web_a}");

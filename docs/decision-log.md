@@ -1811,3 +1811,37 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **`serve` by effect** (`tests/serve.rs`): the real binary's `/rules` equals the rules file it was started with.
   - **The contract:** the endpoint list and the public paths (`tests/contract.rs`); `openapi.json` re-blessed.
 - Where it's recorded: `crates/voidforge-api-types/src/rules.rs`, `crates/voidforge-server/src/rules_view.rs`, the [Architectural Design's endpoint table](Voidforge%20Architectural%20Design.md), and D-054's carry.
+
+### D-059: The web's API client, and API errors as messages
+
+- Date and package: 2026-10-20, P4.2. Proposed by dev-build (`slices/43-p4-2-api-client/proposal-api-client.md`). The lead approved T1 to T7 (`ruling-lead.md`); the advisor agreed A1 and A2; dev-design answered D1 to D3 and updated `phase4-ux.md` §6.1 and §6.2 to match.
+- Decision:
+  - **One typed client** (`voidforge_web::api::Api`): a method per route the web uses, returning api-types values: `me`, `my_fleets`, `planet`, `planets_near`, `leaderboard`, `command` (with the form's `Idempotency-Key`) and `rules`. Not `/openapi.json` (T1). `command` lands now, though P4.4 is its first user, so the error is proved total over the route with the most statuses (T7).
+  - **The token by type:** the authenticated methods take the session's `Secret` and send it as Bearer; `rules` takes none, so a public call can't carry it. `Api`'s `Debug` shows only the base URL.
+  - **One total error,** `ApiError`:
+    - `Refused { code, status, retry_after }`: the contract's error body, at the status its code is sent with;
+    - `Unreachable(Connect | Timeout | Other)`;
+    - `UnexpectedStatus(status)`: a redirect (none is followed), a success other than 200, a status no code is sent with on that route, or a code at a status it isn't sent with (T2: strict, so contract drift is loud). The one exception is `unknown_planet` at 404 from `GET /planets/{id}`;
+    - `Undecodable { status }`: an expected status whose body isn't the contract's (an unknown code included), or a body over 4 MiB, refused without reading the rest.
+
+    Retry-After is kept on 429 and 503 only, as whole seconds, capped at 30 (the server's maximum); a missing or malformed one is None. Nothing on the path panics.
+  - **Time bounds** (T4): 10 s in all, 2 s to connect. A token signed with a new key makes the server fetch dex's keys (up to 5 s, `auth::FETCH_TIMEOUT`) before a stale view's wait (up to 1 s, D-049), so 1 s isn't the slowest legitimate call. A dead API is reported in about 2 s.
+  - **Logging:** each failure once, a refusal at INFO and the rest at WARN, with the route, the status and the web span's trace ID; the API's `message` at DEBUG, never on a page (D-045). No token in any log, error or `Debug`.
+  - **Messages** (`voidforge_web::messages`): `copy(code, context, fill)` is phase4-ux §6.1's sentence for every code, **matched with no wildcard arm**, so a new code doesn't compile until it has one. A page and an order differ for 429, 500 and 503 (an order's copy says whether it was sent). Codes with `{p}` or `{t}` read without the number when the page has none (D1). `for_error` adds the code (`ErrorCode::as_str`, T3) and what the page does:
+    - 401 → the session ends and Home shows "Your login has expired. Log in again." (D-057, A4; kept by the advisor's A1);
+    - 422 `no_free_homeworld` on a read → §4.1's page, with Log out the only action (the advisor's A2; it replaces P4.1's sentence);
+    - 429, 500, 503 → §5.5's retry page with the API's status and its Retry-After passed on, "in N seconds" when N > 2;
+    - unreachable → the retry page at 502 with §6.2's copy; an unexpected or unreadable answer → the retry page at 502 with §6.2's "answered something unexpected" and no code (D2). **After an order, both are retry-class** with the same-key Try again (D2's addition): an unreadable 200 may follow an applied order, and the same key runs it at most once (D-037);
+    - any other refusal of a read → the retry page at 502 with the copy and code, since the page can't be shown.
+  - **`ErrorCode::as_str`** in api-types (T3): the wire name, a non-wire addition; a test pins it to serde's name for every code.
+  - **Home** (§4.1, §2): it reads the public `/rules` first (D3), so the expired and full-universe pages keep the fast-rules line, then `/players/me`. The frame shows the short name and score, "Logged in as" and Log out; the fast-rules line when `name` is `v0-fast`, on every page logged in or out, and nothing when `/rules` fails. Home shows the score (current, with its `as_of`), the homeworld, the planet list (homeworld first, then ascending, linking to P4.3's planet pages), the "Next:" line, and the welcome note when the only planet is the homeworld.
+  - **Carried:**
+    - to P5's observability carry (T5): trace propagation from the web to the API, which needs a server-side per-request span and `traceparent` extraction; the web logs the trace ID with each failure meanwhile;
+    - to P4.3 (A1): §5.6's "Your session had ended; you're logged in again." and `return_to` across a re-login, with the one-shot banner.
+- Tests:
+  - **The client by effect** (`crates/voidforge-web/tests/client.rs`, against the scripted stand-in in `tests/common`): every route decodes its view, with the token only on authenticated routes and the key and body on `POST /commands`; every code at its status is `Refused` with that code (from `me` and `command`); `unknown_planet` at 404 only from one planet; a code at another status; Retry-After on 429 and 503 only (1, 7, none, `abc`, `-3`, 99999 → 30); nothing listening (within 2 s); a timeout (and the same answer within the bound succeeding); a redirect not followed, whose target would have answered; statuses no route sends, whatever the body; bodies that aren't the contract; a body over the cap, with a declared length and chunked; no token in the log or any `Debug`.
+  - **The copy table** (`tests/copy.rs`): every code's page and order copy equals `tests/fixtures/copy.json`, **extracted from `phase4-ux.md` §6.1 and §6.2**, not restated by hand; the D1 forms without a number; the code beside the copy, and none for the web's own states.
+  - **Home by effect** (`tests/home.rs`, `tests/login.rs`): the player's data; the fast-rules line on, off, and dropped when `/rules` fails or is unreadable, read first and without a token; 429 and 503 with status, Retry-After, copy and code; 500 without Retry-After; an unreachable API at 502; unexpected answers at 502 without a code; a read's other refusal with its code; the 401 ending the session; the full universe's page.
+  - **End to end** (`.github/scripts/web-login.py`, e2e step 5c): Home's score and homeworld from the real `serve`; then the web app started against a closed port shows the retry page at 502, logged in, with no trace.
+  - **QA in a browser** (T6): 429 at low flags, an unreachable API (a stopped `serve`), and a real 401 from a token another dex signed or a tampered session; 503 `unavailable` stays stand-in-only.
+- Where it's recorded: `crates/voidforge-web/src/api.rs`, `src/messages.rs`, `src/pages.rs`, `crates/voidforge-web/AGENTS.md`, `crates/voidforge-api-types/src/error.rs`, and the mission SPEC's P5 carry.
