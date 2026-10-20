@@ -19,7 +19,7 @@ Every port is published on 127.0.0.1 only.
 
 | Service | Address | Health |
 | --- | --- | --- |
-| Postgres | `postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge` | `pg_isready` |
+| Postgres | `postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge_dev` (the development universe; `voidforge` is the owner's, and nothing defaults to it, D-055) | `pg_isready` |
 | dex | issuer `http://localhost:5556/dex`; discovery at `/dex/.well-known/openid-configuration`, keys at `/dex/keys` | discovery answers |
 | Grafana | `http://localhost:3000` | every otel-lgtm component ready |
 | OTLP | gRPC `localhost:4317`, HTTP `localhost:4318` | |

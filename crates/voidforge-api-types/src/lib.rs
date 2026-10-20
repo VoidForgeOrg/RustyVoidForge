@@ -37,12 +37,14 @@ mod paths {
         responses(
             (status = 200, description = "Accepted, with the command's own events", body = CommandAccepted),
             (status = 400, description = "malformed_body, missing_idempotency_key, invalid_idempotency_key, duplicate_ship_ids", body = ErrorBody),
-            (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 401, description = "missing_token, invalid_token, with WWW-Authenticate", body = ErrorBody,
+                headers(("WWW-Authenticate" = String, description = "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token"))),
             (status = 422, description = "A game rule's reason code, or idempotency_key_conflict", body = ErrorBody),
             (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
                 headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
-            (status = 503, description = "busy (with Retry-After) or unavailable", body = ErrorBody),
+            (status = 503, description = "busy or unavailable, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)"))),
         ),
         security(("bearer" = []))
     )]
@@ -56,13 +58,15 @@ mod paths {
         responses(
             (status = 200, description = "The planet", body = PlanetView),
             (status = 400, description = "invalid_query", body = ErrorBody),
-            (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 401, description = "missing_token, invalid_token, with WWW-Authenticate", body = ErrorBody,
+                headers(("WWW-Authenticate" = String, description = "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token"))),
             (status = 404, description = "unknown_planet", body = ErrorBody),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
                 headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
-            (status = 503, description = "unavailable", body = ErrorBody),
+            (status = 503, description = "busy or unavailable, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)"))),
         ),
         security(("bearer" = []))
     )]
@@ -83,12 +87,14 @@ mod paths {
         responses(
             (status = 200, description = "The planets", body = PlanetsNearView),
             (status = 400, description = "invalid_query", body = ErrorBody),
-            (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 401, description = "missing_token, invalid_token, with WWW-Authenticate", body = ErrorBody,
+                headers(("WWW-Authenticate" = String, description = "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token"))),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
                 headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
-            (status = 503, description = "unavailable", body = ErrorBody),
+            (status = 503, description = "busy or unavailable, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)"))),
         ),
         security(("bearer" = []))
     )]
@@ -100,12 +106,14 @@ mod paths {
         path = "/players/me",
         responses(
             (status = 200, description = "The player", body = PlayerView),
-            (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 401, description = "missing_token, invalid_token, with WWW-Authenticate", body = ErrorBody,
+                headers(("WWW-Authenticate" = String, description = "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token"))),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
                 headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
-            (status = 503, description = "unavailable", body = ErrorBody),
+            (status = 503, description = "busy or unavailable, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)"))),
         ),
         security(("bearer" = []))
     )]
@@ -117,30 +125,34 @@ mod paths {
         path = "/players/me/fleets",
         responses(
             (status = 200, description = "The fleets", body = FleetsView),
-            (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 401, description = "missing_token, invalid_token, with WWW-Authenticate", body = ErrorBody,
+                headers(("WWW-Authenticate" = String, description = "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token"))),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
                 headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
-            (status = 503, description = "unavailable", body = ErrorBody),
+            (status = 503, description = "busy or unavailable, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)"))),
         ),
         security(("bearer" = []))
     )]
     pub fn get_fleets() {}
 
-    /// Every player ranked by score, rebuilt every 60 seconds (P3.5; until then 503
-    /// `unavailable`).
+    /// Every player ranked by score, as of its `as_of`: the board is rebuilt every 60 seconds by
+    /// default. Before the first build, 503 `unavailable` with Retry-After.
     #[utoipa::path(
         get,
         path = "/leaderboard",
         responses(
             (status = 200, description = "The leaderboard", body = Leaderboard),
-            (status = 401, description = "missing_token, invalid_token", body = ErrorBody),
+            (status = 401, description = "missing_token, invalid_token, with WWW-Authenticate", body = ErrorBody,
+                headers(("WWW-Authenticate" = String, description = "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token"))),
             (status = 422, description = "no_free_homeworld: the account could not join, because no homeworld is free (D-047)", body = ErrorBody),
             (status = 429, description = "rate_limited, with Retry-After", body = ErrorBody,
                 headers(("Retry-After" = u64, description = "Whole seconds; one request after that conforms (D-054)"))),
             (status = 500, description = "internal", body = ErrorBody),
-            (status = 503, description = "unavailable", body = ErrorBody),
+            (status = 503, description = "busy or unavailable, with Retry-After", body = ErrorBody,
+                headers(("Retry-After" = u64, description = "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)"))),
         ),
         security(("bearer" = []))
     )]

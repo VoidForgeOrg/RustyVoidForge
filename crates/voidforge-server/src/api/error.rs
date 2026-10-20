@@ -5,7 +5,7 @@ use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::header::RETRY_AFTER;
 use axum::http::request::Parts;
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
@@ -163,6 +163,17 @@ impl<S: Send + Sync, T: DeserializeOwned + Send> FromRequestParts<S> for ApiPath
 /// closed, so there is no 405 (D-049, T3).
 pub async fn not_found() -> ApiError {
     ApiError::new(ErrorCode::NotFound, "no such route or method")
+}
+
+/// HEAD is refused like any other method the document doesn't name: 404 `not_found` (D-049 T3,
+/// D-055). axum's `get` would otherwise answer HEAD by running the GET handler, `Player`
+/// included, so a HEAD could join and spend read budget (review-r1's R1-G2). This runs before
+/// routing, so no extractor sees a HEAD.
+pub async fn refuse_head(req: Request, next: Next) -> Response {
+    if req.method() == Method::HEAD {
+        return not_found().await.into_response();
+    }
+    next.run(req).await
 }
 
 /// A panicking handler answers 500 `internal`, never a dropped connection. Each request runs as

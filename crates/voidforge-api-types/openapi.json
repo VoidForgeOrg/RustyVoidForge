@@ -1768,7 +1768,15 @@
                 }
               }
             },
-            "description": "missing_token, invalid_token"
+            "description": "missing_token, invalid_token, with WWW-Authenticate",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -1819,7 +1827,18 @@
                 }
               }
             },
-            "description": "busy (with Retry-After) or unavailable"
+            "description": "busy or unavailable, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1855,7 +1874,15 @@
                 }
               }
             },
-            "description": "missing_token, invalid_token"
+            "description": "missing_token, invalid_token, with WWW-Authenticate",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -1906,7 +1933,18 @@
                 }
               }
             },
-            "description": "unavailable"
+            "description": "busy or unavailable, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1914,7 +1952,7 @@
             "bearer": []
           }
         ],
-        "summary": "Every player ranked by score, rebuilt every 60 seconds (P3.5; until then 503\n`unavailable`).",
+        "summary": "Every player ranked by score, as of its `as_of`: the board is rebuilt every 60 seconds by\ndefault. Before the first build, 503 `unavailable` with Retry-After.",
         "tags": [
           "paths"
         ]
@@ -2003,7 +2041,15 @@
                 }
               }
             },
-            "description": "missing_token, invalid_token"
+            "description": "missing_token, invalid_token, with WWW-Authenticate",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -2054,7 +2100,18 @@
                 }
               }
             },
-            "description": "unavailable"
+            "description": "busy or unavailable, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2114,7 +2171,15 @@
                 }
               }
             },
-            "description": "missing_token, invalid_token"
+            "description": "missing_token, invalid_token, with WWW-Authenticate",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -2175,7 +2240,18 @@
                 }
               }
             },
-            "description": "unavailable"
+            "description": "busy or unavailable, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2211,7 +2287,15 @@
                 }
               }
             },
-            "description": "missing_token, invalid_token"
+            "description": "missing_token, invalid_token, with WWW-Authenticate",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -2262,7 +2346,18 @@
                 }
               }
             },
-            "description": "unavailable"
+            "description": "busy or unavailable, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2298,7 +2393,15 @@
                 }
               }
             },
-            "description": "missing_token, invalid_token"
+            "description": "missing_token, invalid_token, with WWW-Authenticate",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer realm=\"voidforge\", with error=\"invalid_token\" for an invalid token",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -2349,7 +2452,18 @@
                 }
               }
             },
-            "description": "unavailable"
+            "description": "busy or unavailable, with Retry-After",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds before a retry is worth trying; advice, not a promise (D-046, D-047, D-049, D-051)",
+                "schema": {
+                  "format": "int64",
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [

@@ -76,7 +76,7 @@ Run from the repository root. `rust-toolchain.toml` selects the pinned toolchain
 
 | Service | Address |
 | --- | --- |
-| Postgres | `postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge` |
+| Postgres | `postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge_dev` (`just seed` and `just serve`'s database; the server's `voidforge` database is the owner's, and nothing defaults to it, D-055) |
 | dex | issuer `http://localhost:5556/dex` |
 | Grafana | `http://localhost:3000` |
 | OTLP | gRPC `localhost:4317`, HTTP `localhost:4318` |

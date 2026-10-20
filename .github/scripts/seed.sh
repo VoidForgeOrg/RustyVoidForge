@@ -36,6 +36,6 @@ if [ -z "$(sql "SELECT 1 FROM pg_database WHERE datname = 'voidforge_dev'")" ]; 
     echo "created voidforge_dev"
 fi
 # The queries are checked against .sqlx/, never against this database (D-034).
-SQLX_OFFLINE=true DATABASE_URL="postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge_dev" \
+SQLX_OFFLINE=true VOIDFORGE_DATABASE_URL="postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge_dev" \
     cargo run -q -p voidforge-server --locked -- \
     seed --seed "$seed" --players "$players" --rules "$rules"

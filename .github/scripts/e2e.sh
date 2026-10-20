@@ -103,7 +103,7 @@ trap cleanup EXIT
 # 3. A fresh universe.
 sql "CREATE DATABASE \"$db\""
 say "created $db"
-DATABASE_URL="$url_base/$db" "$server" seed --seed "$seed" --players "$players" --rules "$rules" \
+VOIDFORGE_DATABASE_URL="$url_base/$db" "$server" seed --seed "$seed" --players "$players" --rules "$rules" \
     > "$log_dir/seed.log" 2>&1 || { say "seed failed:"; cat "$log_dir/seed.log" >&2; exit 1; }
 
 # 4. serve, on a free port, with the board rebuilt every second.

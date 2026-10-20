@@ -339,6 +339,13 @@ def run_meta(ws, report, only):
 
 # Web dependency cases: (name, edits, expected exit, expected violation lines or stderr fragments).
 # An edit is (crate, section, line) appended to that crate's Cargo.toml.
+def both(lines):
+    """`lines` for voidforge-web, and the same for voidforge-bots: since the Phase 3 gate (D-055)
+    the bots are isolated too, and they reach api-types and telemetry as web does, so an edge
+    injected there shows on both crates' paths."""
+    return lines + [l.replace("voidforge-web ->", "voidforge-bots ->") for l in lines]
+
+
 WEB_CASES = [
     ("web as committed (telemetry only, and telemetry's external crates)", [], 0, []),
     ("web adds api-types next to telemetry (allowed)",
@@ -432,12 +439,12 @@ WEB_CASES = [
     ("web on core through api-types",
      [("voidforge-api-types", "dependencies", "voidforge-core = { workspace = true }"),
       ("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 1,
-     ["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-core",
-      "violation: resolved normal path: voidforge-web -> voidforge-api-types -> voidforge-core"]),
+     both(["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-core",
+      "violation: resolved normal path: voidforge-web -> voidforge-api-types -> voidforge-core"])),
     # From P2.3 host depends on store itself (D-036), so only telemetry -> host is injected.
     ("web on store through telemetry and host",
      [("voidforge-telemetry", "dependencies", "voidforge-host = { workspace = true }")], 1,
-     ["violation: declared dev dependency: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store -> voidforge-testkit",
+     both(["violation: declared dev dependency: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store -> voidforge-testkit",
       "violation: declared dev dependency: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store -> voidforge-worldgen",
       "violation: declared dev dependency: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store -> voidforge-worldgen -> voidforge-testkit",
       "violation: declared dev dependency: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-testkit",
@@ -454,7 +461,7 @@ WEB_CASES = [
       "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host",
       "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-core",
       "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-store",
-      "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-testkit -> voidforge-rules"]),
+      "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-host -> voidforge-testkit -> voidforge-rules"])),
     # Since P0.6 every binary depends on telemetry, so telemetry -> server would be a cycle;
     # api-types is the reachable crate that declares the binary here.
     # replay, not server: the server depends on api-types since P3.2, so api-types -> server
@@ -462,11 +469,13 @@ WEB_CASES = [
     ("web on replay through api-types by path (a declaration cargo drops, in a reachable crate)",
      [("voidforge-api-types", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }'),
       ("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 1,
-     ["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-replay"]),
+     both(["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-replay"])),
     ("reachable crate declaring an allowed crate (telemetry on api-types)",
      [("voidforge-telemetry", "dependencies", "voidforge-api-types = { workspace = true }")], 0, []),
-    ("unreachable crate may declare anything (server on core; web does not depend on server)",
-     [("voidforge-server", "dependencies", "voidforge-core = { workspace = true }")], 0, []),
+    # Since the Phase 3 gate (D-055) the server itself is governed (it never depends on core
+    # directly), so an ungoverned crate that nothing isolated reaches stands in: replay.
+    ("unreachable crate may declare anything (replay on core; nothing isolated reaches replay)",
+     [("voidforge-replay", "dependencies", "voidforge-core = { workspace = true }")], 0, []),
     ("web on another workspace crate (rules)",
      [("voidforge-web", "dependencies", "voidforge-rules = { workspace = true }")], 1,
      # Since P1.2 rules depends on core, so web reaches core through it as well.
@@ -477,6 +486,34 @@ WEB_CASES = [
     ("cargo itself rejects web on server through [workspace.dependencies]",
      [("voidforge-web", "dependencies", "voidforge-server = { workspace = true }")], 2,
      ["stderr:voidforge-server", "stderr:workspace.dependencies"]),
+    # The Phase 3 gate (D-055, review-r1's R1-G8): the bots are isolated like web, and the server
+    # never depends on core directly. The server's dev-dependency on core (api_codes) is in the
+    # committed manifest, so the first case above shows it's allowed.
+    ("server on core (normal)",
+     [("voidforge-server", "dependencies", "voidforge-core = { workspace = true }")], 1,
+     ["violation: declared normal dependency: voidforge-server -> voidforge-core",
+      "violation: resolved normal path: voidforge-server -> voidforge-core"]),
+    # Not under another name: cargo itself refuses a second name for core beside the server's
+    # dev-dependency on it.
+    ("server on core by path",
+     [("voidforge-server", "dependencies", 'voidforge-core = { path = "../voidforge-core" }')], 1,
+     ["violation: declared normal dependency: voidforge-server -> voidforge-core",
+      "violation: resolved normal path: voidforge-server -> voidforge-core"]),
+    ("server on core as a build-dependency (allowed: links nothing into the server)",
+     [("voidforge-server", "build-dependencies", "voidforge-core = { workspace = true }")], 0, []),
+    ("bots on core",
+     [("voidforge-bots", "dependencies", "voidforge-core = { workspace = true }")], 1,
+     ["violation: declared normal dependency: voidforge-bots -> voidforge-core",
+      "violation: resolved normal path: voidforge-bots -> voidforge-core"]),
+    ("bots on rules as a dev-dependency",
+     [("voidforge-bots", "dev-dependencies", "voidforge-rules = { workspace = true }")], 1,
+     ["violation: declared dev dependency: voidforge-bots -> voidforge-rules",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-rules -> voidforge-core",
+      "violation: resolved dev path: voidforge-bots -> voidforge-rules",
+      "violation: resolved normal path: voidforge-bots -> voidforge-rules -> voidforge-core"]),
+    ("bots on replay by path (cargo ignores it: no library target)",
+     [("voidforge-bots", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }')], 1,
+     ["violation: declared normal dependency: voidforge-bots -> voidforge-replay"]),
     ("checker error: broken manifest is exit 2, not a pass",
      [("voidforge-web", "dependencies", "this is not toml")], 2, ["stderr:could not check"]),
 ]

@@ -13,7 +13,9 @@
 //! 4. runs `apply(command, t)`, or `advance_to(t)` when only time has passed;
 //! 5. appends the turn's records in one durable write (group commit: commands already waiting
 //!    join the turn, up to `max_batch`, with no added delay);
-//! 6. replies and publishes the read model.
+//! 6. publishes the read model, then replies: when a command's reply arrives, [`HostHandle::read`]
+//!    already shows its effect (D-036 as corrected by D-055). The API relies on it: a player reads
+//!    its own writes, and a new player's first view finds it joined.
 //!
 //! One record per step. A command record's events are the apply's advance followed by the
 //! command's own events, and replay compares the flattened list. An advance that fires no events
@@ -64,9 +66,9 @@ pub use voidforge_core::view;
 /// How a host runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostConfig {
-    /// The universe epoch in Unix milliseconds: game time is wall time minus this. An input: the
-    /// bootstrap (P2.9) records none, and the server's startup must supply the same value on every
-    /// start (Phase 3, decision log D-044).
+    /// The universe epoch in Unix milliseconds: game time is wall time minus this. An input:
+    /// `seed` records it once with the universe, and `serve` reads it back on every start, never
+    /// inventing one (decision log D-048, D-050).
     pub epoch_unix_ms: i64,
     /// How many commands may wait in the inbox before [`HostError::Busy`].
     pub inbox_capacity: usize,
@@ -677,7 +679,8 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             }
             self.stats.appends.fetch_add(1, Ordering::Relaxed);
         }
-        // 6. Reply and publish: every step that happened is durable or needs no record.
+        // 6. Publish, then reply: every step that happened is durable or needs no record, and a
+        // caller that reads after its reply sees its own effect (D-055).
         if failure.is_none() && changed {
             let seq = records.last().map_or(self.publish.borrow().seq, |r| r.seq);
             self.publish.send_replace(Arc::new(ReadModel {
@@ -907,4 +910,70 @@ pub async fn recover<S: LogStore>(
         snapshot_seq: seq,
         last_seq,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use voidforge_core::command::Action;
+    use voidforge_core::state::BuildingKind;
+    use voidforge_store::log::MemoryLog;
+    use voidforge_testkit::{ALICE, WorldBuilder, v0_rules};
+
+    use super::*;
+
+    /// Publish, then reply (D-036 as corrected by D-055; review-r1's R1-G5): when a command's
+    /// reply arrives, `read()` already shows its effect. Phase 3 relies on it: read-your-writes,
+    /// and a new player's first view after its join.
+    ///
+    /// Made certain, not raced: while the test holds a borrow of the read model, the host can't
+    /// publish (`watch` holds a read lock for every borrow), so with publish-then-reply the reply
+    /// can't arrive. Reply-then-publish would deliver it at once.
+    #[tokio::test]
+    async fn a_reply_never_arrives_before_its_read_model() {
+        let mut b = WorldBuilder::new();
+        let home = b.player(ALICE);
+        let world = b.build();
+        let epoch = 1_760_000_000_000;
+        let (handle, task) = spawn(
+            world.clone(),
+            v0_rules(),
+            MemoryLog::new,
+            ManualClock::new(epoch),
+            HostConfig::new(epoch, EngineBuild::new("0.1.0+host-test").unwrap()),
+        )
+        .unwrap();
+        let command = Command {
+            player: ALICE,
+            action: Action::BuildBuilding {
+                planet: home,
+                kind: BuildingKind::Drill,
+            },
+        };
+        let held = handle.read.borrow();
+        let reply = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.submit(command).await }
+        });
+        let mut reply = std::pin::pin!(reply);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), &mut reply)
+                .await
+                .is_err(),
+            "the reply arrived while the read model couldn't be published"
+        );
+        drop(held);
+        let receipt = tokio::time::timeout(Duration::from_secs(20), reply)
+            .await
+            .expect("the reply, once the publish can happen")
+            .unwrap()
+            .unwrap();
+        assert!(receipt.outcome.is_ok(), "{receipt:?}");
+        let read = handle.read();
+        assert!(read.seq >= receipt.seq, "{} < {}", read.seq, receipt.seq);
+        assert_ne!(*read.world, world, "the read model shows the Drill");
+        drop((handle, read));
+        task.join().unwrap();
+    }
 }

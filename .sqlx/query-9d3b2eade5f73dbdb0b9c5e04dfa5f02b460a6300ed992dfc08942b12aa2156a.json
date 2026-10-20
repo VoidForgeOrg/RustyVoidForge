@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM universe) AS \"used!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "used!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9d3b2eade5f73dbdb0b9c5e04dfa5f02b460a6300ed992dfc08942b12aa2156a"
+}

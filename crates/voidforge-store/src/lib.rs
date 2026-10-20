@@ -92,19 +92,106 @@ pub enum BootstrapError {
         /// How many accounts exist.
         count: i64,
     },
+    /// The database holds tables that aren't a Voidforge universe's: it isn't empty, and it
+    /// isn't ours. Nothing was migrated or written (D-055).
+    #[error(
+        "the database holds {count} tables that aren't a Voidforge universe's (for example {example}); seed only an empty database"
+    )]
+    Foreign {
+        /// How many such tables.
+        count: usize,
+        /// One of them, schema-qualified.
+        example: String,
+    },
 }
 
-/// Bootstraps a universe (Technical Plan P2.9; decision log D-043): connects to `url`, applies
-/// the migrations, and writes `snapshot` at seq 0 and the universe's epoch, in one transaction
-/// that holds the four tables locked and refuses unless the database is empty. A universe is
+/// The tables Voidforge's migrations create, and sqlx's own bookkeeping.
+const OWN_TABLES: [&str; 5] = [
+    "_sqlx_migrations",
+    "snapshots",
+    "log_records",
+    "accounts",
+    "universe",
+];
+
+/// Refuses a database that isn't empty **before anything is migrated**, so a refused seed writes
+/// no schema (D-055, review-r1's R1-G3). It reads the catalogue first, since the database may
+/// be unmigrated, or migrated only partly: any table outside [`OWN_TABLES`] is
+/// [`BootstrapError::Foreign`], and each of Voidforge's own tables that exists is read for rows.
+/// The locked check in [`bootstrap`] still decides a race between two seeds.
+async fn refuse_unless_empty(pool: &PgPool) -> Result<(), BootstrapError> {
+    let tables = sqlx::query!(
+        r#"SELECT schemaname AS "schema!", tablename AS "table!" FROM pg_tables
+            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY 1, 2"#
+    )
+    .fetch_all(pool)
+    .await?;
+    let foreign: Vec<_> = tables
+        .iter()
+        .filter(|t| !(t.schema == "public" && OWN_TABLES.contains(&t.table.as_str())))
+        .collect();
+    if let Some(first) = foreign.first() {
+        return Err(BootstrapError::Foreign {
+            count: foreign.len(),
+            example: format!("{}.{}", first.schema, first.table),
+        });
+    }
+    let has = |name: &str| {
+        tables
+            .iter()
+            .any(|t| t.schema == "public" && t.table == name)
+    };
+    let mut used = false;
+    if has("snapshots") {
+        used |= sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM snapshots) AS "used!""#)
+            .fetch_one(pool)
+            .await?;
+    }
+    if has("log_records") {
+        used |= sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM log_records) AS "used!""#)
+            .fetch_one(pool)
+            .await?;
+    }
+    if has("universe") {
+        used |= sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM universe) AS "used!""#)
+            .fetch_one(pool)
+            .await?;
+    }
+    if used {
+        let seq0_state_hash = if has("snapshots") {
+            sqlx::query_scalar!("SELECT state_hash FROM snapshots WHERE seq = 0")
+                .fetch_optional(pool)
+                .await?
+        } else {
+            None
+        };
+        return Err(BootstrapError::NotEmpty { seq0_state_hash });
+    }
+    if has("accounts") {
+        let count = sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM accounts"#)
+            .fetch_one(pool)
+            .await?;
+        if count > 0 {
+            return Err(BootstrapError::HasAccounts { count });
+        }
+    }
+    Ok(())
+}
+
+/// Bootstraps a universe (Technical Plan P2.9; decision log D-043): connects to `url`, refuses a
+/// database that isn't empty **before migrating it** (D-055), applies the migrations, and writes
+/// `snapshot` at seq 0 and the universe's epoch, in one transaction that holds the four tables
+/// locked and refuses unless the database is empty. A universe is
 /// never overwritten, an accounts-only database is not empty (D-047), and a universe never
 /// exists without its epoch (D-050).
 ///
 /// # Errors
 /// [`BootstrapError::EpochOutOfRange`] before connecting, if the epoch is outside the window;
+/// [`BootstrapError::Foreign`] if any table isn't Voidforge's;
 /// [`BootstrapError::NotEmpty`] if any snapshot, log record or epoch exists;
 /// [`BootstrapError::HasAccounts`] if only accounts exist; otherwise the connection, migration
-/// or write failure.
+/// or write failure. The first three come before anything is migrated.
 pub async fn bootstrap(
     url: &str,
     snapshot: &snapshot::Snapshot,
@@ -119,6 +206,7 @@ pub async fn bootstrap(
         .max_connections(1)
         .connect_with(options)
         .await?;
+    refuse_unless_empty(&pool).await?;
     migrate(&pool).await.map_err(|StoreError::Migrate(e)| e)?;
     let rules_version = i32::try_from(row.rules_version)
         .map_err(|_| BootstrapError::RulesVersion(row.rules_version))?;

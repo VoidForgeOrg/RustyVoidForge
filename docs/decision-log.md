@@ -496,7 +496,7 @@ Each entry records its date, the package that made it, the decision, the reasons
 - Date and package: 2026-10-18, P1.12. Proposed by dev-build. Lead ruling overnight 2026-10-17/18, endorsed by the advisor 2026-10-18. (Slice 18, `ruling-lead-overnight.md`.) **Placement: Tom chose option A on 2026-10-18** (slice 25), replacing the provisional option B.
 - Decision:
   - **Entry point**: `voidforge_worldgen::generate(seed, players, &Rules) -> Result<World, WorldgenError>`.
-    - It produces the universe's first `World`: at time 0, under the rules' version, with the seed recorded. The epoch isn't in the World: it's the host's configuration. **Amended at the Phase 2 gate** (D-044): this once said the host sets the epoch in P2.9, which P2.9 didn't do. Phase 3 owns a stable epoch source.
+    - It produces the universe's first `World`: at time 0, under the rules' version, with the seed recorded. The epoch isn't in the World: it's the host's configuration. **Amended at the Phase 2 gate** (D-044): this once said the host sets the epoch in P2.9, which P2.9 didn't do. Phase 3 owns a stable epoch source. **Amended by D-048 and D-050:** `seed` records the epoch durably, and `serve` reads it.
     - It holds `players × planets_per_expected_player` unowned planets with the rules' slots and caps and empty stocks, plus `players` homeworld candidates.
     - Every planet is solved (D-025), and the links hold.
   - **Placement, option A** (Tom's decision, 2026-10-18; the brief is `missions/voidforge-mvp/tom-decision-worldgen.md`):
@@ -675,10 +675,10 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **The write path**, in order:
     1. wait for a command or the next queue entry (`select!`, biased to the inbox, against a sleep until `epoch + at_ms`), never polling; an idle host doesn't wake (`HostStats::wakes`);
     2. idempotency is P2.4;
-    3. stamp t = max(wall clock − epoch, last t), where the clock is injected (`SystemClock`, or `ManualClock` for tests) and the epoch is configuration (`HostConfig::epoch_unix_ms`; **amended at the Phase 2 gate**: this once said "until P2.9", but the bootstrap records no epoch, and Phase 3 owns a stable source, D-044); take the next seq, gap-free from 1 and after existing records, and refuse a World behind the log's last record;
+    3. stamp t = max(wall clock − epoch, last t), where the clock is injected (`SystemClock`, or `ManualClock` for tests) and the epoch is configuration (`HostConfig::epoch_unix_ms`; **amended at the Phase 2 gate**: this once said "until P2.9", but the bootstrap records no epoch, and Phase 3 owns a stable source, D-044; **amended by D-048 and D-050:** `seed` records it and `serve` reads it); take the next seq, gap-free from 1 and after existing records, and refuse a World behind the log's last record;
     4. `apply(command, t)`, or `advance_to(t)` when only time has passed;
     5. one durable `append` for the whole turn: commands already waiting join it, up to `max_batch` (64), with no added delay;
-    6. reply, then publish.
+    6. publish, then reply. **Corrected at the Phase 3 gate (D-055):** this once said "reply, then publish", but the code has always published first, and the API relies on it: when a command's reply arrives, the read model already shows its effect. A host test now pins the order.
   - **One record per step.**
     - A command record's `events` are `Applied.advanced` followed by the command's own events.
     - An advance record's `events` are what `advance_to` returned.
@@ -947,7 +947,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - It doesn't help a direct `cargo nextest` against `voidforge_test`, which takes no lock, and sqlx's per-test database names are fixed, so two runs of the same test still collide (the later one fails, and nothing is killed).
     - Checked on the local stack: a live holder makes a run wait, then fail; an in-use test database stops a run and survives it; a stale lock is refused. Two `just db-test` runs started together (self-test, then `database.sh`) run one after the other, both green: the second waits for the real lock.
   - **The universe epoch** (review-r2 INFO). D-031 and D-036 said P2.9 would record or set the epoch. It doesn't: the bootstrap writes a time-0 World, and `HostConfig::epoch_unix_ms` is supplied by the caller. Those promises are amended.
-    - **Obligation for Phase 3, P3.4** (the first package that starts the host in the server, projects views to now and returns UTC times): the server's startup takes a stable epoch, the same value on every start, from configuration or from a durable record written at seeding. A changed epoch would move game time for every player.
+    - **Obligation for Phase 3, P3.4** (the first package that starts the host in the server, projects views to now and returns UTC times): the server's startup takes a stable epoch, the same value on every start, from configuration or from a durable record written at seeding. A changed epoch would move game time for every player. **Amended by D-048 and D-050:** it moved to P3.4s, and the epoch is a durable record written by `seed`.
   - **D-043's wording**: the default cube's limits are `Exhausted` from about 241 to 256 players (seed-dependent) and `Infeasible` from 902 to 5,000, below the 5,000-player cap.
 - Carried: `crash_nightly` shares the per-PR `file-{seed}` scratch prefix; it gets its own before P5.3 schedules it (review-r1 INFO).
 - Where it's enforced: `crates/voidforge-store/src/{golden.rs, verify.rs}`, `crates/voidforge-replay/src/main.rs`, `crates/voidforge-store/tests/verify.rs`, `crates/voidforge-host/tests/{golden.rs, common/mod.rs}`, `crates/voidforge-replay/tests/{cli.rs, postgres.rs}`, `.github/scripts/{database.sh, database-lock.sh, test-database-lock.sh}`, `.github/workflows/ci.yml`, `justfile`.
@@ -994,7 +994,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     | 503 | `busy` (a full inbox, with Retry-After), `unavailable` |
 
     The 422 codes are kept verbatim mechanically: `crates/voidforge-server/tests/api_codes.rs` (the server's tests may use the core, D-043) maps every `Rejection` to its `ErrorCode` in an exhaustive match. So a new core reason code fails to compile until the API names it, and every API game code must deserialize as a `Rejection` with the same `code()`. The API's codes and the command-line tools' exit codes (D-041) are separate contracts.
-  - **`openapi.json` is checked in** beside the crate. A freshness test fails on any byte of difference from `openapi()`, and `just openapi` rewrites it, as `just bless` does for goldens (D-040). **A reviewer checks every change to it.** The document has the six paths (described in api-types on doc-only functions, so P3.4's handlers must match), the bearer scheme (P3.2) and the required `Idempotency-Key` header. A modifier closes each variant of the command and event unions, because utoipa leaves a tagged variant's object open while serde refuses unknown fields there.
+  - **`openapi.json` is checked in** beside the crate. A freshness test fails on any byte of difference from `openapi()`, and `just openapi` rewrites it, as `just bless` does for goldens (D-040). **A reviewer checks every change to it.** The document has the six paths (**amended by D-049 T2:** seven, with the public `GET /openapi.json`; described in api-types on doc-only functions, so P3.4's handlers must match), the bearer scheme (P3.2) and the required `Idempotency-Key` header. A modifier closes each variant of the command and event unions, because utoipa leaves a tagged variant's object open while serde refuses unknown fields there.
   - **Dependencies:**
     - **utoipa `=6.0.0`** (macros only, default features off) adds 2 crates (utoipa, utoipa-gen), with no new license and no duplicate. It reaches the web client and the bots through api-types.
     - **jsonschema `=0.59.0`** (dev-only, default features off, so no HTTP or TLS) validates against draft 2020-12, the dialect of OpenAPI 3.1. It adds 33 crates and no duplicate. boon `=0.6.1` (10 crates) was used first; repair round 1 replaced it with the ruled fallback because boon compares every number as an f64, so it can't tell 2^63 - 1 from 2^63 or 2^64 - 1 from 2^64. jsonschema compares integers exactly (num-cmp).
@@ -1113,7 +1113,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - add a TLS feature to reqwest for an `https` issuer (until then, an https issuer means 503, never an accept);
     - confirm aws-lc-sys builds in the cargo-chef image, and on musl if the image uses it.
   - **P3.6:** bring `tests/dex.rs` into CI with the e2e job's dex.
-  - **P3.4:** put the extractor on every route, and run `refresh_forever` beside the server.
+  - **P3.4:** put the extractor on every route, and run `refresh_forever` beside the server. **Amended by D-048:** `refresh_forever` and `AuthArgs` moved to P3.4s (`serve`); P3.4 kept the extractor.
 - Where it's enforced: `crates/voidforge-server/src/{lib.rs, auth.rs}`, `crates/voidforge-server/tests/{auth.rs, dex.rs}`, `crates/voidforge-server/AGENTS.md`, `justfile` (`dex-test`), `deny.toml`, the [version table](versions.md).
 
 ### D-047: Accounts: principal to player, and Join game exactly once
@@ -1156,7 +1156,7 @@ Each entry records its date, the package that made it, the decision, the reasons
     - **Kill points**, as P2.8's harness: the binary re-runs itself as a child that recovers, serves one call and aborts at a named point in the test's own wrappers. Then a fresh child serves the call, and the test asserts one row, one accepted join, and the reported player in the World. The points are `account.before`, `account.after`, `append.before` and `append.after`. A death inside the insert statement reduces to before or after, since a statement commits whole or not at all, and P2.8 already proved Postgres rolls back an open transaction on a dead client.
     - `tests/postgres.rs`: `seed` on an accounts-only database refuses with exit 3 and writes nothing. An account inserted but not yet committed when `seed` starts makes it wait on the lock and then refuse, so the refusal holds under a race.
 - Carried:
-  - **P3.4:** take `Player` on every route that acts as a player, and build `Players<PgAccounts>` in `serve` with the host it starts (the epoch is D-044's).
+  - **P3.4:** take `Player` on every route that acts as a player, and build `Players<PgAccounts>` in `serve` with the host it starts (the epoch is D-044's). **Amended by D-048:** building `Players<PgAccounts>` in `serve` moved to P3.4s; P3.4 kept `Player` on every route.
   - **P3.8:** a refused account's calls append nothing, but each costs an indexed read; the rate limit bounds them.
 - Where it's enforced: `crates/voidforge-store/src/{accounts.rs, lib.rs}`, `crates/voidforge-server/src/{accounts.rs, codes.rs, auth.rs, main.rs}`, `crates/voidforge-host/src/lib.rs`, `crates/voidforge-core/src/command.rs`, the core's, host's, server's and store's AGENTS.md, `crates/voidforge-server/tests/{accounts.rs, postgres.rs, api_codes.rs}`, `.github/scripts/database.sh`, `deny.toml`, and the [version table](versions.md).
 
@@ -1277,7 +1277,7 @@ Each entry records its date, the package that made it, the decision, the reasons
       - `--bind` / `VOIDFORGE_BIND`, default `127.0.0.1:8080` (P3.6 sets `0.0.0.0:8080`);
       - `--drain-secs` / `VOIDFORGE_DRAIN_SECS`, from 0 to 60, default 5;
       - D-046's `AuthArgs`, flattened.
-    - **`seed` stays on `DATABASE_URL`** (the lead, T7). Unlike `serve`, `seed` *can* write to an empty database. So the owner's empty `voidforge` is protected only by `just seed` naming `voidforge_dev`, not by `seed`'s refusal of a non-empty database.
+    - **`seed` stays on `DATABASE_URL`** (the lead, T7). Unlike `serve`, `seed` *can* write to an empty database. So the owner's empty `voidforge` is protected only by `just seed` naming `voidforge_dev`, not by `seed`'s refusal of a non-empty database. **Superseded by D-055:** `seed` takes only `--database-url` or `VOIDFORGE_DATABASE_URL`, like `serve`, and refuses a database that isn't empty before migrating it.
     - **Startup:**
       1. The settings and the rules file are checked.
       2. **A database without a universe is refused before anything is migrated** (the lead's T2 amendment): no `snapshots` table, or an empty one, is exit 3 ("seed it first") and the database is untouched. `serve` never creates a schema; `seed` does.
@@ -1684,3 +1684,29 @@ Each entry records its date, the package that made it, the decision, the reasons
   - `crates/voidforge-api-types/src/lib.rs` and `openapi.json`;
   - `crates/voidforge-bots/src/{client.rs, scenario.rs}` and its AGENTS.md;
   - the Technical Plan's Tech stack line, and `docs/versions.md`'s list of crates still to come.
+
+### D-055: Phase 3 gate repair
+
+- Date and package: 2026-10-20, the Phase 3 gate on 5099a08. The verdicts are in `missions/voidforge-mvp/phase3-gate.md`: QA PASS, review-r1 CLEAR with eight LOWs (`phase3-r1.md`), review-r2 one bounded repair (`phase3-r2.md`). The lead's brief (`phase3-gate-repair.md`) took seven items into one repair. G4 (startup signals and the lock's lifetime) goes to P5 with I6, and G5's carry and record hygiene is the lead's, in the mission SPEC.
+- Decision:
+  - **L1 / G7, the subject in CI's output:** `tests/dex.rs` printed the real-dex test user's subject, and CI runs it `--no-capture`, so it reached the public e2e log (R2's L1, R1's G7). D-047's rule has no test exception: it now prints the subject's length, and keeps the non-empty assertion.
+  - **G1, the contract says what the server sends:**
+    - every route's 503 is "busy or unavailable, with Retry-After": a first call's join can give `busy` on the GET routes too;
+    - every 503 declares its `Retry-After` header, and every 401 its `WWW-Authenticate`. Every 503 path does send one (auth, the host, the account store, a stale projection, the unbuilt board), and both 401s send the other;
+    - `/leaderboard`'s stale "(P3.5; until then 503)" text is corrected;
+    - **the routes harness checks headers now:** a response carries `Retry-After` and `WWW-Authenticate` exactly when the document declares them for its status, extending D-049's status parity (T7).
+  - **G2, HEAD:** axum's `get` also answered HEAD by running the GET handler, `Player` included, so a HEAD could join and spend read budget through a method the contract doesn't name. `api::layered` now refuses HEAD as 404 `not_found` before routing, as D-049 T3 says for any other method. A test sends HEAD to every route in the table, as a new principal and as Alice on a one-read budget: every answer is 404, no account is made, nothing is appended, and Alice's one read is still there.
+  - **G3, seed's owner safety** (supersedes D-050 T7's acceptance):
+    - `seed` takes its database only from `--database-url` or `VOIDFORGE_DATABASE_URL`, never `DATABASE_URL`, like `serve`. A stray `DATABASE_URL` alone is a usage error (exit 2). `seed.sh` and `e2e.sh` set the new variable.
+    - **`bootstrap` refuses a database that isn't empty before migrating it**, so a refused seed writes no schema. It reads the catalogue first, since the database may be unmigrated or partly migrated: any table outside Voidforge's own (and sqlx's bookkeeping) is the new `Foreign` refusal; each of Voidforge's tables that exists is read for rows (`NotEmpty`, `HasAccounts`, as before). All are exit 3. The locked check after migrating stays and still decides a race between two seeds.
+    - The docs' example URL is `voidforge_dev` (AGENTS.md, `deploy/README.md`): nothing defaults to the owner's `voidforge`.
+  - **G5, publish, then reply:** D-036 and the host's module doc said "reply, then publish". The code has always published first, and Phase 3 relies on it (read-your-writes; a new player's first view finds it joined). The docs are corrected, and a host test pins the order with certainty: while the test holds a borrow of the read model, `watch` can't publish, so the reply mustn't arrive; released, it arrives with its effect visible.
+  - **G6, record hygiene:** "Amended by" markers on D-045's six paths (D-049 T2), D-046's and D-047's P3.4 items (D-048), and D-044's epoch lines in D-031, D-036 and D-044 (D-048, D-050). The Architectural Design's endpoint table gains `GET /openapi.json`, and its privacy line says roster ships are owner-only, as the Game Design does. `HostConfig::epoch_unix_ms`'s stale comment is corrected.
+  - **G8, layering by machine:** the dependency checker (`tests/guardrails/check_web_deps.py`) now also checks **voidforge-bots** like web (no workspace crate but api-types and telemetry, through any kind, transitively), and **voidforge-server never depending on voidforge-core directly** as a normal dependency (its tests may; a build-dependency links nothing in). The fixtures add failing cases for each, and the cases that inject into api-types or telemetry now report the bots' paths too. The "unreachable crate" case moved from server to replay, since the server is governed now.
+- Where it's enforced:
+  - `crates/voidforge-server/{src/main.rs, src/api/{mod.rs, error.rs}, tests/{dex.rs, routes.rs, cli.rs, postgres.rs, serve.rs}}` and its AGENTS.md;
+  - `crates/voidforge-store/src/lib.rs` and `.sqlx/`;
+  - `crates/voidforge-host/src/lib.rs`;
+  - `crates/voidforge-api-types/src/lib.rs` and `openapi.json`;
+  - `tests/guardrails/{check_web_deps.py, run_fixtures.py}`;
+  - `.github/scripts/{seed.sh, e2e.sh}`, AGENTS.md, `deploy/README.md`, the Architectural Design.
