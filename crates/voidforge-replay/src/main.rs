@@ -303,15 +303,16 @@ fn main() -> ExitCode {
     drop(span);
     match telemetry.shutdown() {
         Ok(()) => ExitCode::from(exit as u8),
-        Err(error) => {
+        // Delivery is telemetry-check's whole job: there it fails.
+        Err(error) if check => {
             eprintln!("{SERVICE}: {error}");
-            // A failed shutdown is never a success (D-016); a failing verification keeps its code.
-            let code = if exit == Exit::Verified {
-                Exit::Telemetry
-            } else {
-                exit
-            };
-            ExitCode::from(code as u8)
+            ExitCode::from(Exit::Telemetry as u8)
+        }
+        // Otherwise the exit code reports the verification; undelivered telemetry is loud, never
+        // a failed one (D-064 T6, amending D-016).
+        Err(error) => {
+            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the command (D-064)");
+            ExitCode::from(exit as u8)
         }
     }
 }

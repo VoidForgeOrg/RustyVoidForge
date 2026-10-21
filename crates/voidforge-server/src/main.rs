@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
-use voidforge_server::serve::{self, ServeArgs, ServeExit};
+use voidforge_server::serve::{self, ServeArgs};
 use voidforge_store::BootstrapError;
 use voidforge_store::snapshot::{self, ENGINE_BUILD, EngineBuild};
 use voidforge_store::verify::hex;
@@ -120,7 +120,6 @@ fn main() -> ExitCode {
             return ExitCode::from(Exit::Telemetry as u8);
         }
     };
-    let serving = matches!(cli.command, Command::Serve(_));
     let check = matches!(cli.command, Command::TelemetryCheck);
     let (span, exit) = match cli.command {
         Command::Seed {
@@ -158,21 +157,17 @@ fn main() -> ExitCode {
     drop(span);
     match telemetry.shutdown() {
         Ok(()) => ExitCode::from(exit),
-        // serve's exit code reports the stop (D-050: 0 only with the final snapshot at the log
-        // head); telemetry that couldn't be delivered is loud, never a failed stop (D-064, T2).
-        Err(error) if serving => {
-            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the stop (D-064)");
-            ExitCode::from(exit)
-        }
-        Err(error) => {
+        // Delivery is telemetry-check's whole job: there it fails (5).
+        Err(error) if check => {
             eprintln!("{SERVICE}: {error}");
-            // A failed shutdown is never a success (D-016); a failure keeps its own code.
-            let code = if exit == Exit::Seeded as u8 || exit == ServeExit::Clean as u8 {
-                Exit::Telemetry as u8
-            } else {
-                exit
-            };
-            ExitCode::from(code)
+            ExitCode::from(Exit::Telemetry as u8)
+        }
+        // Otherwise the exit code reports the command (seeded; for serve D-050's stop, 0 only
+        // with the final snapshot at the log head): undelivered telemetry is loud, never a
+        // failed command (D-064, T2 and T6, amending D-016).
+        Err(error) => {
+            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the command (D-064)");
+            ExitCode::from(exit)
         }
     }
 }

@@ -223,6 +223,7 @@ fn main() -> ExitCode {
             return ExitCode::from(5);
         }
     };
+    let check = matches!(cli.command, Command::TelemetryCheck);
     let code =
         match cli.command {
             Command::TelemetryCheck => {
@@ -263,10 +264,16 @@ fn main() -> ExitCode {
         };
     match telemetry.shutdown() {
         Ok(()) => ExitCode::from(code),
-        Err(error) => {
+        // Delivery is telemetry-check's whole job: there it fails (5).
+        Err(error) if check => {
             eprintln!("{SERVICE}: {error}");
-            // A failed shutdown is never a pass (D-016); a failure keeps its own code.
-            ExitCode::from(if code == 0 { 5 } else { code })
+            ExitCode::from(5)
+        }
+        // Otherwise the exit code reports the command; undelivered telemetry is loud, never a
+        // failed scenario (D-064 T6, amending D-016).
+        Err(error) => {
+            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the command (D-064)");
+            ExitCode::from(code)
         }
     }
 }

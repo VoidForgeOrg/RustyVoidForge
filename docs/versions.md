@@ -68,9 +68,9 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | --- | --- | --- | --- | --- |
 | tracing | =0.1.44 | telemetry, all four binaries | P0.6 | D-017 |
 | tracing-subscriber | =0.3.23 (std, fmt, registry) | telemetry; server, dev-dependency only (the privacy test's capture, D-047); web, dev-dependency only: the login's leak test (D-057) | P0.6 | D-017 |
-| opentelemetry | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
-| opentelemetry_sdk | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
-| opentelemetry-otlp | =0.33.1 (http-proto, reqwest-blocking-client, trace) | telemetry | P0.6 | D-017 |
+| opentelemetry | =0.33.1 (trace, metrics) | telemetry | P0.6 | D-017, D-064 |
+| opentelemetry_sdk | =0.33.1 (trace, metrics; testing behind telemetry's dev-only `testing` feature) | telemetry | P0.6 | D-017, D-064 |
+| opentelemetry-otlp | =0.33.1 (http-proto, reqwest-blocking-client, trace, metrics) | telemetry | P0.6 | D-017, D-064 |
 | tracing-opentelemetry | =0.34.0 (no default features) | telemetry | P0.6 | D-017 |
 | thiserror | =2.0.21 | telemetry; core from P1.1; rules from P1.2 | P0.6 | D-017, D-018, D-020 |
 | proptest | =1.12.0 (std only, no fork or timeout) | core and testkit, dev-dependency only | P1.1 | D-019, D-024 |
@@ -84,7 +84,7 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest. The server adds net, rt-multi-thread and signal for `serve` (P3.4s, D-050); signal brings one crate, signal-hook-registry 1.4.8 (MIT OR Apache-2.0). The bots use it from P3.6 (D-052), with test-util for paused time in their tests (no new crate). The web app from P4.1, with net, rt-multi-thread and signal as serve has (D-057) | P2.3 | D-036, D-050, D-052 |
 | clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line; the server's from P2.9; the bots' from P3.6; the web app's from P4.1 (D-057) | P2.7 | D-041, D-052 |
 | utoipa | =6.0.0 (macros; default features off) | api-types, the OpenAPI document | P3.1 | D-045 |
-| axum | =0.8.9 (http1, tokio, json, query; default features off) | server: the token extractor, the routes (query since P3.4, D-049); the tests' local servers; web, its routes from P4.1 (D-057) | P3.2 | D-046, D-049 |
+| axum | =0.8.9 (http1, tokio, json, query, matched-path since P5.1 for the request span's route, D-064; default features off) | server: the token extractor, the routes (query since P3.4, D-049); the tests' local servers; web, its routes from P4.1 (D-057) | P3.2 | D-046, D-049 |
 | jsonwebtoken | =11.1.0 (aws_lc_rs; default features off, so no PEM) | server, token signatures (RS256); web, the ID token check from P4.1 (D-057) | P3.2 | D-046 |
 | reqwest | =0.13.5 (json; default features off, no TLS until P5) | server, dex's discovery document and keys; already in the tree through telemetry's OTLP exporter. The bots' HTTP client from P3.6: dex's token endpoint and the API. The web app's, with `form` for the token POST, from P4.1 (D-057) | P3.2 | D-046, D-052 |
 | aws-lc-rs | =1.18.2 | server, dev-dependency only: generates the token tests' RSA keys (also jsonwebtoken's backend). A normal dependency of the web app from P4.1: its CSPRNG and SHA-256 (D-057) | P3.2 | D-046 |
