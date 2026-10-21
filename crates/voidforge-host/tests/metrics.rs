@@ -10,7 +10,7 @@ use voidforge_core::quantity::MS_PER_HOUR;
 use voidforge_core::state::BuildingKind;
 use voidforge_store::log::MemoryLog;
 use voidforge_telemetry::testing::capture;
-use voidforge_testkit::{ALICE, WorldBuilder, v0_rules};
+use voidforge_testkit::{ALICE, BOB, WorldBuilder, v0_rules};
 
 fn value(name: &str) -> Option<f64> {
     capture().points(name).first().map(|(v, _)| *v)
@@ -30,6 +30,7 @@ async fn the_five_metrics_move_with_the_game() {
     capture();
     let mut b = WorldBuilder::new();
     let home = b.player(ALICE);
+    let bobs = b.player(BOB);
     let world = b.build();
     let drill = move || Command {
         player: ALICE,
@@ -42,6 +43,8 @@ async fn the_five_metrics_move_with_the_game() {
     let clock = clock_at(MS_PER_HOUR);
     let mut config = common::config();
     config.snapshot_every_records = 1;
+    // Room for two waiting commands, so a third is refused as busy.
+    config.inbox_capacity = 2;
     let (handle, task) = voidforge_host::spawn(
         world,
         v0_rules(),
@@ -61,10 +64,23 @@ async fn the_five_metrics_move_with_the_game() {
         "no snapshot yet"
     );
 
-    // A drill: one command step, one append, then a snapshot (every record), and a construction
-    // in the queue.
-    gated.release(1);
+    // Two drills: command steps, appends, a snapshot after each (every record), and
+    // two planets' entries in the queue, due at different times.
+    gated.release(2);
     tokio::time::timeout(PATIENCE, handle.submit(drill()))
+        .await
+        .unwrap()
+        .unwrap();
+    // A minute later, on Bob's planet, so its entry comes due well after Alice's.
+    clock.set(EPOCH + MS_PER_HOUR + 60_000);
+    let refinery = Command {
+        player: BOB,
+        action: Action::BuildBuilding {
+            planet: bobs,
+            kind: BuildingKind::Drill,
+        },
+    };
+    tokio::time::timeout(PATIENCE, handle.submit(refinery))
         .await
         .unwrap()
         .unwrap();
@@ -78,6 +94,18 @@ async fn the_five_metrics_move_with_the_game() {
         .first()
         .map(|e| e.at_ms)
         .expect("a construction is queued");
+    let newest = handle.read().world.queue().last().map(|e| e.at_ms).unwrap();
+    let all: Vec<i64> = handle
+        .read()
+        .world
+        .queue()
+        .iter()
+        .map(|e| e.at_ms)
+        .collect();
+    assert!(
+        newest > due + 5_000,
+        "two entries far apart, so lag must come from the oldest: {all:?}"
+    );
 
     // Hold the host in its next append: commands wait in the inbox, and time passes the queued
     // entry's due time without the host processing it.
@@ -85,7 +113,7 @@ async fn the_five_metrics_move_with_the_game() {
         let h = handle.clone();
         async move { h.submit(drill()).await }
     });
-    gated.entered(2).await;
+    gated.entered(3).await;
     let waiting: Vec<_> = (0..2)
         .map(|_| {
             let h = handle.clone();
@@ -93,6 +121,11 @@ async fn the_five_metrics_move_with_the_game() {
         })
         .collect();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // The inbox is full: a third is refused at once, and isn't counted as waiting.
+    assert_eq!(
+        handle.submit(drill()).await,
+        Err(voidforge_host::HostError::Busy)
+    );
     assert_eq!(
         value("voidforge.host.inbox.depth"),
         Some(2.0),
