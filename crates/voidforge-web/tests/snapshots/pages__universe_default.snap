@@ -13,7 +13,7 @@ expression: pretty(body)
 <hr>
 <h1>Universe</h1>
 <p>Planets within 100.0 u of (150.0, −20.5, 999.9), around <a href="/planets/7">Planet #7</a>.</p>
-<p>As of 18:04:12 UTC. Nothing is scheduled to change these values. <a href="/universe">Refresh</a></p>
+<p>As of 18:04:12 UTC. Nothing is scheduled to change these values, unless another player's fleet arrives. <a href="/universe">Refresh</a></p>
 <form method="get" action="/universe">
 <p>Centre: <label>x <input type="text" name="x" value="150.0" size="10"></label> <label>y <input type="text" name="y" value="-20.5" size="10"></label> <label>z <input type="text" name="z" value="999.999" size="10"></label> <label>Radius <input type="text" name="radius" value="100.0" size="8"> u</label> <button type="submit">Search</button></p></form>
 <table>

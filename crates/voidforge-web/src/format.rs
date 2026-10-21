@@ -198,27 +198,70 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// A time as `18:04:15 UTC`, with the date (`2026-10-21 06:00:00 UTC`) only when it isn't
-/// `as_of`'s date (§3).
-#[must_use]
-pub fn clock(t: &Timestamp, as_of: &Timestamp) -> String {
-    let (text, day) = (t.as_str(), t.as_str().get(..10));
-    let time = text.get(11..19).unwrap_or(text);
-    if day == as_of.as_str().get(..10) {
-        format!("{time} UTC")
+/// A proleptic Gregorian date from days since 1970-01-01 (Howard Hinnant's `civil_from_days`),
+/// the inverse of [`days_from_civil`].
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(month <= 2), month, day)
+}
+
+/// The whole second a time is shown at (§3, P4.3's design review R1): a time after `as_of` is
+/// rounded **up**, so it's never shown before it happens; `as_of` itself and any time before it
+/// are cut. A countdown is then the difference of the two times as shown, so they agree.
+fn shown_secs(t_ms: i64, as_of_ms: i64) -> i64 {
+    let secs = t_ms.div_euclid(1_000);
+    if t_ms > as_of_ms {
+        secs + i64::from(t_ms.rem_euclid(1_000) != 0)
     } else {
-        format!("{} {time} UTC", day.unwrap_or(""))
+        secs
     }
 }
 
-/// A time with how long until it, against the view's `as_of`: `18:04:15 UTC (in 3 s)`, rounded
-/// **up** to the second, so it never says "in 0 s" before it happens. A time at or before
-/// `as_of` (a stale view) is the clock alone: `18:04:15 UTC` (§3).
+/// Unix seconds as (`2026-10-21`, `06:00:00`).
+fn civil(secs: i64) -> (String, String) {
+    let (year, month, day) = civil_from_days(secs.div_euclid(86_400));
+    let s = secs.rem_euclid(86_400);
+    (
+        format!("{year:04}-{month:02}-{day:02}"),
+        format!("{:02}:{:02}:{:02}", s / 3_600, s % 3_600 / 60, s % 60),
+    )
+}
+
+/// A time as `18:04:15 UTC`, with the date (`2026-10-21 06:00:00 UTC`) only when it isn't the
+/// date `as_of` is shown on (§3). Rounded by [`shown_secs`]: up after `as_of`, cut otherwise.
+#[must_use]
+pub fn clock(t: &Timestamp, as_of: &Timestamp) -> String {
+    let Some((t_ms, a_ms)) = unix_ms(t).zip(unix_ms(as_of)) else {
+        return t.as_str().to_owned();
+    };
+    let (day, time) = civil(shown_secs(t_ms, a_ms));
+    let (as_of_day, _) = civil(a_ms.div_euclid(1_000));
+    if day == as_of_day {
+        format!("{time} UTC")
+    } else {
+        format!("{day} {time} UTC")
+    }
+}
+
+/// A time with how long until it, against the view's `as_of`: `18:04:15 UTC (in 3 s)`. The
+/// countdown is the difference of the two times as shown, so it never says "in 0 s" before it
+/// happens and always agrees with the clocks beside it. A time at or before `as_of` (a stale
+/// view) is the clock alone: `18:04:15 UTC` (§3).
 #[must_use]
 pub fn at(t: &Timestamp, as_of: &Timestamp) -> String {
     let shown = clock(t, as_of);
     match unix_ms(t).zip(unix_ms(as_of)) {
-        Some((t_ms, a_ms)) if t_ms > a_ms => format!("{shown} (in {})", duration(t_ms - a_ms)),
+        Some((t_ms, a_ms)) if t_ms > a_ms => {
+            let secs = shown_secs(t_ms, a_ms) - a_ms.div_euclid(1_000);
+            format!("{shown} (in {})", duration(secs.saturating_mul(1_000)))
+        }
         _ => shown,
     }
 }
@@ -583,10 +626,20 @@ mod tests {
     #[test]
     fn clocks_add_the_date_only_on_another_day() {
         let as_of = ts("2026-10-20T18:04:12.000Z");
+        // A time after `as_of` rounds up; one before it is cut (R1).
         assert_eq!(
             clock(&ts("2026-10-20T18:04:15.999Z"), &as_of),
+            "18:04:16 UTC"
+        );
+        assert_eq!(
+            clock(&ts("2026-10-20T18:04:15.000Z"), &as_of),
             "18:04:15 UTC"
         );
+        assert_eq!(
+            clock(&ts("2026-10-20T18:04:11.999Z"), &as_of),
+            "18:04:11 UTC"
+        );
+        assert_eq!(clock(&as_of, &as_of), "18:04:12 UTC");
         assert_eq!(
             clock(&ts("2026-10-21T06:00:00.000Z"), &as_of),
             "2026-10-21 06:00:00 UTC"
@@ -603,10 +656,10 @@ mod tests {
         let as_of = ts("2026-10-20T18:04:12.000Z");
         let at_ = |t: &str| at(&ts(t), &as_of);
         assert_eq!(at_("2026-10-20T18:04:12.000Z"), "18:04:12 UTC");
-        assert_eq!(at_("2026-10-20T18:04:12.001Z"), "18:04:12 UTC (in 1 s)");
-        assert_eq!(at_("2026-10-20T18:04:12.999Z"), "18:04:12 UTC (in 1 s)");
+        assert_eq!(at_("2026-10-20T18:04:12.001Z"), "18:04:13 UTC (in 1 s)");
+        assert_eq!(at_("2026-10-20T18:04:12.999Z"), "18:04:13 UTC (in 1 s)");
         assert_eq!(at_("2026-10-20T18:04:13.000Z"), "18:04:13 UTC (in 1 s)");
-        assert_eq!(at_("2026-10-20T18:04:13.001Z"), "18:04:13 UTC (in 2 s)");
+        assert_eq!(at_("2026-10-20T18:04:13.001Z"), "18:04:14 UTC (in 2 s)");
         assert_eq!(at_("2026-10-20T18:04:15.000Z"), "18:04:15 UTC (in 3 s)");
         assert_eq!(at_("2026-10-20T18:04:11.999Z"), "18:04:11 UTC");
         assert_eq!(
@@ -619,6 +672,56 @@ mod tests {
             at(&ts("2028-03-01T00:00:00.000Z"), &feb),
             "2028-03-01 00:00:00 UTC (in 1 d)"
         );
+        // dev-design's R1 example: `as_of` 08:21:03.400 is shown as 08:21:03, an arrival at
+        // 08:21:23.100 as 08:21:24, so "in 21 s", as the clocks say; a valid_until 500 ms after
+        // `as_of` isn't shown as the same second.
+        let as_of = ts("2026-10-21T08:21:03.400Z");
+        assert_eq!(clock(&as_of, &as_of), "08:21:03 UTC");
+        assert_eq!(
+            at(&ts("2026-10-21T08:21:23.100Z"), &as_of),
+            "08:21:24 UTC (in 21 s)"
+        );
+        assert_eq!(
+            clock(&ts("2026-10-21T08:21:03.900Z"), &as_of),
+            "08:21:04 UTC"
+        );
+        assert_eq!(
+            clock(&ts("2026-10-21T08:21:03.100Z"), &as_of),
+            "08:21:03 UTC"
+        );
+        // Rounding up can cross midnight, and the date then shows.
+        let late = ts("2026-10-20T23:59:59.500Z");
+        assert_eq!(
+            at(&ts("2026-10-20T23:59:59.600Z"), &late),
+            "2026-10-21 00:00:00 UTC (in 1 s)"
+        );
+    }
+
+    /// The date back from days is the inverse of the parser's, on every day of years around the
+    /// leap-year rules and at the calendar's ends.
+    #[test]
+    fn civil_dates_round_trip() {
+        let mut checked = 0;
+        for year in [
+            0, 1899, 1900, 1969, 1970, 1999, 2000, 2001, 2024, 2100, 9999,
+        ] {
+            for month in 1..=12 {
+                for day in 1..=31 {
+                    let t = format!("{year:04}-{month:02}-{day:02}T00:00:00.000Z");
+                    let Ok(t) = Timestamp::try_from(t) else {
+                        continue;
+                    };
+                    let ms = unix_ms(&t).unwrap();
+                    assert_eq!(
+                        civil_from_days(ms.div_euclid(86_400_000)),
+                        (year, month, day)
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        // Leap years among them: 0, 2000 and 2024 (1900 and 2100 aren't).
+        assert_eq!(checked, 11 * 365 + 3);
     }
 
     #[test]

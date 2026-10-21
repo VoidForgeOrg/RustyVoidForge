@@ -175,7 +175,8 @@ fn earliest<'a>(times: impl IntoIterator<Item = Option<&'a Timestamp>>) -> Optio
 }
 
 /// §2's freshness line (copy, exact) and Refresh, a plain link to the same URL. `others` keeps
-/// the clause about another player's fleet, which the Fleets page drops.
+/// the clause about another player's fleet, with or without a `valid_until` (P4.3's design review
+/// R2); the Fleets page drops it.
 fn freshness(
     as_of: &Timestamp,
     valid_until: Option<&Timestamp>,
@@ -191,7 +192,11 @@ fn freshness(
                     @if others { ", unless another player's fleet arrives" }
                     "."
                 }
-                None => "Nothing is scheduled to change these values.",
+                None => {
+                    "Nothing is scheduled to change these values"
+                    @if others { ", unless another player's fleet arrives" }
+                    "."
+                }
             }
             " " a href=(here) { "Refresh" }
         }

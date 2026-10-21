@@ -14,7 +14,7 @@ expression: pretty(body)
 <h1>Planet #9</h1>
 <p>Owner: unowned · Position (150.0, −20.5, 999.9) · Slots: 0 of 8 used</p>
 <p><a href="/universe?around=9">Look around this planet</a></p>
-<p>As of 18:04:12 UTC. Nothing is scheduled to change these values. <a href="/planets/9">Refresh</a></p>
+<p>As of 18:04:12 UTC. Nothing is scheduled to change these values, unless another player's fleet arrives. <a href="/planets/9">Refresh</a></p>
 <h2>Storage</h2>
 <table>
 <thead>

@@ -371,9 +371,10 @@ async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
         Ok(v) => v,
         Err(r) => return *r,
     };
-    // Checked before any call (T5), so the page can't have the fast-rules line.
+    // Checked before any game call (T5); the public `/rules` still keeps the frame whole (R3).
     let raw = uri.path().strip_prefix("/planets/").unwrap_or("");
     let Some(id) = planet_number(raw) else {
+        let fast = fast_rules(&s).await;
         let m = Message {
             copy: pages::NOT_A_PLANET_NUMBER.to_owned(),
             code: Some(ErrorCode::InvalidQuery.as_str()),
@@ -381,7 +382,7 @@ async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
         };
         return page(
             StatusCode::BAD_REQUEST,
-            pages::no_such_planet(frame(false, &viewer, None), &m),
+            pages::no_such_planet(frame(fast, &viewer, None), &m),
         );
     };
     let token = &viewer.login.id_token;
@@ -547,13 +548,14 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
         Err(r) => return *r,
     };
     let (centre, typed) = search(uri.query());
-    // Checked before any call (T5), so the page can't have the fast-rules line.
+    // Checked before any game call (T5); the public `/rules` still keeps the frame whole (R3).
     let Ok(centre) = centre else {
+        let fast = fast_rules(&s).await;
         let found = Found::Refused(pages::UNIVERSE_INPUT, None);
         return page(
             StatusCode::BAD_REQUEST,
             pages::universe(
-                frame(false, &viewer, Some(Nav::Universe)),
+                frame(fast, &viewer, Some(Nav::Universe)),
                 &here,
                 &typed,
                 found,

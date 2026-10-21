@@ -445,7 +445,7 @@ async fn someone_else_s_planet_and_an_unowned_empty_one() {
     );
     has(
         body,
-        "As of 18:04:12 UTC. Nothing is scheduled to change these values.",
+        "As of 18:04:12 UTC. Nothing is scheduled to change these values, unless another player's fleet arrives.",
     );
     has(body, "<td>0 t of 10,000.0 t (empty)</td><td>0 t/h</td>");
     has(body, "<td>&lt; 0.1 t of 5,000.0 t</td>");
@@ -503,7 +503,12 @@ async fn a_planet_number_the_web_can_t_use_is_refused_before_any_call() {
         let from = count(&w);
         let page = b.get(path).await;
         assert_eq!(page.status, 400, "{path}: {}", page.body);
-        assert!(reads_since(&w, from).is_empty(), "{path} called the API");
+        // No game call: only the public `/rules`, for the frame (R3).
+        assert_eq!(
+            reads_since(&w, from),
+            reads(&["/rules"]),
+            "{path} called the API"
+        );
         has(
             &page.body,
             "<h1>No such planet</h1><p>That isn't a planet number. Planet numbers look like 12. (<code>invalid_query</code>)</p>",
@@ -873,7 +878,7 @@ async fn the_universe_around_your_homeworld() {
     );
     has(
         body,
-        r#"As of 18:04:12 UTC. Nothing is scheduled to change these values. <a href="/universe">Refresh</a>"#,
+        r#"As of 18:04:12 UTC. Nothing is scheduled to change these values, unless another player's fleet arrives. <a href="/universe">Refresh</a>"#,
     );
     // D1: the form's values use the hyphen, and read back to the same search.
     for field in [
@@ -1019,7 +1024,11 @@ async fn a_search_the_web_can_t_use_is_refused_before_any_call() {
         let from = count(&w);
         let page = b.get(&format!("/universe?{query}")).await;
         assert_eq!(page.status, 400, "{query}: {}", page.body);
-        assert!(reads_since(&w, from).is_empty(), "{query} called the API");
+        assert_eq!(
+            reads_since(&w, from),
+            reads(&["/rules"]),
+            "{query} called the API"
+        );
         has(
             &page.body,
             "<p><strong>Enter numbers like 150 or −20.5; the radius must be 0 or more.</strong></p>",
@@ -1214,7 +1223,15 @@ async fn the_fast_rules_line_is_on_every_page() {
     reply(&w, "/players/me/fleets", &fleets_view(json!([]), None));
     reply(&w, "/planets", &near(json!([])));
     reply(&w, "/leaderboard", &board(json!([])));
-    for path in ["/planets/7", "/fleets", "/universe", "/leaderboard"] {
+    // The pages refused before a game call too (R3).
+    for path in [
+        "/planets/7",
+        "/fleets",
+        "/universe",
+        "/leaderboard",
+        "/planets/abc",
+        "/universe?around=x",
+    ] {
         has(
             &b.get(path).await.body,
             "<strong>Fast test rules:</strong> an hour of play takes a second.",
