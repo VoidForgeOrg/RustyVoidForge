@@ -63,7 +63,7 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 
 ## Crate dependencies
 
-The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow, tower-http, scraper) gets its exact version here, with a decision-log entry, in the package that first adds it. Two were dropped for code of our own: tower_governor for a rate limiter ([D-054](decision-log.md#d-054-rate-limits-per-principal-gcra-read-and-write-budgets)), and openidconnect for the web login's OIDC client ([D-057](decision-log.md#d-057-web-login-our-own-code-flow-with-pkce-and-the-session)).
+The first external crates arrived with P0.6. `deny.toml` allowlists every crate in the tree ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist), [D-017](decision-log.md#d-017-telemetry-dependencies-licenses-and-duplicates)). Each remaining Tech stack crate (anyhow) gets its exact version here, with a decision-log entry, in the package that first adds it. Two were dropped for code of our own: tower_governor for a rate limiter ([D-054](decision-log.md#d-054-rate-limits-per-principal-gcra-read-and-write-budgets)), and openidconnect for the web login's OIDC client ([D-057](decision-log.md#d-057-web-login-our-own-code-flow-with-pkce-and-the-session)).
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
@@ -95,6 +95,7 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | log | =0.4.34 (std; default features off) | server, dev-dependency only: the privacy test captures sqlx's `log` events | P3.3 | D-047 |
 | tower-sessions | =0.15.0 (axum-core; default features off: our own bounded store replaces its memory-store) | web, the session and its cookie; brings tower-cookies, cookie and the time crates | P4.1 | D-057 |
 | async-trait | =0.1.92 | web, the bounded session store implements tower-sessions' `SessionStore`; already in the tree, so no new crate | P4.1 | D-057 |
+| tower-http | =0.6.11 (cors; default features off) | server, CORS for the web app's origin; already in the tree through reqwest, so no new version | P4.6 | D-063 |
 | maud | =0.27.0 (axum; default features off) | web, the pages | P4.1 | D-057 |
 | base64 | =0.23.1 (std; default features off) | web, state, nonce, the verifier and the challenge; already in the tree under reqwest, so no new version | P4.1 | D-057 |
 
@@ -116,6 +117,7 @@ Pinned in [`web/`](../web/AGENTS.md) ([D-063](decision-log.md#d-063-the-web-fron
 | @tanstack/react-router | 1.170.45 | runtime | Code routes |
 | openapi-fetch | 0.17.0 | runtime | The typed API client |
 | openapi-react-query | 0.5.4 | runtime | Binds the client to TanStack Query |
+| oidc-client-ts | 3.5.0 | runtime | The browser login: discovery, PKCE, state, nonce and the ID token checks |
 | react | 19.3.1 | runtime | UI |
 | react-aria-components | 1.22.1 | runtime | RouterProvider, so HeroUI links navigate in-app |
 | react-dom | 19.3.1 | runtime | UI |

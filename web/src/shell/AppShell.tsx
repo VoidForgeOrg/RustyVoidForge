@@ -2,6 +2,7 @@ import { Chip } from "@heroui/react";
 import { Outlet, useRouter } from "@tanstack/react-router";
 import { RouterProvider } from "react-aria-components";
 import { api } from "../api/client";
+import { AuthControls } from "../auth/AuthControls";
 
 export function AppShell() {
   const router = useRouter();
@@ -9,6 +10,7 @@ export function AppShell() {
     <RouterProvider navigate={(href) => void router.navigate({ href })}>
       <header>
         <RulesChip />
+        <AuthControls />
       </header>
       <main>
         <Outlet />

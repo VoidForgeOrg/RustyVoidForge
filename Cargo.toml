@@ -52,6 +52,7 @@ base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 maud = { version = "=0.27.0", default-features = false, features = ["axum"] }
 tower-sessions = { version = "=0.15.0", default-features = false, features = ["axum-core"] }
 async-trait = "=0.1.92"
+tower-http = { version = "=0.6.11", default-features = false, features = ["cors"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

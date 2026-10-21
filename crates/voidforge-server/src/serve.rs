@@ -39,6 +39,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use axum::http::HeaderValue;
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use voidforge_host::{Clock, HostConfig, HostHandle, HostTask, RecoverError, Rules, SystemClock};
 use voidforge_store::accounts::PgAccounts;
@@ -137,6 +138,15 @@ pub struct ServeArgs {
         value_parser = clap::value_parser!(u32).range(1..=i64::from(MAX_BURST))
     )]
     pub write_burst: u32,
+    /// An origin the API allows through CORS, such as the web app's http://localhost:8081.
+    /// Repeatable; comma-separated in the environment. None by default, so no CORS headers.
+    #[arg(
+        long = "cors-origin",
+        env = "VOIDFORGE_CORS_ORIGINS",
+        value_delimiter = ',',
+        value_parser = api::cors_origin
+    )]
+    pub cors_origins: Vec<HeaderValue>,
     /// The token checks (D-046).
     #[command(flatten)]
     pub auth: AuthArgs,
@@ -323,15 +333,9 @@ async fn serve(args: &ServeArgs) -> ServeExit {
         Ok(runtime) => ServerRuntime(Some(runtime)),
         Err(e) => return fail(ServeExit::Input, &format!("runtime: {e}")),
     };
-    let start = runtime.handle().spawn(start(
-        url.to_owned(),
-        args.bind,
-        rules,
-        auth,
-        epoch,
-        Duration::from_secs(args.leaderboard_secs),
-        args.limits(),
-    ));
+    let start = runtime
+        .handle()
+        .spawn(start(args.clone(), rules, auth, epoch));
     let Started {
         task,
         mut watch,
@@ -427,14 +431,15 @@ async fn serve(args: &ServeArgs) -> ServeExit {
 
 /// On the server runtime: recovers, starts the host, the key refresher and the API.
 async fn start(
-    url: String,
-    bind: SocketAddr,
+    args: ServeArgs,
     rules: Rules,
     auth: crate::auth::AuthConfig,
     epoch: i64,
-    leaderboard_every: Duration,
-    limits: Limits,
 ) -> Result<Started, ServeExit> {
+    let limits = args.limits();
+    let url = args.database_url;
+    let bind = args.bind;
+    let leaderboard_every = Duration::from_secs(args.leaderboard_secs);
     let build =
         EngineBuild::new(ENGINE_BUILD).map_err(|e| fail(ServeExit::Input, &e.to_string()))?;
     let mut log = PgLog::lazy_url(&url).map_err(|e| fail(ServeExit::Input, &e.to_string()))?;
@@ -535,7 +540,7 @@ async fn start(
         .map_err(|e| fail(ServeExit::Input, &format!("bind {bind}: {e}")))?;
     let (drain, drain_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(async move {
-        axum::serve(listener, api::router(state))
+        axum::serve(listener, api::router(state, &args.cors_origins))
             .with_graceful_shutdown(async {
                 let _ = drain_rx.await;
             })
@@ -605,6 +610,37 @@ mod tests {
         ];
         let base = base.iter().chain(["--issuer", "http://dex/dex"].iter());
         Cli::try_parse_from(base.chain(extra.iter())).map(|c| c.serve)
+    }
+
+    /// `--cors-origin` takes exactly origins as a browser sends them, repeated or comma-separated,
+    /// and has no default.
+    #[test]
+    fn the_cors_origin_flag() {
+        assert!(parse(&[]).unwrap().cors_origins.is_empty());
+        let set = parse(&[
+            "--cors-origin",
+            "http://localhost:8081",
+            "--cors-origin",
+            "https://play.example:8443",
+        ])
+        .unwrap();
+        assert_eq!(
+            set.cors_origins,
+            ["http://localhost:8081", "https://play.example:8443"]
+        );
+        for bad in [
+            "localhost:8081",
+            "http://localhost:8081/",
+            "http://localhost:8081/app",
+            "http://localhost:8081?x",
+            "http://user@localhost:8081",
+            "ftp://localhost",
+            "HTTP://LOCALHOST:8081",
+            "*",
+            "null",
+        ] {
+            assert!(parse(&["--cors-origin", bad]).is_err(), "{bad}");
+        }
     }
 
     /// The rate-limit flags (D-054): the advisor's defaults, each flag landing in its own budget,

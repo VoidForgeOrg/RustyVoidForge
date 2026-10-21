@@ -21,6 +21,7 @@
     "@kedar42/perseus": "https://github.com/kedar42/perseus/releases/download/v0.3.0/kedar42-perseus-0.3.0.tgz",
     "@tanstack/react-query": "5.104.5",
     "@tanstack/react-router": "1.170.45",
+    "oidc-client-ts": "3.5.0",
     "openapi-fetch": "0.17.0",
     "openapi-react-query": "0.5.4",
     "react": "19.3.1",

@@ -594,7 +594,10 @@ fn config(args: &[&str]) -> Result<AuthConfig, String> {
 fn the_defaults_match_the_local_stack_and_absurd_settings_are_refused() {
     let c = config(&[]).unwrap();
     assert_eq!(c.issuer, "http://localhost:5556/dex");
-    assert_eq!(c.audiences, ["voidforge-web", "voidforge-cli"]);
+    assert_eq!(
+        c.audiences,
+        ["voidforge-web", "voidforge-spa", "voidforge-cli"]
+    );
     assert_eq!(
         (c.leeway, c.refresh, c.min_refresh, c.max_stale),
         (

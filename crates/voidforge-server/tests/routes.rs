@@ -373,8 +373,8 @@ async fn api_with(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let app = match extra {
-        Some(extra) => router(state.clone()).merge(extra.with_state(state)),
-        None => router(state),
+        Some(extra) => router(state.clone(), &[]).merge(extra.with_state(state)),
+        None => router(state, &[]),
     };
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Api {
@@ -1492,14 +1492,17 @@ async fn the_router_and_the_document_have_the_same_routes(pool: PgPool) {
 /// body, never a dropped connection or the panic's text.
 #[tokio::test]
 async fn a_panicking_handler_answers_500_internal() {
-    let app = voidforge_server::api::layered(axum::Router::new().route(
-        "/boom",
-        axum::routing::get(|| async {
-            panic!("secret detail");
-            #[allow(unreachable_code)]
-            ""
-        }),
-    ));
+    let app = voidforge_server::api::layered(
+        axum::Router::new().route(
+            "/boom",
+            axum::routing::get(|| async {
+                panic!("secret detail");
+                #[allow(unreachable_code)]
+                ""
+            }),
+        ),
+        &[],
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -1508,6 +1511,76 @@ async fn a_panicking_handler_answers_500_internal() {
     let body: Value = r.json().await.unwrap();
     assert_eq!(body["code"], "internal");
     assert!(!body.to_string().contains("secret"), "{body}");
+}
+
+/// CORS allows exactly the listed origins (D-063): a listed origin's preflight is answered
+/// before the fallback, and its refusals carry the allow header and expose Retry-After, so the
+/// browser app can read them; an unlisted origin, or no list at all, gets no CORS headers.
+#[tokio::test]
+async fn cors_allows_exactly_the_listed_origins() {
+    let app_origin = "http://localhost:8081";
+    let serve = |origins: Vec<axum::http::HeaderValue>| async move {
+        let app = voidforge_server::api::layered(
+            axum::Router::new().route("/commands", axum::routing::post(|| async { "" })),
+            &origins,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        base
+    };
+    let allowed = |r: &reqwest::Response| {
+        r.headers()
+            .get("access-control-allow-origin")
+            .map(|v| v.to_str().unwrap().to_owned())
+    };
+    let client = reqwest::Client::new();
+    let preflight = |base: &str, origin: &str| {
+        client
+            .request(Method::OPTIONS, format!("{base}/commands"))
+            .header("origin", origin)
+            .header("access-control-request-method", "POST")
+            .header(
+                "access-control-request-headers",
+                "authorization,content-type,idempotency-key",
+            )
+            .send()
+    };
+
+    let base = serve(vec![
+        voidforge_server::api::cors_origin(app_origin).unwrap(),
+    ])
+    .await;
+    let r = preflight(&base, app_origin).await.unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    assert_eq!(allowed(&r).as_deref(), Some(app_origin));
+    let headers = r.headers()["access-control-allow-headers"]
+        .to_str()
+        .unwrap();
+    assert!(headers.contains("idempotency-key"), "{headers}");
+    assert!(
+        r.headers()
+            .get("access-control-allow-credentials")
+            .is_none()
+    );
+    let r = client
+        .get(format!("{base}/unknown"))
+        .header("origin", app_origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 404);
+    assert_eq!(allowed(&r).as_deref(), Some(app_origin));
+    let exposed = r.headers()["access-control-expose-headers"]
+        .to_str()
+        .unwrap();
+    assert!(exposed.contains("retry-after"), "{exposed}");
+    let r = preflight(&base, "http://evil.test").await.unwrap();
+    assert_eq!(allowed(&r), None);
+
+    let base = serve(Vec::new()).await;
+    let r = preflight(&base, app_origin).await.unwrap();
+    assert_eq!(allowed(&r), None);
 }
 
 /// The statuses this suite saw, per route, are summed here only as documentation; each test's

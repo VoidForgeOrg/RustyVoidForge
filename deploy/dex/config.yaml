@@ -10,6 +10,8 @@ storage:
 
 web:
   http: 0.0.0.0:5556
+  # The browser web app calls the token endpoint and discovery from its own origin (D-063).
+  allowedOrigins: ["http://localhost:8081"]
 
 oauth2:
   skipApprovalScreen: true
@@ -39,6 +41,12 @@ staticClients:
   - id: voidforge-web
     name: Voidforge web
     secret: voidforge-web-local-test-secret
+    redirectURIs:
+      - http://localhost:8081/callback
+  # The browser web app: public client, authorization code with PKCE run in the browser.
+  - id: voidforge-spa
+    name: Voidforge
+    public: true
     redirectURIs:
       - http://localhost:8081/callback
   # Bots and the terminal client: public client, device code grant.

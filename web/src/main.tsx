@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { restoreLogin } from "./auth/auth";
 import { router } from "./router";
 import "./app.css";
 
@@ -9,6 +10,8 @@ const queryClient = new QueryClient();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html has no #root");
+
+await restoreLogin();
 
 createRoot(root).render(
   <StrictMode>

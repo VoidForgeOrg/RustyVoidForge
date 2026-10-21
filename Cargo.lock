@@ -2827,6 +2827,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
