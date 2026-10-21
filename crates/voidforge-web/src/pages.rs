@@ -33,6 +33,8 @@ pub enum Notice {
 
 /// The advisor's sentence for an expired login (P4.1 A4; kept for P4.2 by its A1).
 pub const EXPIRED: &str = "Your login has expired. Log in again.";
+/// §5.6's one-shot line after logging in again from an ended session (carried by D-059).
+pub const RENEWED: &str = "Your session had ended; you're logged in again.";
 /// §4.1's line after a logout.
 pub const LOGGED_OUT: &str = "You're logged out.";
 /// §4.6 (E8): a planet path that isn't a number, shown with `invalid_query`.
@@ -78,6 +80,8 @@ pub struct Frame<'a> {
     /// The page the viewer is on, shown as plain text in the navigation; None links all four
     /// (a planet page, D3).
     pub nav: Option<Nav>,
+    /// The one-shot banner at the top of the page (§2).
+    pub banner: Option<&'a str>,
 }
 
 fn layout(title: &str, frame: Frame<'_>, body: Markup) -> Markup {
@@ -112,6 +116,9 @@ fn layout(title: &str, frame: Frame<'_>, body: Markup) -> Markup {
                         button type="submit" { "Log out" }
                     }
                     hr;
+                    @if let Some(banner) = frame.banner {
+                        p { strong { (banner) } }
+                    }
                 }
                 @if frame.fast {
                     p { strong { "Fast test rules:" } " an hour of play takes a second. These timings aren't the real game's." }
@@ -212,7 +219,12 @@ pub fn home_logged_out(notice: Option<Notice>, login_href: &str, fast: bool) -> 
 
 /// Home, logged in, with the player (§4.1).
 #[must_use]
-pub fn home_logged_in(login: &LoggedIn, me: &PlayerView, fast: bool) -> Markup {
+pub fn home_logged_in(
+    login: &LoggedIn,
+    me: &PlayerView,
+    fast: bool,
+    banner: Option<&str>,
+) -> Markup {
     let home = me.homeworld_id.0;
     let mut others: Vec<u64> = me
         .planet_ids
@@ -230,6 +242,7 @@ pub fn home_logged_in(login: &LoggedIn, me: &PlayerView, fast: bool) -> Markup {
             login: Some(login),
             me: Some(me),
             nav: Some(Nav::Home),
+            banner,
         },
         html! {
             h1 { "Your empire" }
@@ -953,7 +966,7 @@ mod tests {
 
     #[test]
     fn logout_is_a_post_form() {
-        let page = home_logged_in(&login(None), &me(&[7]), false).into_string();
+        let page = home_logged_in(&login(None), &me(&[7]), false, None).into_string();
         assert!(
             page.contains(r#"<form method="post" action="/logout">"#),
             "{page}"
@@ -963,20 +976,20 @@ mod tests {
 
     #[test]
     fn a_name_is_escaped() {
-        let page =
-            home_logged_in(&login(Some("<script>x</script>")), &me(&[7]), false).into_string();
+        let page = home_logged_in(&login(Some("<script>x</script>")), &me(&[7]), false, None)
+            .into_string();
         assert!(!page.contains("<script>"), "{page}");
     }
 
     #[test]
     fn the_planets_list_the_homeworld_first_then_ascending() {
-        let page = home_logged_in(&login(None), &me(&[12, 7, 9]), false).into_string();
+        let page = home_logged_in(&login(None), &me(&[12, 7, 9]), false, None).into_string();
         let at = |s: &str| page.find(s).unwrap_or_else(|| panic!("{s}: {page}"));
         assert!(page.contains("Your planets (3)"), "{page}");
         assert!(at(r#"Planet #7</a> (homeworld)"#) < at(r#"Planet #9</a>"#));
         assert!(at(r#"Planet #9</a>"#) < at(r#"Planet #12</a>"#));
         assert!(!page.contains("Welcome."), "{page}");
-        let first = home_logged_in(&login(None), &me(&[7]), false).into_string();
+        let first = home_logged_in(&login(None), &me(&[7]), false, None).into_string();
         assert!(
             first.contains("Welcome. Planet #7 is your homeworld"),
             "{first}"
@@ -987,7 +1000,7 @@ mod tests {
     /// D3: the current page is plain text, the others links; no navigation logged out.
     #[test]
     fn the_navigation_marks_the_current_page() {
-        let page = home_logged_in(&login(None), &me(&[7]), false).into_string();
+        let page = home_logged_in(&login(None), &me(&[7]), false, None).into_string();
         assert!(
             page.contains(r#"<strong>Voidforge</strong> Home · <a href="/fleets">Fleets</a> · <a href="/universe">Universe</a> · <a href="/leaderboard">Leaderboard</a> · You:"#),
             "{page}"

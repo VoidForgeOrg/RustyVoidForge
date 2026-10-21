@@ -47,7 +47,9 @@ use crate::format;
 use crate::messages::{self, Context, Fill, Kind, Message};
 use crate::oidc::{self, LoginError, Provider};
 use crate::pages::{self, Found, Frame, Nav, Notice, Refusal, SearchForm};
-use crate::session::{self, LOGIN_KEY, LoggedIn, PENDING_KEY, PENDING_LIFETIME_SECS};
+use crate::session::{
+    self, LOGIN_KEY, LoggedIn, NOTICE_KEY, PENDING_KEY, PENDING_LIFETIME_SECS, RENEWING_KEY,
+};
 use crate::store::BoundedStore;
 
 /// The session cookie's name.
@@ -196,11 +198,27 @@ async fn fast_rules(s: &AppState) -> bool {
 /// The Universe page's default radius: 100 u around the homeworld, a UI default (Q5).
 pub const DEFAULT_RADIUS_DU: i64 = 100_000;
 
-/// Ends the session and shows the expired notice, offering to return to `next`.
-async fn expired(session: &Session, next: &str, fast: bool) -> Response {
+/// Ends the session and shows the expired notice, offering to return to `next`. The fresh
+/// session it leaves is marked [`RENEWING_KEY`], so logging in again from here says so once
+/// (§5.6); it lives as long as a login attempt. With the store full, it's left unmarked: the
+/// line is a courtesy, never a reason to fail the page.
+async fn expired(s: &AppState, session: &Session, next: &str, fast: bool) -> Response {
     if let Err(e) = session.flush().await {
         tracing::error!(error = %e, "ending an expired session failed");
         return internal();
+    }
+    if s.sessions.has_room() {
+        let marked = async {
+            session.insert(RENEWING_KEY, true).await?;
+            session.set_expiry(Some(anonymous_expiry()));
+            session.save().await
+        };
+        if marked.await.is_ok() {
+            s.sessions.admitted();
+        } else if let Err(e) = session.flush().await {
+            tracing::error!(error = %e, "ending an expired session failed");
+            return internal();
+        }
     }
     let next = local_path(next).unwrap_or("/");
     page(
@@ -215,15 +233,22 @@ fn here(uri: &Uri) -> String {
     uri.path_and_query().map_or("/", |p| p.as_str()).to_owned()
 }
 
-/// A logged-in page's start: the login, or the response for a viewer without a usable one. A
+/// A logged-in viewer: the login, and the one-shot banner this page shows.
+struct Viewer {
+    login: LoggedIn,
+    banner: Option<&'static str>,
+}
+
+/// A logged-in page's start: the viewer, or the response for one without a usable login. A
 /// logged-out viewer gets the logged-out Home at this URL, with `notice` and Log in returning
-/// here (§4.6, E4); an expired login ends the session and says so. Logged in, it calls nothing.
+/// here (§4.6, E4); an expired login ends the session and says so. Logged in, it calls nothing,
+/// and takes the session's one-shot notice (§5.6), changing the session only when there is one.
 async fn begin(
     s: &AppState,
     session: &Session,
     here: &str,
     notice: Option<Notice>,
-) -> Result<LoggedIn, Box<Response>> {
+) -> Result<Viewer, Box<Response>> {
     let login = match session.get::<LoggedIn>(LOGIN_KEY).await {
         Ok(l) => l,
         Err(e) => {
@@ -246,14 +271,35 @@ async fn begin(
     if now >= login.exp {
         tracing::info!(outcome = "expired", "the login expired");
         let fast = fast_rules(s).await;
-        return Err(Box::new(expired(session, here, fast).await));
+        return Err(Box::new(expired(s, session, here, fast).await));
     }
-    Ok(login)
+    let renewed = match session.get::<bool>(NOTICE_KEY).await {
+        Ok(n) => n == Some(true),
+        Err(e) => {
+            tracing::error!(error = %e, "reading the session failed");
+            return Err(Box::new(internal()));
+        }
+    };
+    if renewed {
+        let taken = async {
+            session.remove::<bool>(NOTICE_KEY).await?;
+            keep_expiry(session).await
+        };
+        if let Err(e) = taken.await {
+            tracing::error!(error = %e, "taking the notice failed");
+            return Err(Box::new(internal()));
+        }
+    }
+    Ok(Viewer {
+        login,
+        banner: renewed.then_some(pages::RENEWED),
+    })
 }
 
 /// A failed read, as its page (§5.5, §6): the expired notice for a refused login, the full
 /// universe, or the retry page with the API's status. `fill` names the page's planet.
 async fn failed(
+    s: &AppState,
     session: &Session,
     frame: Frame<'_>,
     error: &ApiError,
@@ -264,7 +310,7 @@ async fn failed(
     match m.kind {
         Kind::Login => {
             tracing::info!(outcome = "api_unauthorized", "the API refused the token");
-            expired(session, here, frame.fast).await
+            expired(s, session, here, frame.fast).await
         }
         Kind::UniverseFull => page(StatusCode::OK, pages::universe_full(frame.fast, &m)),
         Kind::Retry {
@@ -280,12 +326,13 @@ async fn failed(
     }
 }
 
-fn frame(fast: bool, login: &LoggedIn, nav: Option<Nav>) -> Frame<'_> {
+fn frame(fast: bool, viewer: &Viewer, nav: Option<Nav>) -> Frame<'_> {
     Frame {
         fast,
-        login: Some(login),
+        login: Some(&viewer.login),
         me: None,
         nav,
+        banner: viewer.banner,
     }
 }
 
@@ -300,16 +347,19 @@ fn planet_number(text: &str) -> Option<u64> {
 #[tracing::instrument(name = "web.home", skip_all)]
 async fn home(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
     let notice = (uri.query() == Some("logged_out")).then_some(Notice::LoggedOut);
-    let login = match begin(&s, &session, "/", notice).await {
-        Ok(l) => l,
+    let viewer = match begin(&s, &session, "/", notice).await {
+        Ok(v) => v,
         Err(r) => return *r,
     };
-    let (fast, me) = tokio::join!(fast_rules(&s), s.api.me(&login.id_token));
+    let (fast, me) = tokio::join!(fast_rules(&s), s.api.me(&viewer.login.id_token));
     match me {
-        Ok(me) => page(StatusCode::OK, pages::home_logged_in(&login, &me, fast)),
+        Ok(me) => page(
+            StatusCode::OK,
+            pages::home_logged_in(&viewer.login, &me, fast, viewer.banner),
+        ),
         Err(e) => {
-            let frame = frame(fast, &login, Some(Nav::Home));
-            failed(&session, frame, &e, Fill::default(), "/").await
+            let frame = frame(fast, &viewer, Some(Nav::Home));
+            failed(&s, &session, frame, &e, Fill::default(), "/").await
         }
     }
 }
@@ -317,8 +367,8 @@ async fn home(State(s): State<AppState>, session: Session, uri: Uri) -> Response
 #[tracing::instrument(name = "web.planet", skip_all)]
 async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
     let here = here(&uri);
-    let login = match begin(&s, &session, &here, None).await {
-        Ok(l) => l,
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
         Err(r) => return *r,
     };
     // Checked before any call (T5), so the page can't have the fast-rules line.
@@ -331,10 +381,10 @@ async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
         };
         return page(
             StatusCode::BAD_REQUEST,
-            pages::no_such_planet(frame(false, &login, None), &m),
+            pages::no_such_planet(frame(false, &viewer, None), &m),
         );
     };
-    let token = &login.id_token;
+    let token = &viewer.login.id_token;
     let (fast, me, planet, fleets) = tokio::join!(
         fast_rules(&s),
         s.api.me(token),
@@ -345,10 +395,10 @@ async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
         planet: Some(id),
         target: None,
     };
-    let frame = frame(fast, &login, None);
+    let frame = frame(fast, &viewer, None);
     let me = match me {
         Ok(me) => me,
-        Err(e) => return failed(&session, frame, &e, fill, &here).await,
+        Err(e) => return failed(&s, &session, frame, &e, fill, &here).await,
     };
     let frame = Frame {
         me: Some(&me),
@@ -365,30 +415,30 @@ async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
             let m = messages::for_error(&e, Context::Page, fill);
             return page(StatusCode::NOT_FOUND, pages::no_such_planet(frame, &m));
         }
-        Err(e) => return failed(&session, frame, &e, fill, &here).await,
+        Err(e) => return failed(&s, &session, frame, &e, fill, &here).await,
     };
     match fleets {
         Ok(fleets) => page(
             StatusCode::OK,
             pages::planet(frame, &here, &me, &planet, &fleets),
         ),
-        Err(e) => failed(&session, frame, &e, fill, &here).await,
+        Err(e) => failed(&s, &session, frame, &e, fill, &here).await,
     }
 }
 
 #[tracing::instrument(name = "web.fleets", skip_all)]
 async fn fleets(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
     let here = here(&uri);
-    let login = match begin(&s, &session, &here, None).await {
-        Ok(l) => l,
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
         Err(r) => return *r,
     };
-    let token = &login.id_token;
+    let token = &viewer.login.id_token;
     let (fast, me, fleets) = tokio::join!(fast_rules(&s), s.api.me(token), s.api.my_fleets(token));
-    let frame = frame(fast, &login, Some(Nav::Fleets));
+    let frame = frame(fast, &viewer, Some(Nav::Fleets));
     let me = match me {
         Ok(me) => me,
-        Err(e) => return failed(&session, frame, &e, Fill::default(), &here).await,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
     };
     let frame = Frame {
         me: Some(&me),
@@ -396,23 +446,23 @@ async fn fleets(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
     };
     match fleets {
         Ok(fleets) => page(StatusCode::OK, pages::fleets(frame, &here, &me, &fleets)),
-        Err(e) => failed(&session, frame, &e, Fill::default(), &here).await,
+        Err(e) => failed(&s, &session, frame, &e, Fill::default(), &here).await,
     }
 }
 
 #[tracing::instrument(name = "web.leaderboard", skip_all)]
 async fn leaderboard(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
     let here = here(&uri);
-    let login = match begin(&s, &session, &here, None).await {
-        Ok(l) => l,
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
         Err(r) => return *r,
     };
-    let token = &login.id_token;
+    let token = &viewer.login.id_token;
     let (fast, me, board) = tokio::join!(fast_rules(&s), s.api.me(token), s.api.leaderboard(token));
-    let frame = frame(fast, &login, Some(Nav::Leaderboard));
+    let frame = frame(fast, &viewer, Some(Nav::Leaderboard));
     let me = match me {
         Ok(me) => me,
-        Err(e) => return failed(&session, frame, &e, Fill::default(), &here).await,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
     };
     let frame = Frame {
         me: Some(&me),
@@ -439,7 +489,7 @@ async fn leaderboard(State(s): State<AppState>, session: Session, uri: Uri) -> R
             };
             retry(status, retry_after, &pages::retry_page(frame, &m, &here))
         }
-        Err(e) => failed(&session, frame, &e, Fill::default(), &here).await,
+        Err(e) => failed(&s, &session, frame, &e, Fill::default(), &here).await,
     }
 }
 
@@ -492,8 +542,8 @@ fn search(query: Option<&str>) -> (Result<Centre, ()>, SearchForm) {
 #[tracing::instrument(name = "web.universe", skip_all)]
 async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
     let here = here(&uri);
-    let login = match begin(&s, &session, &here, None).await {
-        Ok(l) => l,
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
         Err(r) => return *r,
     };
     let (centre, typed) = search(uri.query());
@@ -503,14 +553,14 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
         return page(
             StatusCode::BAD_REQUEST,
             pages::universe(
-                frame(false, &login, Some(Nav::Universe)),
+                frame(false, &viewer, Some(Nav::Universe)),
                 &here,
                 &typed,
                 found,
             ),
         );
     };
-    let token = &login.id_token;
+    let token = &viewer.login.id_token;
     // The centre's read goes beside `/players/me` when the query names it; the default needs
     // `/players/me` first, for the homeworld.
     let around = match centre {
@@ -524,10 +574,10 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
         }
     };
     let (fast, me, around_view) = tokio::join!(fast_rules(&s), s.api.me(token), centre_read);
-    let frame = frame(fast, &login, Some(Nav::Universe));
+    let frame = frame(fast, &viewer, Some(Nav::Universe));
     let me = match me {
         Ok(me) => me,
-        Err(e) => return failed(&session, frame, &e, Fill::default(), &here).await,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
     };
     let frame = Frame {
         me: Some(&me),
@@ -559,7 +609,7 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
                 let m = messages::for_error(&e, Context::Page, fill);
                 return page(StatusCode::NOT_FOUND, pages::no_such_planet(frame, &m));
             }
-            return failed(&session, frame, &e, fill, &here).await;
+            return failed(&s, &session, frame, &e, fill, &here).await;
         }
     };
     let form = SearchForm::filled(&position, radius);
@@ -589,7 +639,7 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
                 pages::universe(frame, &here, &form, found),
             )
         }
-        Err(e) => failed(&session, frame, &e, Fill::default(), &here).await,
+        Err(e) => failed(&s, &session, frame, &e, Fill::default(), &here).await,
     }
 }
 
@@ -736,9 +786,13 @@ async fn callback(
         return refusal(&session, StatusCode::BAD_REQUEST, Refusal::Rejected).await;
     };
     // A new session id at login, so an id planted before it is worthless (fixation).
+    // A login renewing an ended session leaves the next page its one-shot notice (§5.6).
     let stored = async {
         session.cycle_id().await?;
         session.remove::<serde_json::Value>(PENDING_KEY).await?;
+        if session.remove::<bool>(RENEWING_KEY).await? == Some(true) {
+            session.insert(NOTICE_KEY, true).await?;
+        }
         session.insert(LOGIN_KEY, LoggedIn::from(identity)).await
     };
     if let Err(e) = stored.await {

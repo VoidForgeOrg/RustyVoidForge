@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The web login by effect against a real dex (Technical Plan P4.1, P4.2; decision log D-057, D-059).
+"""The web login by effect against a real dex (Technical Plan P4.1 to P4.3; decision log D-057, D-059, D-060).
 
 Starts `voidforge-web` on localhost:8081 (dex registers the redirect by exact string), then
 logs alice in and out as a browser would, with two cookie jars: one for dex's pages and one for
@@ -14,9 +14,14 @@ does.
   5  Home:         "Logged in as alice@voidforge.test", the short name and a score, which come
                    from the API's /players/me through the typed client: the API accepted the
                    web app's token (P4.2: "Your empire", the score and the homeworld)
+  5b pages:        after the bots have played, each page renders from live data (P4.3): the
+                   homeworld's planet page (its Storage and the Drill and Refinery it starts
+                   with), Fleets, the Universe around it (the homeworld at 0.0 u) and the
+                   Leaderboard ("you", or its not-ready page); a bad planet number is refused
   6  replay:       the same callback again is refused (400), with or without the cookie
   7  tampered:     a callback whose state was changed is refused (400) and logs nobody in
-  8  logout:       a GET can't log out; the POST does, and the old cookie is logged out too
+  8  logout:       a GET can't log out; the POST does and says so, and the old cookie is logged
+                   out too
   9  second login: dex shows its password form again (A2: no silent login)
   10 no secrets:   no token, code, state or the client secret in any page or the web app's log
   11 stop:         one SIGTERM, exit 0
@@ -196,7 +201,12 @@ def run(args):
               "Home's frame shows the viewer's short name and score, from the API")
         check(re.search(r"Score: -?[\d,]+ \(current\)", body) and "<h1>Your empire</h1>" in body,
               "Home shows a score from /players/me: the API took the token")
-        check(re.search(r'Homeworld: <a href="/planets/\d+">Planet #\d+</a>', body), "Home shows the homeworld")
+        homeworld = re.search(r'Homeworld: <a href="/planets/(\d+)">Planet #\d+</a>', body)
+        check(homeworld, "Home shows the homeworld")
+
+        # 5b. The pages, from live data (P4.3).
+        if homeworld:
+            walk(web, homeworld.group(1))
 
         # 6. Replay.
         status, _, body = web.request(callback)
@@ -231,9 +241,11 @@ def run(args):
         check("Logged in as" in body, "still logged in after the GET")
         old = web.cookie()
         status, headers, _ = web.request(WEB + "/logout", data=b"", method="POST")
-        check(status == 303 and headers.get("Location") == "/", "POST /logout redirects to /", str(status))
-        status, _, body = web.request(WEB + "/")
-        check("Logged in" not in body and 'href="/login"' in body, "after logout, Home is logged out")
+        check(status == 303 and headers.get("Location") == "/?logged_out", "POST /logout redirects to /?logged_out",
+              "%s %s" % (status, headers.get("Location")))
+        status, _, body = web.request(WEB + "/?logged_out")
+        check("Logged in" not in body and 'href="/login"' in body and "You're logged out." in body,
+              "after logout, Home is logged out and says so")
         stale = urllib.request.Request(WEB + "/", headers={"Cookie": "%s=%s" % (COOKIE, old)})
         body = urllib.request.urlopen(stale, timeout=15).read().decode()
         check("Logged in" not in body, "the old session cookie is logged out too (the session is gone server-side)")
@@ -273,6 +285,38 @@ def run(args):
     leaked = [(where, s[:6]) for where, text in texts for s in secrets_seen + [SECRET] if s in text]
     leaked += [(where, "eyJ") for where, text in texts if re.search(r"eyJ[A-Za-z0-9_-]{10,}\.", text)]
     check(not leaked, "no token, code, state, nonce or client secret in any page or the log", repr(leaked[:5]))
+
+
+def walk(web, home):
+    """Step 5b: every page answers 200 from live data, each with one fact the API decided."""
+    status, _, body = web.request(WEB + "/planets/" + home)
+    check(status == 200 and "<h1>Planet #%s</h1>" % home in body and "Owner: you (homeworld)" in body,
+          "the homeworld's page names it as yours", "%s %s" % (status, body[:300]))
+    check(re.search(r'<th scope="row">Iron ore</th><td>[\d,.]+ t of [\d,.]+ t', body)
+          and re.search(r'<th scope="row">Drill #\d+</th>', body)
+          and re.search(r'<th scope="row">Refinery #\d+</th>', body),
+          "the homeworld's page shows its storage and the Drill and Refinery it starts with")
+    check("These values hold until" in body or "Nothing is scheduled" in body,
+          "the planet page has its freshness line")
+    status, _, body = web.request(WEB + "/fleets")
+    check(status == 200 and "<h1>Your fleets</h1>" in body
+          and ("You have no fleets." in body or 'id="fleet-' in body),
+          "the Fleets page lists the player's fleets", "%s %s" % (status, body[:300]))
+    status, _, body = web.request(WEB + "/universe")
+    check(status == 200 and 'around <a href="/planets/%s">' % home in body
+          and '<a href="/planets/%s">Planet #%s</a></th><td>you (homeworld)</td><td>0.0 u</td>' % (home, home) in body,
+          "the Universe page is centred on the homeworld, which is in its table at 0.0 u",
+          "%s %s" % (status, body[:300]))
+    check(len(re.findall(r'<th scope="row"><a href="/planets/\d+">', body)) >= 6,
+          "the Universe page lists the homeworld's neighbours (worldgen promises at least 5)")
+    status, _, body = web.request(WEB + "/leaderboard")
+    check((status == 200 and "Ranked as of" in body
+           and ("<strong>you</strong>" in body or "You're not on the board yet" in body))
+          or (status == 503 and "The leaderboard isn't ready yet." in body),
+          "the Leaderboard ranks the player, or says it isn't ready", "%s %s" % (status, body[:300]))
+    status, _, body = web.request(WEB + "/planets/not-a-number")
+    check(status == 400 and "That isn't a planet number." in body, "a bad planet number is refused (400)",
+          str(status))
 
 
 def unreachable(args, issuer, origin, env, secrets_seen):

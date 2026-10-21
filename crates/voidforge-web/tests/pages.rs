@@ -559,7 +559,81 @@ async fn a_failed_read_on_the_planet_page() {
         &page.body,
         r#"<a href="/login?next=%2Fplanets%2F7">Log in</a>"#,
     );
-    assert_eq!(b.cookie, None, "the session ended");
+    // The login ended: the old session is gone, and the page logged out.
+    w.api
+        .reply("/players/me", Reply::json(StatusCode::OK, &player_view(42)));
+    let again = b.get("/planets/7").await;
+    has(
+        &again.body,
+        r#"<a href="/login?next=%2Fplanets%2F7">Log in</a>"#,
+    );
+    lacks(&again.body, "Logged in as");
+}
+
+const RENEWED: &str = "<p><strong>Your session had ended; you're logged in again.</strong></p>";
+
+/// §5.6 (carried by D-059, ruled by the lead): after an ended session, logging in again shows
+/// the line on the next page, once; the flag is the web's own, never a URL's.
+#[tokio::test]
+async fn logging_in_again_after_an_ended_session_says_so_once() {
+    let w = World::start().await;
+    let mut b = logged_in(&w).await;
+    reply(&w, "/players/me/fleets", &fleets_view(json!([]), None));
+    reply(&w, "/leaderboard", &board(json!([])));
+    // A normal login shows nothing.
+    lacks(&b.get("/").await.body, "Your session had ended");
+    w.api
+        .reply("/players/me", Reply::error(401, "invalid_token"));
+    let ended = b.get("/fleets").await;
+    has(&ended.body, "Your login has expired. Log in again.");
+    w.api
+        .reply("/players/me", Reply::json(StatusCode::OK, &player_view(42)));
+    // The login link is the plain one: nothing in it carries the flag.
+    has(&ended.body, r#"<a href="/login?next=%2Ffleets">Log in</a>"#);
+    let callback = b.start_login("/login?next=%2Ffleets").await;
+    let back = b.get(&callback).await;
+    assert_eq!(
+        (back.status, back.location.as_deref()),
+        (303, Some("/fleets"))
+    );
+    let cookies = b.set_cookies.len();
+    let first = b.get("/fleets").await;
+    assert_eq!(first.status, 200, "{}", first.body);
+    // Removing the notice saved the session, keeping its login's lifetime (keep_expiry), not
+    // the anonymous 10 minutes.
+    let set: Vec<String> = b.set_cookies[cookies..]
+        .iter()
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let max_age: Option<u64> = set
+        .first()
+        .and_then(|c| c.split("max-age=").nth(1))
+        .and_then(|v| v.split(';').next()?.trim().parse().ok());
+    // The token's hour plus the 24 h grace, well past an anonymous session's 600 s.
+    assert!(
+        set.len() == 1 && max_age.is_some_and(|a| a > 24 * 3600),
+        "{set:?}"
+    );
+    has(&first.body, &format!("<hr>{RENEWED}<h1>Your fleets</h1>"));
+    // Exactly once: the next page, and every page after, doesn't have it.
+    for path in ["/fleets", "/", "/leaderboard"] {
+        lacks(&b.get(path).await.body, "Your session had ended");
+    }
+}
+
+#[tokio::test]
+async fn a_url_can_t_ask_for_the_line() {
+    let w = World::start().await;
+    let mut b = w.browser();
+    for login in [
+        "/login?renew",
+        "/login?renew=1&next=%2F",
+        "/login?notice=true",
+    ] {
+        let callback = b.start_login(login).await;
+        assert_eq!(b.get(&callback).await.status, 303);
+        lacks(&b.get("/").await.body, "Your session had ended");
+    }
 }
 
 /// T1: a page's reads run at once, so a slow API holds it for one read's time, not four.
