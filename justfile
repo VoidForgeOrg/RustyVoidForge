@@ -102,11 +102,19 @@ bless:
 
 # The CI e2e job's scenario (decision log D-052): bots log in through dex, join, build, race to
 # colonize and transport cargo, against a fresh universe and the real serve binary; then the
-# terminal's device code login (D-053). Needs the CI
+# terminal's device code login (D-053), then the web walk (D-057 to D-062). Needs the CI
 # dex config: DEX_CONFIG=config.ci.yaml just up (or E2E_ISSUER naming another such dex). It uses
 # only its own voidforge_e2e_<time>_<pid> database, dropped on exit, never voidforge.
 e2e:
     .github/scripts/e2e.sh
+
+# The smoke test (Technical Plan P4.5, D-062): the e2e job's web walk alone, on the fast rules
+# against the compose stack: alice logs in through dex with a cookie jar and plays the MVP loop
+# through voidforge-web's forms (build, queue ships, assemble, colonize, transport), each step
+# checked against the API's JSON. About two minutes. The same needs and owner safety as `e2e`,
+# whose CI run includes this walk.
+smoke:
+    .github/scripts/e2e.sh --smoke
 
 # The token checks against the real dex (decision log D-046). Needs the CI dex config, which has the
 # password grant: DEX_CONFIG=config.ci.yaml just up.

@@ -60,6 +60,11 @@ COOKIE = "voidforge_session"
 failures = []
 
 
+class Failed(Exception):
+    """A step that can't go on, naming the request and what was expected. The walk records it as
+    a failed check and stops (P4.5: a failed step names itself, never a bare exception)."""
+
+
 def ok(message):
     print("ok: " + message)
 
@@ -164,6 +169,7 @@ def run(args):
         if not wait_ready(proc):
             raise RuntimeError("voidforge-web didn't become ready on %s; see %s" % (WEB, args.log))
         web, dex = Browser(), Browser()
+        started = time.monotonic()
 
         # 1. Logged out.
         status, headers, body = web.request(WEB + "/")
@@ -217,9 +223,13 @@ def run(args):
         if homeworld:
             walk(web, homeworld.group(1))
 
-        # 5c. The forms, through the whole MVP loop (P4.4).
+        # 5c. The forms, through the whole MVP loop (P4.4). A step that can't go on is a
+        # failed check naming its request; the steps after the walk still run (P4.5).
         if homeworld:
-            forms_walk(web, homeworld.group(1), args.api.rstrip("/"), issuer)
+            try:
+                forms_walk(web, homeworld.group(1), args.api.rstrip("/"), issuer)
+            except Failed as e:
+                fail("the form walk stopped: %s" % e)
 
         # 6. Replay.
         status, _, body = web.request(callback)
@@ -270,6 +280,11 @@ def run(args):
         secrets_seen.append(urllib.parse.parse_qs(urllib.parse.urlparse(callback3).query)["code"][0])
         status, _, _ = web.request(callback3)
         check(status == 303, "the second login completes")
+        # The walk's duration, steps 1 to 9; e2e.sh requires this line, so a run that skipped or
+        # cut short the walk can't pass (P4.5, D-062).
+        if not failures:
+            ok("the smoke walk took %d s (login, pages, the forms' MVP loop, replay, logout)"
+               % (time.monotonic() - started))
     finally:
         # 11. One SIGTERM, exit 0.
         if proc.poll() is None:
@@ -337,12 +352,16 @@ def api_token(issuer):
     account the web logs in, so the walk can read the API's JSON beside the pages."""
     data = urllib.parse.urlencode({"grant_type": "password", "username": USER, "password": PASSWORD,
                                    "client_id": "voidforge-cli", "scope": "openid"}).encode()
-    with urllib.request.urlopen(urllib.request.Request(issuer + "/token", data=data), timeout=15) as r:
-        return json.loads(r.read())["id_token"]
+    try:
+        with urllib.request.urlopen(urllib.request.Request(issuer + "/token", data=data), timeout=15) as r:
+            return json.loads(r.read())["id_token"]
+    except (urllib.error.URLError, OSError, KeyError, ValueError) as e:
+        raise Failed("POST %s/token (alice's password grant) didn't give an ID token: %s" % (issuer, e))
 
 
 def api_get(api, token, path):
-    """One API read, waiting out a rate limit or a catch-up (D-054, D-049)."""
+    """One API read, waiting out a rate limit or a catch-up (D-054, D-049). Any other failure is
+    a Failed naming the method and path."""
     for _ in range(10):
         req = urllib.request.Request(api + path, headers={"Authorization": "Bearer " + token})
         try:
@@ -350,9 +369,11 @@ def api_get(api, token, path):
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             if e.code not in (429, 503):
-                raise
+                raise Failed("GET %s answered %d: %s" % (path, e.code, e.read()[:200].decode("utf-8", "replace")))
             time.sleep(1)
-    raise RuntimeError("the API kept refusing %s" % path)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise Failed("GET %s: no usable answer (%s)" % (path, e))
+    raise Failed("GET %s: still 429 or 503 after 10 tries" % path)
 
 
 def wait_for(what, probe, seconds=90):
@@ -363,8 +384,7 @@ def wait_for(what, probe, seconds=90):
         if value:
             return value
         time.sleep(1)
-    fail("%s didn't happen within %d s" % (what, seconds))
-    raise RuntimeError("the form walk can't go on without: " + what)
+    raise Failed("%s didn't happen within %d s" % (what, seconds))
 
 
 def act_form(body, action, **hidden):
@@ -378,21 +398,27 @@ def act_form(body, action, **hidden):
     return None
 
 
-def submit(web, page, action, choose, hidden=None, expect="Done:"):
+def submit(web, page, action, choose, hidden=None, expect="Done:", to=None):
     """Opens `page`, submits its form for `action` with the fields `choose` sets, paced under the
-    write limit (D-054: 2/s), then reads the page it redirects to. Returns (fields sent, banner page)."""
+    write limit (D-054: 2/s), then reads the page it redirects to, which must be `to` when given
+    (§5.3: Fleets after Assemble and Send). Returns (fields sent, banner page)."""
     status, _, body = web.request(WEB + page)
     fields = act_form(body, action, **(hidden or {}))
-    if not check(status == 200 and fields, "%s: the %s form is on %s" % (action, action, page), body[:300]):
-        raise RuntimeError("no %s form on %s" % (action, page))
+    if not fields:
+        raise Failed("GET %s answered %s without the %s form%s" % (
+            page, status, action, " for %r" % hidden if hidden else ""))
     sent = fields + list(choose)
     time.sleep(0.6)
     status, headers, _ = web.request(WEB + "/act", data=urllib.parse.urlencode(sent).encode(), method="POST")
     location = headers.get("Location", "")
     _, _, shown = web.request(WEB + location) if status == 303 else (None, None, "")
     banner = re.search(r"<hr>(.*?)(<h1>|$)", shown, re.S)
-    check(status == 303 and expect in shown, "%s: one POST, a 303 and %r" % (action, expect),
-          "%s %s; banner: %s" % (status, location, banner.group(1)[:400] if banner else re.sub(r"\s+", " ", shown)[:400]))
+    request = "POST /act %s" % urllib.parse.urlencode([(k, "[key]" if k == "key" else v) for k, v in sent])
+    check(status == 303 and expect in shown and (to is None or location == to),
+          "%s: one POST, a 303%s and %r" % (action, " to %s" % to if to else "", expect),
+          "%s answered %s, Location %r; banner: %s" % (
+              request, status, location,
+              banner.group(1)[:400] if banner else re.sub(r"\s+", " ", shown)[:400]))
     return sent, shown
 
 
@@ -458,8 +484,8 @@ def forms_walk(web, home, api, issuer):
     # An unowned neighbour from the Universe page.
     _, _, body = web.request(WEB + "/universe")
     target = re.search(r'<th scope="row"><a href="/planets/(\d+)">Planet #\d+</a></th><td>unowned</td>', body)
-    if not check(target, "the Universe page lists an unowned neighbour to colonize"):
-        raise RuntimeError("no unowned neighbour")
+    if not target:
+        raise Failed("GET /universe listed no unowned neighbour to colonize")
     colony = target.group(1)
 
     # Assemble both ships with up to 1 t of ingots; the API shows the fleet and its exact cargo.
@@ -467,7 +493,7 @@ def forms_walk(web, home, api, issuer):
     submit(web, here, "assemble_fleet",
            [("ship", str(ships["colony_ship"])), ("ship", str(ships["cargo_vessel"])), ("ore", ""),
             ("ingots", tonnes(loaded))],
-           expect="Done: a fleet of 2 ships was assembled at Planet #%s." % home)
+           expect="Done: a fleet of 2 ships was assembled at Planet #%s." % home, to="/fleets")
     fleets = api_get(api, token, "/players/me/fleets")["fleets"]
     fleet = next((f for f in fleets if f["state"] == "stationed" and str(f["at_planet_id"]) == home
                   and {s["ship_id"] for s in f["ships"]} == set(ships.values())), None)
@@ -475,12 +501,13 @@ def forms_walk(web, home, api, issuer):
           "assemble: the API shows the fleet of both ships carrying exactly the %s t loaded" % tonnes(loaded),
           repr(fleet))
     if not fleet:
-        raise RuntimeError("no fleet to send")
+        raise Failed("GET /players/me/fleets showed no stationed fleet of ships %r at Planet #%s" % (
+            sorted(ships.values()), home))
     fid = fleet["fleet_id"]
 
     # Colonize from the Fleets page; wait until the planet is the player's.
     submit(web, "/fleets", "send_fleet", [("target_planet_id", colony), ("mission", "colonize")], {"fleet_id": fid},
-           expect="Done: Fleet #%s left for Planet #%s (Colonize)." % (fid, colony))
+           expect="Done: Fleet #%s left for Planet #%s (Colonize)." % (fid, colony), to="/fleets")
     flying = next((f for f in api_get(api, token, "/players/me/fleets")["fleets"] if f["fleet_id"] == fid), {})
     check(flying.get("state") == "in_transit" and str(flying.get("target_planet_id")) == colony
           and flying.get("mission") == "colonize", "send: the API shows the fleet flying to colonize", repr(flying))
@@ -498,16 +525,16 @@ def forms_walk(web, home, api, issuer):
     check(ships["cargo_vessel"] in on_roster, "disband: the Cargo Vessel is on the colony's roster")
     carried = load(api, token, "/planets/" + colony, 500_000)
     submit(web, "/planets/" + colony, "assemble_fleet",
-           [("ship", str(ships["cargo_vessel"])), ("ingots", tonnes(carried))])
+           [("ship", str(ships["cargo_vessel"])), ("ingots", tonnes(carried))], to="/fleets")
     fleet = next((f for f in api_get(api, token, "/players/me/fleets")["fleets"]
                   if f["state"] == "stationed" and str(f["at_planet_id"]) == colony), None)
     check(fleet and fleet["cargo"]["iron_ingot_g"] == carried,
           "assemble at the colony: the %s t loaded is aboard" % tonnes(carried), repr(fleet))
     if not fleet:
-        raise RuntimeError("no fleet to send home")
+        raise Failed("GET /players/me/fleets showed no stationed fleet at the colony, Planet #%s" % colony)
     fid = fleet["fleet_id"]
     submit(web, "/fleets", "send_fleet", [("target_planet_id", home), ("mission", "transport")], {"fleet_id": fid},
-           expect="Done: Fleet #%s left for Planet #%s (Transport)." % (fid, home))
+           expect="Done: Fleet #%s left for Planet #%s (Transport)." % (fid, home), to="/fleets")
     back = wait_for("the transport arriving home", lambda: next(
         (f for f in api_get(api, token, "/players/me/fleets")["fleets"]
          if f["fleet_id"] == fid and f["state"] == "stationed" and str(f["at_planet_id"]) == home), None), 60)

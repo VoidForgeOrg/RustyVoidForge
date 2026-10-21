@@ -44,9 +44,9 @@ cargo clippy -p voidforge-web --all-targets -- -D warnings
 cargo nextest run -p voidforge-web --locked
 ```
 
-The login against a real dex runs in `just e2e` (`.github/scripts/web-login.py`, step 5c of `e2e.sh`), which needs localhost:8081 free. Locally, run the web app with `VOIDFORGE_WEB_CLIENT_SECRET=voidforge-web-local-test-secret cargo run -p voidforge-web` against the stack's dex and a running `serve`.
+The login against a real dex runs in `just e2e` (`.github/scripts/web-login.py`, step 5c of `e2e.sh`), which needs localhost:8081 free. **The smoke test is `just smoke`** (P4.5, [D-062](../../docs/decision-log.md#d-062-the-smoke-test-is-the-e2e-jobs-web-walk-by-name)): the same script with `--smoke`, running only that web walk (about two minutes); CI's e2e job runs it inside the whole scenario. Both need a dex with the password grant (the CI config). A failed step names its request and what it expected. Locally, run the web app with `VOIDFORGE_WEB_CLIENT_SECRET=voidforge-web-local-test-secret cargo run -p voidforge-web` against the stack's dex and a running `serve`.
 
-P4.1 to P4.4: login and logout, API errors shown as messages, pages rendered from live data, and every MVP action working from the browser. The pages' HTML snapshots are in `tests/snapshots/` (insta, a dev-dependency); each sits beside by-effect assertions, so review a changed snapshot by reading it, never by accepting it blind. e2e step 5c walks every page after the bots play. P4.5: cookie-jar smoke tests on the fast test rules.
+P4.1 to P4.4: login and logout, API errors shown as messages, pages rendered from live data, and every MVP action working from the browser. The pages' HTML snapshots are in `tests/snapshots/` (insta, a dev-dependency); each sits beside by-effect assertions, so review a changed snapshot by reading it, never by accepting it blind. e2e step 5c walks every page after the bots play, then the MVP loop through the forms (P4.4), which is P4.5's smoke test (`just smoke`).
 
 ## Specs
 
