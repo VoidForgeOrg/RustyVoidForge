@@ -122,7 +122,8 @@ pub fn for_error(e: &ApiError, ctx: Context, fill: Fill) -> Message {
 }
 
 /// §5.5: "in a moment" when Retry-After is at most 2 s or absent, "in N seconds" otherwise.
-fn with_wait(copy: String, retry_after: Option<u64>) -> String {
+#[must_use]
+pub fn with_wait(copy: String, retry_after: Option<u64>) -> String {
     match retry_after {
         Some(n) if n > 2 => copy.replace("in a moment", &format!("in {n} seconds")),
         _ => copy,
