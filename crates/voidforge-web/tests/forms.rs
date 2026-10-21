@@ -1206,4 +1206,23 @@ async fn issuing_keys_and_banners_keeps_the_login_s_lifetime() {
     let from = b.set_cookies.len();
     b.get("/fleets").await;
     check(&b, "the page taking the banner", from);
+    // A refusal before any call changes the session only by its banner: the table's survivor
+    // on 598cf30 (a 200 or 422 re-asserts the expiry when it marks the key; these don't).
+    let key = fresh_key(&mut b).await;
+    let from = b.set_cookies.len();
+    submit(
+        &mut b,
+        &[
+            ("action", "build_building"),
+            ("key", &key),
+            ("return_to", "/planets/7"),
+            ("planet_id", "7"),
+        ],
+    )
+    .await;
+    check(&b, "a submit the web's checks refused", from);
+    let from = b.set_cookies.len();
+    submit(&mut b, &build_fields("AAAAAAAAAAAAAAAAAAAAAA")).await;
+    check(&b, "an expired form", from);
+    assert!(commands(&w).len() == 1, "neither refusal called");
 }
