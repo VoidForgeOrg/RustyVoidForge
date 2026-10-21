@@ -1250,6 +1250,9 @@ async fn an_unload_says_what_moved_from_the_fleet_after_it() {
     // After it, 20 t is still aboard: 480 t moved, and the rest is named.
     let mut after = my_fleets();
     after["fleets"][0]["cargo"]["iron_ingot_g"] = json!(20_000_000);
+    // Another stationed fleet (24, empty) comes first in the read, so only the unloaded fleet's
+    // own cargo gives these words (the table's survivor on 1d3a6a4).
+    after["fleets"].as_array_mut().unwrap().rotate_right(1);
     reply(&w, "/players/me/fleets", &after);
     let from = w.api.requests_to("/players/me/fleets").len();
     let pairs: Vec<(&str, &str)> = fields
