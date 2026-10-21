@@ -74,6 +74,10 @@ enum Command {
     /// and on SIGINT or SIGTERM drains and stops with a final snapshot.
     #[command(after_help = SERVE_EXIT_CODES)]
     Serve(ServeArgs),
+    /// For `just trace-check` (D-064): records one `telemetry_check` span, prints `trace_id=<hex>`
+    /// on stdout when exporting, and exits; 5 if the span can't be delivered. Reads nothing else.
+    #[command(hide = true)]
+    TelemetryCheck,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +120,8 @@ fn main() -> ExitCode {
             return ExitCode::from(Exit::Telemetry as u8);
         }
     };
+    let serving = matches!(cli.command, Command::Serve(_));
+    let check = matches!(cli.command, Command::TelemetryCheck);
     let (span, exit) = match cli.command {
         Command::Seed {
             seed,
@@ -136,13 +142,28 @@ fn main() -> ExitCode {
             let exit = span.in_scope(|| serve::run(&args));
             (span, exit as u8)
         }
+        Command::TelemetryCheck => {
+            let span = tracing::info_span!("telemetry_check", binary = SERVICE);
+            span.in_scope(|| tracing::info!("telemetry check"));
+            (span, 0)
+        }
     };
     if let Some(trace_id) = voidforge_telemetry::trace_id(&span) {
-        eprintln!("trace_id={trace_id}");
+        if check {
+            println!("trace_id={trace_id}");
+        } else {
+            eprintln!("trace_id={trace_id}");
+        }
     }
     drop(span);
     match telemetry.shutdown() {
         Ok(()) => ExitCode::from(exit),
+        // serve's exit code reports the stop (D-050: 0 only with the final snapshot at the log
+        // head); telemetry that couldn't be delivered is loud, never a failed stop (D-064, T2).
+        Err(error) if serving => {
+            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the stop (D-064)");
+            ExitCode::from(exit)
+        }
         Err(error) => {
             eprintln!("{SERVICE}: {error}");
             // A failed shutdown is never a success (D-016); a failure keeps its own code.

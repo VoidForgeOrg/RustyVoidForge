@@ -36,6 +36,8 @@ tracing-subscriber.workspace = true
 # The pages' HTML snapshots (P4.3, D-060), each beside a by-effect assertion (T4); pinned in the
 # workspace, as the server's contract snapshots use it.
 insta.workspace = true
+# The handler's trace carried to the API, captured in memory (P5.1, D-064).
+voidforge-telemetry = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

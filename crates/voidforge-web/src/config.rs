@@ -26,6 +26,10 @@ pub const SECRET_ENV: &str = "VOIDFORGE_WEB_CLIENT_SECRET";
     version
 )]
 pub struct Args {
+    /// For `just trace-check` (D-064): record one `telemetry_check` span, print `trace_id=<hex>`
+    /// on stdout when exporting, and exit, reading no other setting.
+    #[arg(long, hide = true)]
+    pub telemetry_check: bool,
     /// The OIDC issuer; the web app reads its endpoints from the issuer's discovery document.
     #[arg(long, env = "VOIDFORGE_WEB_ISSUER", default_value = DEFAULT_ISSUER)]
     pub issuer: String,

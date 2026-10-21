@@ -156,6 +156,11 @@ impl Player {
     ) -> Result<Reply<T>, Failure> {
         let http = |e: &dyn std::fmt::Display| Failure::Http(format!("{}: {what}: {e}", self.name));
         let request = request.bearer_auth(&self.token);
+        // The bot's trace continues in the API (P5.1, D-064).
+        let request = match voidforge_telemetry::traceparent(&tracing::Span::current()) {
+            Some(traceparent) => request.header("traceparent", traceparent),
+            None => request,
+        };
         let mut tries = 0;
         let response = loop {
             let attempt = request

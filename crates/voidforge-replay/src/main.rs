@@ -41,6 +41,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// For `just trace-check` (D-064): records one `telemetry_check` span, prints `trace_id=<hex>`
+    /// on stdout when exporting, and exits; the telemetry code if it can't be delivered.
+    #[command(hide = true)]
+    TelemetryCheck,
     /// Verifies golden logs: each golden directory, or each golden in a directory of them.
     Golden {
         /// Golden directories, or directories of goldens (for example tests/golden).
@@ -282,10 +286,19 @@ fn main() -> ExitCode {
             return ExitCode::from(Exit::Telemetry as u8);
         }
     };
-    let span = tracing::info_span!("replay", binary = SERVICE);
+    let check = matches!(cli.command, Command::TelemetryCheck);
+    let span = if check {
+        tracing::info_span!("telemetry_check", binary = SERVICE)
+    } else {
+        tracing::info_span!("replay", binary = SERVICE)
+    };
     let exit = span.in_scope(|| run(cli));
     if let Some(trace_id) = voidforge_telemetry::trace_id(&span) {
-        eprintln!("trace_id={trace_id}");
+        if check {
+            println!("trace_id={trace_id}");
+        } else {
+            eprintln!("trace_id={trace_id}");
+        }
     }
     drop(span);
     match telemetry.shutdown() {
@@ -305,6 +318,10 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Exit {
     match cli.command {
+        Command::TelemetryCheck => {
+            tracing::info!("telemetry check");
+            Exit::Verified
+        }
         Command::Golden { paths, rules, json } => {
             let sources = goldens(&paths)
                 .into_iter()

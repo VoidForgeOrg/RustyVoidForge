@@ -249,6 +249,11 @@ impl Api {
         route: Route,
         req: reqwest::RequestBuilder,
     ) -> Result<T, ApiError> {
+        // The handler's trace continues in the API (P5.1, D-064; P4.2 T5's carry).
+        let req = match voidforge_telemetry::traceparent(&tracing::Span::current()) {
+            Some(traceparent) => req.header("traceparent", traceparent),
+            None => req,
+        };
         let result = exchange(route, req).await;
         if let Err(e) = &result {
             log(route, e);

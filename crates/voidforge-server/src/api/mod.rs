@@ -131,11 +131,39 @@ pub fn router(state: AppState) -> Router {
     .with_state(state)
 }
 
+/// Each matched route's request span, `api.request` (P5.1, D-064): the method, the route as
+/// declared (`/planets/{id}`, never the path or its query) and the status. The caller's
+/// `traceparent` makes it a child in the caller's trace, the web's or a bot's; only that header is
+/// read (T3). The command's spans in the host are its children.
+async fn traced(
+    path: axum::extract::MatchedPath,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let span = tracing::info_span!(
+        "api.request",
+        http.request.method = %request.method(),
+        http.route = path.as_str(),
+        http.response.status_code = tracing::field::Empty,
+    );
+    voidforge_telemetry::set_remote_parent(
+        &span,
+        request
+            .headers()
+            .get("traceparent")
+            .and_then(|v| v.to_str().ok()),
+    );
+    let response = tracing::Instrument::instrument(next.run(request), span.clone()).await;
+    span.record("http.response.status_code", response.status().as_u16());
+    response
+}
+
 /// The layers every route sits behind: `not_found` for an unknown route or method, HEAD
 /// included, the body limit, and a panic answered 500. Public so a test can put a panicking
 /// route behind exactly these.
 pub fn layered<S: Clone + Send + Sync + 'static>(routes: Router<S>) -> Router<S> {
     routes
+        .route_layer(axum::middleware::from_fn(traced))
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::not_found)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))

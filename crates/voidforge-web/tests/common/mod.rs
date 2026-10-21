@@ -204,6 +204,7 @@ pub struct Request {
     pub uri: String,
     pub authorization: Option<String>,
     pub idempotency_key: Option<String>,
+    pub traceparent: Option<String>,
     pub body: String,
     /// When it arrived, before any scripted delay.
     pub arrived: std::time::Instant,
@@ -416,6 +417,7 @@ async fn api_any(
         uri: uri.to_string(),
         authorization: header("authorization"),
         idempotency_key: header("idempotency-key"),
+        traceparent: header("traceparent"),
         body,
         arrived: std::time::Instant::now(),
     });

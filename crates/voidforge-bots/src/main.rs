@@ -59,6 +59,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// For `just trace-check` (D-064): records one `telemetry_check` span, prints `trace_id=<hex>`
+    /// on stdout when exporting, and exits; 5 if the span can't be delivered.
+    #[command(hide = true)]
+    TelemetryCheck,
     /// The end-to-end scenario: alice and bob log in through dex (the password grant, so the CI
     /// dex config), join, build, race to colonize one planet and transport cargo, checking every
     /// answer. Needs a fresh universe on the fast rules, with no other player.
@@ -221,6 +225,14 @@ fn main() -> ExitCode {
     };
     let code =
         match cli.command {
+            Command::TelemetryCheck => {
+                let span = tracing::info_span!("telemetry_check", binary = SERVICE);
+                span.in_scope(|| tracing::info!("telemetry check"));
+                if let Some(trace_id) = voidforge_telemetry::trace_id(&span) {
+                    println!("trace_id={trace_id}");
+                }
+                0
+            }
             Command::E2e {
                 api,
                 issuer,
