@@ -198,8 +198,9 @@ if [ "$bots_code" = 0 ] && [ "$device_code" != 0 ]; then
     say "FAILED: the scenario passed, but the terminal login check exited $device_code; its log is $log_dir/device-login.log"
     exit 1
 fi
-# The walk must have run to its end: its timing line is the last thing it prints (P4.5), so a run
-# that skipped it, or stopped short with exit 0, can't pass.
+# The walk must have run to its end: web-login.py prints its timing line only once steps 1 to 9
+# (login, pages, the forms' MVP loop, replay, logout) have all passed (P4.5, D-062), so a run that
+# skipped it, or stopped short with exit 0, can't pass.
 if [ "$bots_code" = 0 ] && [ "$web_code" = 0 ] \
     && ! grep -q '^ok: the smoke walk took ' "$log_dir/web-login.log" 2> /dev/null; then
     say "FAILED: the web walk didn't run to its end (no timing line in $log_dir/web-login.log)"
