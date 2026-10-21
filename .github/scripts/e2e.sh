@@ -203,6 +203,10 @@ if [ "$bots_code" = 0 ] && [ "$web_code" = 0 ] \
     exit 1
 fi
 if [ "$bots_code" = 0 ] && [ "$web_code" != 0 ]; then
+    if [ "$smoke" = 1 ]; then
+        say "FAILED (smoke): the web walk exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
+        exit 1
+    fi
     say "FAILED: the scenario passed, but the web login check exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
     exit 1
 fi
