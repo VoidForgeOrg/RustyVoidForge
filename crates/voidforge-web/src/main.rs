@@ -15,9 +15,10 @@ use std::time::Duration;
 
 use clap::Parser;
 use tokio::signal::unix::{SignalKind, signal};
+use voidforge_web::api::Api;
 use voidforge_web::config::{Args, SECRET_ENV};
 use voidforge_web::oidc::Provider;
-use voidforge_web::{api, routes};
+use voidforge_web::routes;
 
 const SERVICE: &str = "voidforge-web";
 /// How long in-flight requests may finish after a stop signal.
@@ -65,7 +66,7 @@ fn run() -> ExitCode {
             Ok(p) => p,
             Err(e) => return fail(&format!("the issuer {}: {e}", config.issuer)),
         };
-        let api = match api::client() {
+        let api = match Api::new(config.api_url.clone()) {
             Ok(c) => c,
             Err(e) => return fail(&format!("the API client: {e}")),
         };
@@ -83,7 +84,6 @@ fn run() -> ExitCode {
         let state = routes::AppState {
             provider: Arc::new(provider),
             api,
-            api_url: config.api_url.clone(),
             sessions: voidforge_web::store::BoundedStore::default(),
         };
         let app = routes::app(state, config.secure_cookie);

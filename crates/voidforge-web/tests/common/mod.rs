@@ -1,5 +1,8 @@
-//! A dex stand-in and an API stand-in for the web app's login tests (P4.1, D-057), and a
-//! cookie-holding client. RSA keys are generated at run time, so no private key is committed.
+//! A dex stand-in and an API stand-in for the web app's tests (P4.1, D-057; P4.2, D-059), and
+//! a cookie-holding client. RSA keys are generated at run time, so no private key is committed.
+//! The API stand-in answers every path from a script: `replies` by path first, with a raw
+//! status, headers, body and delay; otherwise `answer` for `/players/me` and `rules` for
+//! `/rules`.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -13,13 +16,14 @@ use aws_lc_rs::rsa::{KeyPair, KeySize};
 use aws_lc_rs::signature::KeyPair as _;
 use axum::Router;
 use axum::extract::{Query, RawForm, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde_json::{Value, json};
+use voidforge_web::api::Api as Client;
 use voidforge_web::config::{Config, Secret};
 use voidforge_web::oidc::{Provider, challenge};
 use voidforge_web::routes::{self, AppState, COOKIE_NAME};
@@ -150,12 +154,88 @@ pub struct Dex {
     pub discovery: Mutex<Value>,
 }
 
+/// One scripted answer: any status, headers and bytes, after a delay.
+#[derive(Clone)]
+pub struct Reply {
+    pub status: StatusCode,
+    pub headers: Vec<(&'static str, String)>,
+    pub body: Vec<u8>,
+    pub delay_ms: u64,
+}
+
+impl Reply {
+    pub fn json(status: StatusCode, body: &Value) -> Self {
+        Self::raw(status, &body.to_string())
+    }
+
+    pub fn raw(status: StatusCode, body: &str) -> Self {
+        Self {
+            status,
+            headers: vec![("content-type", "application/json".to_owned())],
+            body: body.as_bytes().to_vec(),
+            delay_ms: 0,
+        }
+    }
+
+    /// The contract's error body for `code` at `status`.
+    pub fn error(status: u16, code: &str) -> Self {
+        Self::json(
+            StatusCode::from_u16(status).unwrap(),
+            &json!({"code": code, "message": "for the logs"}),
+        )
+    }
+
+    pub fn header(mut self, name: &'static str, value: &str) -> Self {
+        self.headers.push((name, value.to_owned()));
+        self
+    }
+
+    pub fn delay(mut self, ms: u64) -> Self {
+        self.delay_ms = ms;
+        self
+    }
+}
+
+/// A request the API stand-in received.
+#[derive(Clone, Debug)]
+pub struct Request {
+    pub method: Method,
+    /// The path and query.
+    pub uri: String,
+    pub authorization: Option<String>,
+    pub idempotency_key: Option<String>,
+    pub body: String,
+}
+
 /// The API stand-in's state.
 pub struct Api {
     /// The status and body `/players/me` answers.
     pub answer: Mutex<(StatusCode, Value)>,
-    /// The bearer tokens it saw.
+    /// What `/rules` answers.
+    pub rules: Mutex<Reply>,
+    /// What a path answers, ahead of `answer` and `rules`; 404 `not_found` for any other path.
+    pub replies: Mutex<HashMap<String, Reply>>,
+    /// The bearer tokens `/players/me` saw.
     pub seen: Mutex<Vec<String>>,
+    /// Every request, in order.
+    pub requests: Mutex<Vec<Request>>,
+}
+
+impl Api {
+    pub fn reply(&self, path: &str, reply: Reply) {
+        self.replies.lock().unwrap().insert(path.to_owned(), reply);
+    }
+
+    /// The requests to `path` (without the query).
+    pub fn requests_to(&self, path: &str) -> Vec<Request> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.uri.split('?').next() == Some(path))
+            .cloned()
+            .collect()
+    }
 }
 
 async fn discovery(State(d): State<Arc<Dex>>) -> axum::Json<Value> {
@@ -315,16 +395,90 @@ fn issue(d: Arc<Dex>, headers: HeaderMap, RawForm(raw): RawForm) -> Response {
     (b.token_status.unwrap_or(StatusCode::OK), axum::Json(body)).into_response()
 }
 
-async fn player_me(State(a): State<Arc<Api>>, headers: HeaderMap) -> Response {
-    let bearer = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or_default()
-        .to_owned();
-    a.seen.lock().unwrap().push(bearer);
-    let (status, body) = a.answer.lock().unwrap().clone();
-    (status, axum::Json(body)).into_response()
+async fn api_any(
+    State(a): State<Arc<Api>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    let path = uri.path().to_owned();
+    a.requests.lock().unwrap().push(Request {
+        method,
+        uri: uri.to_string(),
+        authorization: header("authorization"),
+        idempotency_key: header("idempotency-key"),
+        body,
+    });
+    if path == "/players/me" {
+        let bearer = header("authorization")
+            .and_then(|v| v.strip_prefix("Bearer ").map(str::to_owned))
+            .unwrap_or_default();
+        a.seen.lock().unwrap().push(bearer);
+    }
+    let scripted = a.replies.lock().unwrap().get(&path).cloned();
+    let reply = match scripted {
+        Some(reply) => reply,
+        None if path == "/players/me" => {
+            let (status, body) = a.answer.lock().unwrap().clone();
+            Reply::json(status, &body)
+        }
+        None if path == "/rules" => a.rules.lock().unwrap().clone(),
+        None => Reply::error(404, "not_found"),
+    };
+    if reply.delay_ms > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(reply.delay_ms)).await;
+    }
+    let mut response = (reply.status, reply.body).into_response();
+    for (name, value) in reply.headers {
+        response.headers_mut().insert(name, value.parse().unwrap());
+    }
+    response
+}
+
+/// `/rules` as the server answers it for v0 (its routes snapshot), with `name` set.
+pub fn rules_view(name: &str) -> Value {
+    json!({
+        "buildings": {
+            "drill": {"build_time_ms": 10800000, "cost_g": 150000000, "demolition_time_ms": 3600000, "output_g_per_h": 10000000},
+            "refinery": {"build_time_ms": 14400000, "cost_g": 250000000, "demolition_time_ms": 3600000, "ingots_per_ore": 2, "intake_g_per_h": 8000000, "output_g_per_h": 16000000},
+            "shipyard": {"build_time_ms": 43200000, "cost_g": 1200000000, "demolition_time_ms": 7200000, "parallel_builds": 3}
+        },
+        "homeworld": {"drills": 1, "ingots_g": 1500000000, "ore_g": 2000000000, "refineries": 1},
+        "name": name,
+        "planet": {"ingot_cap_g": 5000000000_u64, "ore_cap_g": 10000000000_u64, "slots": 8},
+        "scoring": {
+            "cargo_vessel": 150, "colony_ship": 400, "drill": 100,
+            "ingots": {"per_g": 10000000, "points": 2}, "ore": {"per_g": 10000000, "points": 1},
+            "planet": 1000, "refinery": 150, "shipyard": 500
+        },
+        "ships": {
+            "cargo_vessel": {"build_time_ms": 14400000, "cargo_capacity_g": 500000000, "cost_g": 300000000, "speed_du_per_h": 15000},
+            "colony_ship": {"build_time_ms": 36000000, "cargo_capacity_g": 0, "cost_g": 800000000, "speed_du_per_h": 10000}
+        },
+        "version": 0
+    })
+}
+
+/// The API stand-in alone, serving: for the client's own tests.
+pub async fn api_stand_in() -> (Arc<Api>, String) {
+    let (api_l, api_a) = listen().await;
+    let api = Arc::new(Api {
+        answer: Mutex::new((StatusCode::OK, player_view(42))),
+        rules: Mutex::new(Reply::json(StatusCode::OK, &rules_view("v0"))),
+        replies: Mutex::new(HashMap::new()),
+        seen: Mutex::new(Vec::new()),
+        requests: Mutex::new(Vec::new()),
+    });
+    let api_app = Router::new().fallback(api_any).with_state(api.clone());
+    tokio::spawn(async move { axum::serve(api_l, api_app).await.unwrap() });
+    (api, format!("http://{api_a}"))
 }
 
 pub fn player_view(score: i64) -> Value {
@@ -341,7 +495,7 @@ async fn listen() -> (tokio::net::TcpListener, SocketAddr) {
 }
 
 /// The dex and API stand-ins, serving.
-async fn stand_ins() -> (Arc<Dex>, Arc<Api>, SocketAddr) {
+async fn stand_ins() -> (Arc<Dex>, Arc<Api>, String) {
     let (dex_l, dex_a) = listen().await;
     let dex = Arc::new(Dex {
         issuer: format!("http://{dex_a}/dex"),
@@ -364,16 +518,8 @@ async fn stand_ins() -> (Arc<Dex>, Arc<Api>, SocketAddr) {
         .route("/dex/token-moved", post(token_moved))
         .with_state(dex.clone());
     tokio::spawn(async move { axum::serve(dex_l, dex_app).await.unwrap() });
-    let (api_l, api_a) = listen().await;
-    let api = Arc::new(Api {
-        answer: Mutex::new((StatusCode::OK, player_view(42))),
-        seen: Mutex::new(Vec::new()),
-    });
-    let api_app = Router::new()
-        .route("/players/me", get(player_me))
-        .with_state(api.clone());
-    tokio::spawn(async move { axum::serve(api_l, api_app).await.unwrap() });
-    (dex, api, api_a)
+    let (api, api_url) = api_stand_in().await;
+    (dex, api, api_url)
 }
 
 /// Everything one test needs: the stand-ins, the web app, and its address.
@@ -390,6 +536,10 @@ pub struct Options {
     pub max_sessions: usize,
     /// The key refetch floor, when a test needs it short.
     pub key_floor: Option<std::time::Duration>,
+    /// The web's API time bounds (total and connect).
+    pub api_timeout: std::time::Duration,
+    /// Point the web at this API instead of the stand-in (a closed port: unreachable).
+    pub api_url: Option<String>,
 }
 
 impl Default for Options {
@@ -398,6 +548,8 @@ impl Default for Options {
             secure_cookie: false,
             max_sessions: voidforge_web::store::MAX_SESSIONS,
             key_floor: None,
+            api_timeout: voidforge_web::api::API_TIMEOUT,
+            api_url: None,
         }
     }
 }
@@ -410,7 +562,8 @@ impl World {
     /// Starts the stand-ins, lets `tweak` change discovery before the web app reads it, then
     /// starts the web app.
     pub async fn start_with(options: Options, tweak: impl FnOnce(&Dex)) -> Self {
-        let (dex, api, api_a) = stand_ins().await;
+        let (dex, api, stand_in_url) = stand_ins().await;
+        let api_url = options.api_url.clone().unwrap_or(stand_in_url);
         tweak(&dex);
         let (web_l, web_a) = listen().await;
         let web = format!("http://{web_a}");
@@ -420,7 +573,7 @@ impl World {
             client_secret: Secret::new(SECRET.to_owned()),
             redirect_url: format!("{web}/callback"),
             bind: web_a,
-            api_url: format!("http://{api_a}"),
+            api_url: api_url.clone(),
             secure_cookie: options.secure_cookie,
         };
         let mut provider = Provider::discover(&config).await.expect("discovery");
@@ -429,8 +582,7 @@ impl World {
         }
         let state = AppState {
             provider: Arc::new(provider),
-            api: voidforge_web::api::client().unwrap(),
-            api_url: config.api_url.clone(),
+            api: Client::with_timeouts(api_url, options.api_timeout, options.api_timeout).unwrap(),
             sessions: voidforge_web::store::BoundedStore::new(options.max_sessions),
         };
         let app = routes::app(state, config.secure_cookie);

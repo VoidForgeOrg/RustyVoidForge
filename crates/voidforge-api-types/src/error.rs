@@ -180,6 +180,58 @@ impl ErrorCode {
         Self::Unavailable,
     ];
 
+    /// The code's wire name, as serde writes it (`"no_free_slot"`): for showing the code beside a
+    /// message (phase4-ux §6.1). The contract test checks it equals serde's for every code.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MalformedBody => "malformed_body",
+            Self::MissingIdempotencyKey => "missing_idempotency_key",
+            Self::InvalidIdempotencyKey => "invalid_idempotency_key",
+            Self::DuplicateShipIds => "duplicate_ship_ids",
+            Self::InvalidQuery => "invalid_query",
+            Self::MissingToken => "missing_token",
+            Self::InvalidToken => "invalid_token",
+            Self::NotFound => "not_found",
+            Self::AlreadyJoined => "already_joined",
+            Self::NoFreeHomeworld => "no_free_homeworld",
+            Self::NotJoined => "not_joined",
+            Self::UnknownPlanet => "unknown_planet",
+            Self::UnknownBuilding => "unknown_building",
+            Self::UnknownShipBuild => "unknown_ship_build",
+            Self::NotOwner => "not_owner",
+            Self::NoFreeSlot => "no_free_slot",
+            Self::NotUnderConstruction => "not_under_construction",
+            Self::NotOperational => "not_operational",
+            Self::ShipyardHasBuilds => "shipyard_has_builds",
+            Self::NotAShipyard => "not_a_shipyard",
+            Self::ShipyardNotOperational => "shipyard_not_operational",
+            Self::UnknownFleet => "unknown_fleet",
+            Self::UnknownShip => "unknown_ship",
+            Self::NoShips => "no_ships",
+            Self::InvalidCargo => "invalid_cargo",
+            Self::ShipNotOnRoster => "ship_not_on_roster",
+            Self::InsufficientStock => "insufficient_stock",
+            Self::InsufficientCapacity => "insufficient_capacity",
+            Self::FleetNotStationed => "fleet_not_stationed",
+            Self::FleetNotInTransit => "fleet_not_in_transit",
+            Self::AlreadyRecalled => "already_recalled",
+            Self::SamePlanet => "same_planet",
+            Self::NoColonyShip => "no_colony_ship",
+            Self::TargetOwned => "target_owned",
+            Self::NoCargoVessel => "no_cargo_vessel",
+            Self::TargetNotOwned => "target_not_owned",
+            Self::UnreachableTarget => "unreachable_target",
+            Self::CargoAboard => "cargo_aboard",
+            Self::PlanetNotOwned => "planet_not_owned",
+            Self::IdempotencyKeyConflict => "idempotency_key_conflict",
+            Self::RateLimited => "rate_limited",
+            Self::Internal => "internal",
+            Self::Busy => "busy",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
     /// Whether this is one of the core's 31 game-rule reason codes (D-028, D-029).
     #[must_use]
     pub fn is_game_rule(self) -> bool {

@@ -8,10 +8,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use common::{Browser, CLIENT, EMAIL, Options, PLAYER, SECRET, World, now, player_view};
+use common::{Browser, CLIENT, EMAIL, Options, PLAYER, World, now, player_view};
 use serde_json::json;
 use voidforge_web::oidc::{DiscoveryError, Provider};
-use voidforge_web::pages::{EXPIRED, UNIVERSE_FULL};
+use voidforge_web::pages::EXPIRED;
 
 fn logged_in(body: &str) -> bool {
     body.contains("Logged in as")
@@ -191,21 +191,32 @@ async fn the_api_refusing_the_token_ends_the_session() {
 }
 
 #[tokio::test]
-async fn a_full_universe_is_a_sentence_and_the_user_stays_logged_in() {
+async fn a_full_universe_is_its_own_page_and_the_user_stays_logged_in() {
     let w = World::start().await;
+    let mut b = logged_in_browser(&w).await;
     *w.api.answer.lock().unwrap() = (
         StatusCode::UNPROCESSABLE_ENTITY,
         json!({"code": "no_free_homeworld", "message": "full"}),
     );
-    let mut b = logged_in_browser(&w).await;
-    let home = b.get("/").await;
-    assert!(
-        home.body.contains(UNIVERSE_FULL) && !home.body.contains("no_free_homeworld"),
-        "{}",
-        home.body
-    );
-    assert!(logged_in(&home.body));
+    // phase4-ux §4.1 (the advisor's A2): its own page, the copy with its code, and Log out as
+    // the only action. The login stays: retrying can't change it, and logging out is the way on.
+    for _ in 0..2 {
+        let home = b.get("/").await;
+        assert_eq!(home.status, 200);
+        assert!(
+            home.body.contains(
+                "<h1>The universe is full</h1><p>There's no free homeworld for a new player, so your account can't join this universe. Trying again won't change that. (<code>no_free_homeworld</code>)</p><form"
+            ) && home.body.matches("no free homeworld").count() == 1
+                && home
+                    .body
+                    .contains(r#"<form method="post" action="/logout">"#)
+                && !home.body.contains("<a "),
+            "{}",
+            home.body
+        );
+    }
     assert_eq!(b.post("/logout").await.status, 303);
+    assert!(b.get("/").await.body.contains(r#"href="/login""#));
 }
 
 #[tokio::test]
@@ -512,78 +523,7 @@ async fn discovery_refuses_another_issuer_other_origins_and_no_s256() {
         .expect("the stand-in's own document is fine");
 }
 
-// --- Nothing secret is shown or logged ---
-
-#[tokio::test]
-async fn no_token_code_or_secret_reaches_a_page_or_the_log() {
-    use std::sync::{Arc, Mutex};
-    use tracing_subscriber::Layer as _;
-    use tracing_subscriber::layer::SubscriberExt as _;
-
-    #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Sink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let sink = Sink::default();
-    let writer = sink.clone();
-    let subscriber = tracing_subscriber::registry().with(
-        tracing_subscriber::fmt::layer()
-            .with_writer(move || writer.clone())
-            .with_ansi(false)
-            .with_filter(tracing_subscriber::filter::LevelFilter::TRACE),
-    );
-    let _guard = tracing::subscriber::set_default(subscriber);
-
-    let w = World::start().await;
-    let mut b = w.browser();
-    let login = b.get("/login").await;
-    let auth_url = login.location.clone().unwrap();
-    let callback = {
-        let r = b.http.get(&auth_url).send().await.unwrap();
-        r.headers()["location"].to_str().unwrap().to_owned()
-    };
-    let mut pages = vec![login.body, b.get(&callback).await.body];
-    pages.push(b.get("/").await.body);
-    pages.push(b.get(&callback).await.body); // a refused replay
-    pages.push(b.post("/logout").await.body);
-    w.behave(|x| x.claims = json!({ "nonce": "wrong" }));
-    pages.push(b.login().await.body); // a refused token
-
-    let query = |url: &str, key: &str| {
-        url.split(['?', '&'])
-            .find_map(|kv| kv.strip_prefix(&format!("{key}=")).map(str::to_owned))
-            .unwrap()
-    };
-    let mut secrets = vec![
-        query(&auth_url, "state"),
-        query(&auth_url, "nonce"),
-        query(&auth_url, "code_challenge"),
-        query(&callback, "code"),
-        SECRET.to_owned(),
-    ];
-    secrets.extend(w.dex.issued.lock().unwrap().iter().cloned());
-    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-    assert!(
-        log.contains("a login completed"),
-        "the log was captured: {log}"
-    );
-    for s in &secrets {
-        assert!(
-            !log.contains(s.as_str()),
-            "the log holds a secret: {s:.12}…"
-        );
-        for p in &pages {
-            assert!(!p.contains(s.as_str()), "a page holds a secret: {s:.12}…");
-        }
-    }
-}
+// --- Nothing secret is shown or logged: tests/logs.rs ---
 
 // --- The session store's bound (R1-1) ---
 
@@ -764,53 +704,4 @@ async fn at_the_cap_concurrent_logins_get_a_login_or_the_busy_page_never_a_500()
         let busy = statuses.iter().filter(|&&s| s == 503).count();
         assert_eq!((logins, busy), (4, 28), "round {round}: {statuses:?}");
     }
-}
-
-#[tokio::test]
-async fn refusals_at_the_cap_log_one_warn_then_one_info_on_recovery() {
-    use std::sync::{Arc, Mutex};
-    use tracing_subscriber::Layer as _;
-    use tracing_subscriber::layer::SubscriberExt as _;
-
-    #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Sink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let sink = Sink::default();
-    let writer = sink.clone();
-    let subscriber = tracing_subscriber::registry().with(
-        tracing_subscriber::fmt::layer()
-            .with_writer(move || writer.clone())
-            .with_ansi(false)
-            .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
-    );
-    let _guard = tracing::subscriber::set_default(subscriber);
-
-    let w = World::start_with(
-        Options {
-            max_sessions: 1,
-            ..Options::default()
-        },
-        |_| {},
-    )
-    .await;
-    let mut alice = logged_in_browser(&w).await;
-    for _ in 0..40 {
-        assert_eq!(w.browser().get("/login").await.status, 503);
-    }
-    alice.post("/logout").await;
-    assert_eq!(w.browser().get("/login").await.status, 303);
-    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-    let lines = |what: &str| log.lines().filter(|l| l.contains(what)).count();
-    assert_eq!(lines("refusing new logins"), 1, "{log}");
-    assert!(log.contains("WARN") && log.contains("refused=1 "), "{log}");
-    assert_eq!(lines("has room again"), 1, "{log}");
-    assert!(log.contains("refused=40"), "{log}");
 }

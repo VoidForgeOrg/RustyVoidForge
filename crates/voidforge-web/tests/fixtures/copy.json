@@ -1,0 +1,198 @@
+{
+ "source": "phase4-ux.md §6.1 and §6.2 (dev-design), extracted mechanically for P4.2's table test",
+ "codes": {
+  "malformed_body": {
+   "page": "The game didn't understand that order. This is a bug in the web client, not something you did; please report it.",
+   "command": "The game didn't understand that order. This is a bug in the web client, not something you did; please report it."
+  },
+  "missing_idempotency_key": {
+   "page": "The form was missing its submission key. This is a bug in the web client; reload the page and try again.",
+   "command": "The form was missing its submission key. This is a bug in the web client; reload the page and try again."
+  },
+  "invalid_idempotency_key": {
+   "page": "The form's submission key wasn't valid. This is a bug in the web client; reload the page and try again.",
+   "command": "The form's submission key wasn't valid. This is a bug in the web client; reload the page and try again."
+  },
+  "duplicate_ship_ids": {
+   "page": "A ship was picked twice. Reload the page and pick each ship once.",
+   "command": "A ship was picked twice. Reload the page and pick each ship once."
+  },
+  "invalid_query": {
+   "page": "Those numbers couldn't be used for a search. Check them, or use a smaller radius (at most 1,000 planets per search).",
+   "command": "Those numbers couldn't be used for a search. Check them, or use a smaller radius (at most 1,000 planets per search)."
+  },
+  "missing_token": {
+   "page": "You're not logged in. Log in to continue.",
+   "command": "You're not logged in. Log in to continue."
+  },
+  "invalid_token": {
+   "page": "Your session ended. Log in again to continue.",
+   "command": "Your session ended. Log in again to continue."
+  },
+  "not_found": {
+   "page": "That page doesn't exist on the game server. This is a bug in the web client; please report it.",
+   "command": "That page doesn't exist on the game server. This is a bug in the web client; please report it."
+  },
+  "already_joined": {
+   "page": "You've already joined this universe.",
+   "command": "You've already joined this universe."
+  },
+  "no_free_homeworld": {
+   "page": "There's no free homeworld for a new player, so your account can't join this universe. Trying again won't change that.",
+   "command": "There's no free homeworld for a new player, so your account can't join this universe. Trying again won't change that."
+  },
+  "not_joined": {
+   "page": "Your account hasn't joined the game yet. Reload the page to join.",
+   "command": "Your account hasn't joined the game yet. Reload the page to join."
+  },
+  "unknown_planet": {
+   "page": "There's no planet #{p}. Check the number on the Universe page.",
+   "command": "There's no planet #{p}. Check the number on the Universe page."
+  },
+  "unknown_building": {
+   "page": "That building no longer exists. It may have just been demolished or cancelled.",
+   "command": "That building no longer exists. It may have just been demolished or cancelled."
+  },
+  "unknown_ship_build": {
+   "page": "That ship build no longer exists. It may have just finished or been cancelled.",
+   "command": "That ship build no longer exists. It may have just finished or been cancelled."
+  },
+  "not_owner": {
+   "page": "Planet #{p} isn't yours. You can build, and load cargo, only on your own planets.",
+   "command": "Planet #{p} isn't yours. You can build, and load cargo, only on your own planets."
+  },
+  "no_free_slot": {
+   "page": "Every building slot on this planet is taken. Demolish or cancel a building to free one.",
+   "command": "Every building slot on this planet is taken. Demolish or cancel a building to free one."
+  },
+  "not_under_construction": {
+   "page": "That building isn't under construction any more. It may have just been completed.",
+   "command": "That building isn't under construction any more. It may have just been completed."
+  },
+  "not_operational": {
+   "page": "That building isn't working: it's under construction or being demolished.",
+   "command": "That building isn't working: it's under construction or being demolished."
+  },
+  "shipyard_has_builds": {
+   "page": "That Shipyard still has ships building or waiting. Cancel them before demolishing it.",
+   "command": "That Shipyard still has ships building or waiting. Cancel them before demolishing it."
+  },
+  "not_a_shipyard": {
+   "page": "That building isn't a Shipyard.",
+   "command": "That building isn't a Shipyard."
+  },
+  "shipyard_not_operational": {
+   "page": "That Shipyard isn't working: it's under construction or being demolished.",
+   "command": "That Shipyard isn't working: it's under construction or being demolished."
+  },
+  "unknown_fleet": {
+   "page": "That fleet no longer exists. It may have been disbanded, or used its last ship to colonize.",
+   "command": "That fleet no longer exists. It may have been disbanded, or used its last ship to colonize."
+  },
+  "unknown_ship": {
+   "page": "One of those ships isn't available any more. Reload the page and pick again.",
+   "command": "One of those ships isn't available any more. Reload the page and pick again."
+  },
+  "no_ships": {
+   "page": "Pick at least one ship.",
+   "command": "Pick at least one ship."
+  },
+  "invalid_cargo": {
+   "page": "Cargo can't be negative.",
+   "command": "Cargo can't be negative."
+  },
+  "ship_not_on_roster": {
+   "page": "One of those ships isn't on this planet's roster any more. Reload the page and pick again.",
+   "command": "One of those ships isn't on this planet's roster any more. Reload the page and pick again."
+  },
+  "insufficient_stock": {
+   "page": "This planet doesn't have that much in storage. Load less.",
+   "command": "This planet doesn't have that much in storage. Load less."
+  },
+  "insufficient_capacity": {
+   "page": "Those ships can't carry that much. Load less, or add Cargo Vessels.",
+   "command": "Those ships can't carry that much. Load less, or add Cargo Vessels."
+  },
+  "fleet_not_stationed": {
+   "page": "That fleet is flying, so it can't do that now. Wait until it's stationed.",
+   "command": "That fleet is flying, so it can't do that now. Wait until it's stationed."
+  },
+  "fleet_not_in_transit": {
+   "page": "That fleet isn't flying a mission, so there's nothing to turn back. It may have just arrived.",
+   "command": "That fleet isn't flying a mission, so there's nothing to turn back. It may have just arrived."
+  },
+  "already_recalled": {
+   "page": "That fleet has already turned back once, and it can't again.",
+   "command": "That fleet has already turned back once, and it can't again."
+  },
+  "same_planet": {
+   "page": "The fleet is already at Planet #{t}. Choose another target.",
+   "command": "The fleet is already at Planet #{t}. Choose another target."
+  },
+  "no_colony_ship": {
+   "page": "Colonizing needs a Colony Ship in the fleet.",
+   "command": "Colonizing needs a Colony Ship in the fleet."
+  },
+  "target_owned": {
+   "page": "Planet #{t} is already owned. Colonize needs an unowned planet; Move goes anywhere.",
+   "command": "Planet #{t} is already owned. Colonize needs an unowned planet; Move goes anywhere."
+  },
+  "no_cargo_vessel": {
+   "page": "Transport needs a Cargo Vessel in the fleet.",
+   "command": "Transport needs a Cargo Vessel in the fleet."
+  },
+  "target_not_owned": {
+   "page": "Transport goes only to your own planets. To go elsewhere, use Move.",
+   "command": "Transport goes only to your own planets. To go elsewhere, use Move."
+  },
+  "unreachable_target": {
+   "page": "Planet #{t} is too far: the trip would take more than 1,000 years.",
+   "command": "Planet #{t} is too far: the trip would take more than 1,000 years."
+  },
+  "cargo_aboard": {
+   "page": "The fleet still carries cargo. Unload it at one of your planets before disbanding.",
+   "command": "The fleet still carries cargo. Unload it at one of your planets before disbanding."
+  },
+  "planet_not_owned": {
+   "page": "The fleet isn't at one of your planets, so it can't unload there. Move it to one of your planets first.",
+   "command": "The fleet isn't at one of your planets, so it can't unload there. Move it to one of your planets first."
+  },
+  "idempotency_key_conflict": {
+   "page": "That form was already used for a different order, so this one wasn't sent. The page has fresh forms now: submit it again.",
+   "command": "That form was already used for a different order, so this one wasn't sent. The page has fresh forms now: submit it again."
+  },
+  "rate_limited": {
+   "command": "Too many requests at once. Try again in a moment; your order wasn't sent.",
+   "page": "Too many requests at once. Try again in a moment."
+  },
+  "internal": {
+   "command": "Something went wrong on the game server. Your order may or may not have gone through. Trying again is safe: it won't run twice.",
+   "page": "Something went wrong on the game server. Try again."
+  },
+  "busy": {
+   "command": "The game is busy. Try again in a moment; your order wasn't sent.",
+   "page": "The game is busy. Try again in a moment."
+  },
+  "unavailable": {
+   "command": "The game is starting up or catching up. Try again in a moment; your order wasn't sent.",
+   "page": "The game is starting up or catching up. Try again in a moment."
+  }
+ },
+ "without_number": {
+  "unknown_planet": "There's no such planet. Check the number on the Universe page.",
+  "not_owner": "That planet isn't yours. You can build, and load cargo, only on your own planets.",
+  "same_planet": "The fleet is already at that planet. Choose another target.",
+  "target_owned": "That planet is already owned. Colonize needs an unowned planet; Move goes anywhere.",
+  "unreachable_target": "That planet is too far: the trip would take more than 1,000 years."
+ },
+ "web": {
+  "unreachable": {
+   "command": "Can't reach the game server. Your order may or may not have gone through. Trying again is safe: it won't run twice.",
+   "page": "Can't reach the game server. Try again in a moment."
+  },
+  "unexpected": {
+   "command": "The game server answered something unexpected, so your order may or may not have gone through. Trying again is safe: it won't run twice. This is a bug; please report it.",
+   "page": "The game server answered something unexpected. This is a bug; please report it."
+  }
+ }
+}
