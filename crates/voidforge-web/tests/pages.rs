@@ -642,6 +642,30 @@ async fn logging_in_again_after_an_ended_session_says_so_once() {
     }
 }
 
+/// §5.6, review-r1's R1-1: the callback takes the renewing mark, so a second login in the same
+/// session (a stale Log in link, another tab) doesn't show the line again.
+#[tokio::test]
+async fn a_second_login_after_the_renewal_doesn_t_say_it_again() {
+    let w = World::start().await;
+    let mut b = logged_in(&w).await;
+    reply(&w, "/players/me/fleets", &fleets_view(json!([]), None));
+    w.api
+        .reply("/players/me", Reply::error(401, "invalid_token"));
+    has(
+        &b.get("/fleets").await.body,
+        "Your login has expired. Log in again.",
+    );
+    w.api
+        .reply("/players/me", Reply::json(StatusCode::OK, &player_view(42)));
+    let callback = b.start_login("/login?next=%2Ffleets").await;
+    assert_eq!(b.get(&callback).await.status, 303);
+    has(&b.get("/fleets").await.body, RENEWED);
+    // Logged in, the same session logs in again: no line.
+    let callback = b.start_login("/login?next=%2Ffleets").await;
+    assert_eq!(b.get(&callback).await.status, 303);
+    lacks(&b.get("/fleets").await.body, "Your session had ended");
+}
+
 #[tokio::test]
 async fn a_url_can_t_ask_for_the_line() {
     let w = World::start().await;
