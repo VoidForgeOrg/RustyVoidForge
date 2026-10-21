@@ -37,6 +37,12 @@ def main():
     row = next(l for l in section.splitlines() if l.startswith("| An unexpected status"))
     web["unexpected"] = {"command": re.search(r"Command: `([^`]+)`", row).group(1),
                          "page": re.search(r"Page: `([^`]+)`", row).group(1)}
+    # Copy never cites the document: a note for its readers left in a cell would ship (R2's note).
+    strings = [v for pair in list(codes.values()) + list(web.values()) for v in pair.values()]
+    strings += list(without_number.values())
+    noted = [v for v in strings if "§" in v or "(Only" in v]
+    if noted:
+        sys.exit("a document note is in the copy, which would ship: %r" % noted[0][:100])
     if len(codes) != 44 or len(without_number) != 5:
         sys.exit("expected 44 codes and 5 forms without a number, found %d and %d"
                  % (len(codes), len(without_number)))

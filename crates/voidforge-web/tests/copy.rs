@@ -68,6 +68,11 @@ fn copy_with_a_number_reads_without_it_when_the_page_has_none() {
             Some(want) => assert_eq!(&page, want, "{code:?}"),
             None => assert_eq!(page, doc.codes[code.as_str()].page, "{code:?}"),
         }
+        let order = copy(code, Context::Command, FILL);
+        assert!(
+            !page.contains('§') && !order.contains('§'),
+            "{code:?}: a document note would ship"
+        );
         assert!(
             !page.contains('{') && !page.contains('#'),
             "{code:?}: {page}"
