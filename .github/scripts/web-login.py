@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The web login by effect against a real dex (Technical Plan P4.1 to P4.4; decision log D-057, D-059 to D-061).
 
-Starts `voidforge-web` on localhost:8081 (dex registers the redirect by exact string), then
-logs alice in and out as a browser would, with two cookie jars: one for dex's pages and one for
+Starts `voidforge-web` on localhost:8081 (dex registers the redirect by exact string), and
+refuses if anything already listens there; it sends its first request only after the child's
+own "serving on" line (start_web; the Phase 4 gate's R2-G1). Then it logs alice in and out as a browser would, with two cookie jars: one for dex's pages and one for
 the web app. Nothing here runs a browser; dex's pages are driven over HTTP as device-login.py
 does.
 
@@ -42,17 +43,24 @@ import argparse
 import html
 import json
 import os
+import queue
 import re
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import HTTPConnection
 from http.cookiejar import CookieJar
 
+# Fixed: dex registers the redirect by exact string. test-web-login-ready.py points it elsewhere.
 WEB = "http://localhost:8081"
+# How long the web app may take to say it's serving (the issuer's discovery comes first).
+READY_SECONDS = 30
 SECRET = "voidforge-web-local-test-secret"  # TEST-ONLY, from deploy/dex/config*.yaml
 USER, PASSWORD = "alice@voidforge.test", "alice-local-test-password"
 COOKIE = "voidforge_session"
@@ -82,6 +90,31 @@ def check(condition, message, detail=""):
     return condition
 
 
+class PinnedConnection(HTTPConnection):
+    """An HTTP connection that sends WEB's requests to 127.0.0.1, the address start_web made the
+    child bind and its receipt names, never to whatever else `localhost` resolves to (R2's delta on
+    96f71b7: an app binding [::1]:8081 after the pre-check got them). The URL, so the Host header,
+    the cookies and dex's exact redirect, stays `localhost`."""
+
+    def connect(self):
+        if self.host == "localhost" and self.port == urllib.parse.urlsplit(WEB).port:
+            self.sock = socket.create_connection(("127.0.0.1", self.port), self.timeout)
+        else:
+            super().connect()
+
+
+class PinnedHTTP(urllib.request.HTTPHandler):
+    """Every http:// request of the walk, through a Browser or a bare urlopen, on PinnedConnection.
+    Redirects aren't followed (NoRedirect), so each hop, dex's absolute callback URL included, is
+    a request of its own through here."""
+
+    def http_open(self, req):
+        return self.do_open(PinnedConnection, req)
+
+
+urllib.request.install_opener(urllib.request.build_opener(PinnedHTTP()))
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     """Every redirect is returned, not followed, so each hop can be checked."""
 
@@ -94,7 +127,8 @@ class Browser:
 
     def __init__(self):
         self.jar = CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar), NoRedirect())
+        self.opener = urllib.request.build_opener(PinnedHTTP(), urllib.request.HTTPCookieProcessor(self.jar),
+                                                  NoRedirect())
         self.pages = []
 
     def request(self, url, data=None, method=None):
@@ -138,16 +172,74 @@ def dex_login(dex, url, origin):
     raise RuntimeError("dex didn't send the browser back (status %s): %s" % (status, body[:300]))
 
 
-def wait_ready(proc):
-    for _ in range(100):
-        if proc.poll() is not None:
-            return False
+def listeners():
+    """The loopback addresses on WEB's port that accept a connection: 127.0.0.1, ::1, and anything
+    else `localhost` resolves to. A listener on either catches `localhost` requests, whichever the
+    child binds. Only connects; it sends nothing."""
+    port = urllib.parse.urlsplit(WEB).port
+    addresses = {("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)}
+    try:
+        addresses |= {(a[4][0], a[0]) for a in socket.getaddrinfo("localhost", port, type=socket.SOCK_STREAM)}
+    except OSError:
+        pass
+    found = []
+    for host, family in sorted(addresses, key=str):
         try:
-            urllib.request.urlopen(WEB + "/", timeout=1).read()
-            return True
-        except (urllib.error.URLError, ConnectionError, OSError):
-            time.sleep(0.1)
-    return False
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.connect((host, port))
+                found.append(host)
+        except OSError:
+            pass
+    return found
+
+
+def start_web(argv, env, log):
+    """Starts voidforge-web on WEB's port and returns it once it says so itself (R2-G1, R1-G2).
+
+    It refuses when something already listens there: the walk would log in to and post forms to
+    that app, whatever API it uses (an owner's web on voidforge_dev, another seat's). It never
+    stops or replaces it. Then it is ready only on the child's own receipt, the line it prints
+    after a successful bind, read from its own stdout while it is alive; no request is sent
+    before. A child that lost the port between the check and its bind exits, and is refused
+    with its log's tail. The child's stdout and stderr both go to `log`, as before."""
+    port = urllib.parse.urlsplit(WEB).port
+    taken = listeners()
+    if taken:
+        raise RuntimeError("something already listens on localhost:%d (%s); the walk won't use another app. "
+                           "Stop it, or wait until whoever holds the port is done" % (port, ", ".join(taken)))
+    bind = "127.0.0.1:%d" % port
+    proc = subprocess.Popen(argv + ["--bind", bind], env=env, stdout=subprocess.PIPE,
+                            stderr=log, stdin=subprocess.DEVNULL, text=True, bufsize=1)
+    lines = queue.Queue()
+
+    def tee():
+        for line in proc.stdout:
+            log.write(line)
+            log.flush()
+            lines.put(line.rstrip("\n"))
+        lines.put(None)
+
+    threading.Thread(target=tee, daemon=True).start()
+    receipt = "voidforge-web: serving on http://" + bind
+    deadline = time.monotonic() + READY_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            line = lines.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        if line is None:
+            break
+        if line == receipt and proc.poll() is None:
+            return proc
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+    log.flush()
+    with open(log.name, encoding="utf-8", errors="replace") as f:
+        tail = f.read()[-600:]
+    raise RuntimeError("voidforge-web didn't say %r within %d s (exit %s); its log %s ends: %s"
+                       % (receipt, READY_SECONDS, proc.returncode, log.name, tail))
 
 
 def start_login(web, dex_origin):
@@ -162,12 +254,9 @@ def run(args):
     origin = re.match(r"https?://[^/]+", issuer).group(0)
     env = dict(os.environ, VOIDFORGE_WEB_CLIENT_SECRET=SECRET)
     log = open(args.log, "w")
-    proc = subprocess.Popen([args.web, "--issuer", issuer, "--api-url", args.api], env=env,
-                            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    proc = start_web([args.web, "--issuer", issuer, "--api-url", args.api], env, log)
     secrets_seen = []
     try:
-        if not wait_ready(proc):
-            raise RuntimeError("voidforge-web didn't become ready on %s; see %s" % (WEB, args.log))
         web, dex = Browser(), Browser()
         started = time.monotonic()
 
@@ -545,17 +634,12 @@ def forms_walk(web, home, api, issuer):
 def unreachable(args, issuer, origin, env, secrets_seen):
     """Starts the web app against a port nothing listens on, logs in, and reads Home. Returns the
     pages it saw, for step 10, and adds its login's code to `secrets_seen`."""
-    import socket
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         closed = "http://127.0.0.1:%d" % s.getsockname()[1]
     log = open(args.log + ".unreachable", "w")
-    proc = subprocess.Popen([args.web, "--issuer", issuer, "--api-url", closed], env=env,
-                            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    proc = start_web([args.web, "--issuer", issuer, "--api-url", closed], env, log)
     try:
-        if not wait_ready(proc):
-            raise RuntimeError("voidforge-web didn't become ready against %s; see %s.unreachable"
-                               % (closed, args.log))
         web, dex = Browser(), Browser()
         location, _ = start_login(web, origin)
         _, callback = dex_login(dex, location, origin)

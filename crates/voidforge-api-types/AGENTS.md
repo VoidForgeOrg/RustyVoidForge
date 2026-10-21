@@ -36,7 +36,7 @@ cargo nextest run -p voidforge-api-types --locked
 just openapi   # rewrites openapi.json after a contract change; call the change out in the PR body
 ```
 
-- `tests/contract.rs`: every command, response, view, event and error example validates against its schema in the generated document (jsonschema, draft 2020-12, formats asserted), deserializes, and serializes back to itself; every tag and code the document declares has an example; invalid payloads (`join_game`, unknown or mistyped fields, duplicate ship IDs, times without milliseconds, uppercase UUIDs, a dropped view field, an unknown code) are refused by the schema and by serde; the ruled status of every code; the six endpoints and the bearer scheme; the closed per-state views; each integer kind at its edge and one past it (components and parameters); and the schema/serde agreement table.
+- `tests/contract.rs`: every command, response, view, event and error example validates against its schema in the generated document (jsonschema, draft 2020-12, formats asserted), deserializes, and serializes back to itself; every tag and code the document declares has an example; invalid payloads (`join_game`, unknown or mistyped fields, duplicate ship IDs, times without milliseconds, uppercase UUIDs, a dropped view field, an unknown code) are refused by the schema and by serde; the ruled status of every code; the eight endpoints and the bearer scheme; the closed per-state views; each integer kind at its edge and one past it (components and parameters); and the schema/serde agreement table.
 - `tests/openapi_file.rs`: the freshness test, and the `bless` that `just openapi` runs.
 
 ## Specs

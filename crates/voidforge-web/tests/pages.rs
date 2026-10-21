@@ -1105,6 +1105,51 @@ async fn an_explicit_search_converts_exactly_and_accepts_both_minus_signs() {
     has(&body, r#"name="z" value="0.001""#);
 }
 
+/// The Phase 4 gate's R2-G2: the explicit search needs neither `/players/me` nor `/rules`, so it
+/// starts beside them, and a slow API holds the page for one bound, not two. By arrival order:
+/// the search reaches the API before `/players/me` has answered.
+#[tokio::test]
+async fn an_explicit_search_starts_beside_players_me() {
+    let w = World::start().await;
+    let mut b = logged_in(&w).await;
+    let slow = |v: &Value| Reply::json(StatusCode::OK, v).delay(600);
+    w.api.reply("/players/me", slow(&player_view(42)));
+    *w.api.rules.lock().unwrap() = slow(&rules_view("v0"));
+    w.api.reply("/planets", slow(&near(json!([]))));
+    let from = count(&w);
+    let started = Instant::now();
+    let page = b.get("/universe?x=0&y=0&z=0&radius=5").await;
+    let took = started.elapsed();
+    assert_eq!(page.status, 200, "{}", page.body);
+    let arrived = |path: &str| {
+        let r = w.api.requests.lock().unwrap()[from..]
+            .iter()
+            .find(|r| r.uri.split('?').next() == Some(path))
+            .map(|r| r.arrived);
+        r.unwrap_or_else(|| panic!("no request to {path}"))
+    };
+    let (me, search) = (arrived("/players/me"), arrived("/planets"));
+    assert!(
+        search < me + Duration::from_millis(600),
+        "the search arrived {:?} after /players/me, after its answer",
+        search.saturating_duration_since(me)
+    );
+    // One after the other would take 1.2 s.
+    assert!(took < Duration::from_millis(1_100), "{took:?}");
+}
+
+/// The explicit search runs beside `/players/me`, but `/players/me`'s failure still decides the
+/// page (the first failing read, D-060): its 503 is the page's, not the search's 500.
+#[tokio::test]
+async fn an_explicit_search_still_lets_players_me_decide_first() {
+    let w = World::start().await;
+    let mut b = logged_in(&w).await;
+    w.api.reply("/players/me", Reply::error(503, "unavailable"));
+    w.api.reply("/planets", Reply::error(500, "internal"));
+    let page = b.get("/universe?x=0&y=0&z=0&radius=5").await;
+    assert_eq!(page.status, 503, "{}", page.body);
+}
+
 #[tokio::test]
 async fn around_a_planet_reads_it_beside_players_me() {
     let w = World::start().await;

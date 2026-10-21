@@ -4,8 +4,10 @@
 //! - Every logged-in page starts the same way ([`begin`]): the login, or the logged-out Home at
 //!   that URL with Log in returning there (§4.6, E4), or the expired notice. Then it makes all
 //!   its reads **at once** (T1): the public `GET /rules` for the fast-rules line, `GET
-//!   /players/me` (the read that joins, D-047) and the page's own, each within its bound, so a
-//!   hung API holds a page for one bound. The Universe's centre needs a read before its search.
+//!   /players/me` (the read that joins, D-047) and the page's own, each within its bound. A
+//!   hung API holds a page for one bound, since `/players/me` decides first; a slow one holds
+//!   each page for the bounds D-060's amendment states: one for most, two for the Universe's
+//!   `?around=`, three for its default (the homeworld, then the search).
 //! - The first failing read decides the page ([`failed`]), `/players/me` first: an expired login
 //!   or a 401 ends the session and shows the expired notice; a full universe is its own page;
 //!   any other failure is the retry page with the API's status (§5.5). A failed `/rules` only
@@ -52,7 +54,7 @@ use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use voidforge_api_types::command::IdempotencyKey;
 use voidforge_api_types::error::ErrorCode;
 use voidforge_api_types::rules::RulesView;
-use voidforge_api_types::view::FleetView;
+use voidforge_api_types::view::{FleetView, PlanetView, PlanetsNearView};
 use voidforge_api_types::wire::{PlanetId, Position};
 
 use crate::api::{Api, ApiError};
@@ -62,7 +64,8 @@ use crate::messages::{self, Context, Fill, Kind, Message};
 use crate::oidc::{self, LoginError, Provider};
 use crate::pages::{self, Found, Frame, Nav, Notice, Refusal, SearchForm};
 use crate::session::{
-    self, Banner, KeyState, LOGIN_KEY, LoggedIn, NOTICE_KEY, PENDING_LIFETIME_SECS, RENEWING_KEY,
+    self, Banner, KeyState, LOGIN_KEY, LoggedIn, NOTICE_KEY, PENDING_KEY, PENDING_LIFETIME_SECS,
+    RENEWING_KEY,
 };
 use crate::store::BoundedStore;
 
@@ -593,6 +596,16 @@ fn query_pairs(query: Option<&str>) -> std::collections::HashMap<String, String>
         .unwrap_or_default()
 }
 
+/// The Universe's read made beside `/players/me`, by what the query names.
+enum Early {
+    /// The explicit search's answer.
+    Near(Result<PlanetsNearView, ApiError>),
+    /// The `?around=` planet's.
+    Centre(Result<PlanetView, ApiError>),
+    /// None: the default centre needs `/players/me` first.
+    Nothing,
+}
+
 /// Where a Universe search is centred.
 enum Centre {
     /// The viewer's homeworld, at the default radius (Q5).
@@ -659,20 +672,23 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
         );
     };
     let token = &viewer.login.id_token;
-    // The centre's read goes beside `/players/me` when the query names it; the default needs
-    // `/players/me` first, for the homeworld.
-    let around = match centre {
-        Centre::Around(id) => Some(id),
-        Centre::Home | Centre::At(..) => None,
-    };
-    let centre_read = async {
-        match around {
-            Some(id) => Some(s.api.planet(token, PlanetId(id)).await),
-            None => None,
+    // Whatever the query names goes beside `/players/me` (D-060 T1): the explicit search itself
+    // (the Phase 4 gate's R2-G2: one API bound), or the `?around=` centre's read. Only the
+    // default needs `/players/me` first, for the homeworld.
+    let first = async {
+        match &centre {
+            Centre::At(position, radius) => Early::Near(
+                s.api
+                    .planets_near(token, *position, u64::try_from(*radius).unwrap_or(0))
+                    .await,
+            ),
+            Centre::Around(id) => Early::Centre(s.api.planet(token, PlanetId(*id)).await),
+            Centre::Home => Early::Nothing,
         }
     };
-    let (fast, me, around_view) = tokio::join!(fast_rules(&s), s.api.me(token), centre_read);
+    let (fast, me, first) = tokio::join!(fast_rules(&s), s.api.me(token), first);
     let frame = frame(fast, &viewer, Some(Nav::Universe));
+    // `/players/me`'s failure decides the page before the search's (the first failing read).
     let me = match me {
         Ok(me) => me,
         Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
@@ -681,15 +697,26 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
         me: Some(&me),
         ..frame
     };
-    let centre_view = match (centre, around_view) {
-        (Centre::At(position, radius), _) => Ok((position, radius, None)),
-        (Centre::Around(id), Some(view)) => view.map(|p| (p.position, DEFAULT_RADIUS_DU, Some(id))),
-        (Centre::Home | Centre::Around(_), _) => {
+    let around = match centre {
+        Centre::Around(id) => Some(id),
+        Centre::Home | Centre::At(..) => None,
+    };
+    let (centre_view, near) = match (centre, first) {
+        (Centre::At(position, radius), Early::Near(near)) => {
+            (Ok((position, radius, None)), Some(near))
+        }
+        (Centre::Around(id), Early::Centre(view)) => (
+            view.map(|p| (p.position, DEFAULT_RADIUS_DU, Some(id))),
+            None,
+        ),
+        _ => {
             let id = me.homeworld_id.0;
-            s.api
+            let view = s
+                .api
                 .planet(token, me.homeworld_id)
                 .await
-                .map(|p| (p.position, DEFAULT_RADIUS_DU, Some(id)))
+                .map(|p| (p.position, DEFAULT_RADIUS_DU, Some(id)));
+            (view, None)
         }
     };
     let (position, radius, around) = match centre_view {
@@ -711,8 +738,14 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
         }
     };
     let form = SearchForm::filled(&position, radius);
-    let radius_du = u64::try_from(radius).unwrap_or(0);
-    match s.api.planets_near(token, position, radius_du).await {
+    let near = match near {
+        Some(near) => near,
+        None => {
+            let radius_du = u64::try_from(radius).unwrap_or(0);
+            s.api.planets_near(token, position, radius_du).await
+        }
+    };
+    match near {
         Ok(near) => {
             let found = Found::Planets {
                 centre: &position,
@@ -1114,6 +1147,14 @@ async fn login(
         .and_then(local_path)
         .unwrap_or("/")
         .to_owned();
+    // Read first: until tower-sessions loads the record, `id()` is the cookie's, and the load is
+    // what drops an id the store doesn't hold (expired, forged). Decided before it, a stale
+    // cookie past the cap skipped both checks below, and the layer's save was a bare 500 (the
+    // Phase 4 gate's R1-G1).
+    if let Err(e) = session.get_value(PENDING_KEY).await {
+        tracing::error!(error = %e, "reading the session failed");
+        return internal();
+    }
     // A new session past the store's cap is refused (R1-1), never evicting another. This check
     // is the fast path; the save below decides a race at the boundary (QA's D1).
     let new = session.id().is_none();
@@ -1241,6 +1282,13 @@ async fn callback(
         return internal();
     }
     session.set_expiry(Some(expiry));
+    // `cycle_id` freed the old record's place, and the new id is created by this save: saved
+    // here, as at `/login`, so a store that filled up in between is the busy page, not the
+    // layer's bare 500 (the Phase 4 gate, R1's first inferred race). The old session is gone
+    // either way: the browser is logged out, and can log in again.
+    if session.save().await.is_err() {
+        return busy(&s);
+    }
     tracing::info!(outcome = "logged_in", "a login completed");
     see_other(&pending.next)
 }

@@ -10,7 +10,8 @@
 #   4. starts the serve binary as a host process (never through just or cargo run: D-050 I5) on a
 #      free port, and waits for its ready line and GET /openapi.json;
 #   5. runs `voidforge-bots e2e`, then the terminal login check (.github/scripts/device-login.py),
-#      then the web login check (.github/scripts/web-login.py; it needs localhost:8081 free);
+#      then the web login check (.github/scripts/web-login.py; it needs localhost:8081 free, and
+#      refuses to start if anything already listens there);
 #   6. stops serve with one SIGTERM and requires exit 0 (the final snapshot at the log head);
 #   7. drops this run's database, on every exit.
 #
@@ -63,18 +64,21 @@ grant=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
     || true)
 if [ "$grant" != 200 ]; then
     say "dex at $issuer doesn't grant alice a token through the password grant (HTTP $grant)."
-    say "Start the stack with the CI dex config: DEX_CONFIG=config.ci.yaml just up"
+    say "Point E2E_ISSUER at a throwaway dex running deploy/dex/config.ci.yaml (its issuer on its own"
+    say "port), for example E2E_ISSUER=http://localhost:5563/dex just smoke. Or, if the stack's dex is"
+    say "yours to reconfigure, start the stack with the CI dex config: DEX_CONFIG=config.ci.yaml just up"
     exit 3
 fi
 if ! sql "SELECT 1" > /dev/null; then
-    say "can't reach the stack's Postgres; start it with: DEX_CONFIG=config.ci.yaml just up"
+    say "can't reach the stack's Postgres; start it with: just up"
     exit 3
 fi
-# Leftovers: drop those whose creating pid is dead; list the rest.
+# Leftovers: drop those whose creating pid is dead; list the rest. `ps -p` sees every user's
+# processes; `kill -0` fails with EPERM for another user's, which would read as dead.
 for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\_e2e\_%' ORDER BY 1"); do
     case "$old" in "$prefix"[0-9]*_[0-9]*) ;; *) say "leftover $old has an unexpected name; not touching it"; continue ;; esac
     pid="${old##*_}"
-    if kill -0 "$pid" 2> /dev/null; then
+    if ps -p "$pid" > /dev/null 2>&1; then
         say "leftover $old: pid $pid is alive (perhaps another run); drop it yourself if it isn't:"
         drop_hint "$old"
     elif out=$(sql "DROP DATABASE IF EXISTS \"$old\"" 2>&1); then

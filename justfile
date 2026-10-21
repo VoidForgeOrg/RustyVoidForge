@@ -40,6 +40,7 @@ lint:
     .github/scripts/test-check-no-managed-blocks.sh
     .github/scripts/check-dex-parity.sh
     .github/scripts/test-check-dex-parity.sh
+    python3 .github/scripts/test-web-login-ready.py
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     python3 tests/guardrails/check_no_floats.py
@@ -103,7 +104,8 @@ bless:
 # The CI e2e job's scenario (decision log D-052): bots log in through dex, join, build, race to
 # colonize and transport cargo, against a fresh universe and the real serve binary; then the
 # terminal's device code login (D-053), then the web walk (D-057 to D-062). Needs the CI
-# dex config: DEX_CONFIG=config.ci.yaml just up (or E2E_ISSUER naming another such dex). It uses
+# dex config: best E2E_ISSUER naming a throwaway dex with it, or DEX_CONFIG=config.ci.yaml just up
+# when the stack's dex is yours to reconfigure. The web walk refuses a taken :8081. It uses
 # only its own voidforge_e2e_<time>_<pid> database, dropped on exit, never voidforge.
 e2e:
     .github/scripts/e2e.sh
