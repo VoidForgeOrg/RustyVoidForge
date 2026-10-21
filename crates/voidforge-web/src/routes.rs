@@ -52,6 +52,7 @@ use tower_sessions::{Expiry, Session, SessionManagerLayer};
 use voidforge_api_types::command::IdempotencyKey;
 use voidforge_api_types::error::ErrorCode;
 use voidforge_api_types::rules::RulesView;
+use voidforge_api_types::view::FleetView;
 use voidforge_api_types::wire::{PlanetId, Position};
 
 use crate::api::{Api, ApiError};
@@ -61,8 +62,7 @@ use crate::messages::{self, Context, Fill, Kind, Message};
 use crate::oidc::{self, LoginError, Provider};
 use crate::pages::{self, Found, Frame, Nav, Notice, Refusal, SearchForm};
 use crate::session::{
-    self, Banner, KeyState, LOGIN_KEY, LoggedIn, NOTICE_KEY, PENDING_KEY, PENDING_LIFETIME_SECS,
-    RENEWING_KEY,
+    self, Banner, KeyState, LOGIN_KEY, LoggedIn, NOTICE_KEY, PENDING_LIFETIME_SECS, RENEWING_KEY,
 };
 use crate::store::BoundedStore;
 
@@ -851,7 +851,23 @@ async fn act(State(s): State<AppState>, session: Session, body: Bytes) -> Respon
                 tracing::error!(error = %e, "keeping the answer failed");
                 return internal();
             }
-            let (text, mut more) = forms::done_lines(order.done, &accepted);
+            // Trigger unload emits no event (only an arrival does), so what moved is read from the
+            // fleet after it (the lead's T9); any failure here only makes the words neutral.
+            let aboard_now = match order.done {
+                forms::Done::Unloaded { fleet, .. } => {
+                    s.api.my_fleets(&login.id_token).await.ok().and_then(|v| {
+                        v.fleets.into_iter().find_map(|f| match f {
+                            FleetView::Stationed {
+                                fleet_id, cargo, ..
+                            } if fleet_id.0 == fleet => Some(cargo),
+                            _ => None,
+                        })
+                    })
+                }
+                _ => None,
+            };
+            let (text, mut more) =
+                forms::done_lines_after(order.done, &accepted, aboard_now.as_ref());
             more.extend(already());
             let banner = Banner {
                 text,
@@ -904,7 +920,13 @@ async fn act(State(s): State<AppState>, session: Session, body: Bytes) -> Respon
             let banner = Banner {
                 text: format!("Not done: {}", m.copy),
                 code: m.code.map(str::to_owned),
-                more: already(),
+                // The conflict's copy already says the form was used for another order; "this
+                // is its result" would contradict it (QA's F2).
+                more: if m.code == Some(ErrorCode::IdempotencyKeyConflict.as_str()) {
+                    Vec::new()
+                } else {
+                    already()
+                },
             };
             banner_back(&session, &return_to, banner).await
         }
@@ -1198,12 +1220,16 @@ async fn callback(
     let Some(expiry) = login_expiry(identity.exp) else {
         return refusal(&session, StatusCode::BAD_REQUEST, Refusal::Rejected).await;
     };
-    // A new session id at login, so an id planted before it is worthless (fixation).
-    // A login renewing an ended session leaves the next page its one-shot notice (§5.6).
+    // A new session id at login, so an id planted before it is worthless (fixation), and a clean
+    // start: `cycle_id` keeps the data, so the old form keys and login attempts are cleared
+    // (P4.4, review-r2's MEDIUM: a new login starts with no form keys). Only the deliberate
+    // one-shot carries over: a renewing login's banner (§5.6, §5.1), else a pending one.
     let stored = async {
         session.cycle_id().await?;
-        session.remove::<serde_json::Value>(PENDING_KEY).await?;
-        if let Some(banner) = session.remove::<Banner>(RENEWING_KEY).await? {
+        let renewing = session.remove::<Banner>(RENEWING_KEY).await?;
+        let notice = session.remove::<Banner>(NOTICE_KEY).await?;
+        session.clear().await;
+        if let Some(banner) = renewing.or(notice) {
             session.insert(NOTICE_KEY, banner).await?;
         }
         session.insert(LOGIN_KEY, LoggedIn::from(identity)).await

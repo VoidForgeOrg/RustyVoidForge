@@ -82,6 +82,9 @@ expression: pretty(body)
 <input type="hidden" name="key" value="[key]">
 <input type="hidden" name="return_to" value="/fleets">
 <input type="hidden" name="fleet_id" value="7">
+<input type="hidden" name="planet_id" value="9">
+<input type="hidden" name="aboard_ore_g" value="250000000">
+<input type="hidden" name="aboard_ingots_g" value="500000000">
 <p><button type="submit">Unload cargo</button></p></form>
 <p>Unload the cargo before disbanding.</p>
 </section>

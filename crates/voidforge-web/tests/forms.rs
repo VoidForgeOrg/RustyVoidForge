@@ -185,8 +185,6 @@ type Case<'a> = (Vec<(&'a str, &'a str)>, Value, Value, &'a str, &'a str);
 #[tokio::test]
 async fn every_action_sends_its_one_command_and_says_done() {
     let (w, mut b) = world().await;
-    let unloaded = json!([{"type": "cargo_unloaded", "planet_id": 7, "fleet_id": 21,
-        "cargo": {"iron_ore_g": 0, "iron_ingot_g": 500_000_000}}]);
     let cases: Vec<Case<'_>> = vec![
         (
             vec![
@@ -305,11 +303,16 @@ async fn every_action_sends_its_one_command_and_says_done() {
                 ("action", "trigger_unload"),
                 ("return_to", "/fleets"),
                 ("fleet_id", "21"),
+                ("planet_id", "7"),
+                ("aboard_ore_g", "0"),
+                ("aboard_ingots_g", "500000000"),
             ],
             json!({"type": "trigger_unload", "payload": {"fleet_id": 21}}),
-            unloaded,
+            // As the core answers it: no event of its own (D-028). The stand-in's fleets still
+            // show the 500 t aboard, so nothing moved; what did move is pinned further down.
+            json!([]),
             "/fleets",
-            "Done: unloaded 500.0 t of ingots into Planet #7.",
+            "Done, but nothing was unloaded: the planet's storage is full. The cargo stays aboard.",
         ),
     ];
     for (fields, want, events, location, banner) in cases {
@@ -358,6 +361,9 @@ async fn a_success_lists_its_events_and_unloading_nothing_says_so() {
             ("key", &key),
             ("return_to", "/fleets"),
             ("fleet_id", "21"),
+            ("planet_id", "7"),
+            ("aboard_ore_g", "0"),
+            ("aboard_ingots_g", "500000000"),
         ],
     )
     .await;
@@ -469,6 +475,8 @@ async fn back_then_the_same_form_replays_and_a_different_form_conflicts() {
         &page,
         "Not done: That form was already used for a different order, so this one wasn't sent. The page has fresh forms now: submit it again.</strong> (<code>idempotency_key_conflict</code>)",
     );
+    // QA's F2: the key was answered, but "this is its result" would contradict the conflict.
+    lacks(&page, ALREADY_SUBMITTED);
     let keys: Vec<_> = commands(&w)
         .iter()
         .map(|c| c.idempotency_key.clone().unwrap())
@@ -1225,4 +1233,85 @@ async fn issuing_keys_and_banners_keeps_the_login_s_lifetime() {
     submit(&mut b, &build_fields("AAAAAAAAAAAAAAAAAAAAAA")).await;
     check(&b, "an expired form", from);
     assert!(commands(&w).len() == 1, "neither refusal called");
+}
+
+/// QA's F1 and the lead's T9: the core answers Trigger unload with no event, so the banner says
+/// what moved from the fleet read after the 200; a failed read is the neutral line.
+#[tokio::test]
+async fn an_unload_says_what_moved_from_the_fleet_after_it() {
+    let (w, mut b) = world().await;
+    w.api.reply("/commands", accepted(&json!([])));
+    let page = b.get("/fleets").await.body;
+    let fields = act_form_fields(&page, "trigger_unload");
+    assert!(
+        fields.contains(&("aboard_ingots_g".to_owned(), "500000000".to_owned())),
+        "{fields:?}"
+    );
+    // After it, 20 t is still aboard: 480 t moved, and the rest is named.
+    let mut after = my_fleets();
+    after["fleets"][0]["cargo"]["iron_ingot_g"] = json!(20_000_000);
+    reply(&w, "/players/me/fleets", &after);
+    let from = w.api.requests_to("/players/me/fleets").len();
+    let pairs: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    submit(&mut b, &pairs).await;
+    assert_eq!(
+        w.api.requests_to("/players/me/fleets").len(),
+        from + 1,
+        "one read after the 200"
+    );
+    let shown = b.get("/fleets").await.body;
+    has(
+        &shown,
+        "<p><strong>Done: unloaded 480.0 t of ingots into Planet #7. 20.0 t of ingots stays aboard: the storage is full.</strong></p>",
+    );
+    lacks(&shown, "nothing was unloaded");
+    // Everything moved.
+    reply(&w, "/players/me/fleets", &my_fleets());
+    let page = b.get("/fleets").await.body;
+    let fields = act_form_fields(&page, "trigger_unload");
+    let mut after = my_fleets();
+    after["fleets"][0]["cargo"]["iron_ingot_g"] = json!(0);
+    reply(&w, "/players/me/fleets", &after);
+    let pairs: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    submit(&mut b, &pairs).await;
+    has(
+        &b.get("/fleets").await.body,
+        "<p><strong>Done: unloaded 500.0 t of ingots into Planet #7.</strong></p>",
+    );
+    // The read after it fails: the neutral line, never "nothing was unloaded".
+    reply(&w, "/players/me/fleets", &my_fleets());
+    let page = b.get("/fleets").await.body;
+    let fields = act_form_fields(&page, "trigger_unload");
+    w.api.reply("/players/me/fleets", Reply::error(503, "busy"));
+    let pairs: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let sent = submit(&mut b, &pairs).await;
+    assert_eq!(sent.status, 303);
+    reply(&w, "/players/me/fleets", &my_fleets());
+    has(
+        &b.get("/fleets").await.body,
+        "<p><strong>Done: Fleet #21 unloaded what fit into Planet #7's storage.</strong></p>",
+    );
+    assert_eq!(
+        commands(&w).len(),
+        3,
+        "one command per submit, the read never re-sends"
+    );
+}
+
+/// The hidden fields of a page's form for `action`, as a browser posts them.
+fn act_form_fields(page: &str, action: &str) -> Vec<(String, String)> {
+    page.split(r#"<form method="post" action="/act">"#)
+        .skip(1)
+        .map(|f| hidden_fields(&f[..f.find("</form>").unwrap()]))
+        .find(|fields| fields.iter().any(|(k, v)| k == "action" && v == action))
+        .unwrap_or_else(|| panic!("no {action} form in:\n{page}"))
 }

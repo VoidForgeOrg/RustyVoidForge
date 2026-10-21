@@ -178,8 +178,17 @@ pub enum Done {
     TurnedBack(u64, u64),
     /// `disband_fleet`: the fleet and the planet its ships stay on.
     Disbanded(u64, u64),
-    /// `trigger_unload`: the words come from its event, if any.
-    Unloaded,
+    /// `trigger_unload`: the fleet, the planet it's at, and the cargo its page showed aboard.
+    /// The core's Trigger unload emits no event (only an arrival does), so the words come from
+    /// what's aboard after it: P4.4 round 1, QA's F1.
+    Unloaded {
+        /// The fleet.
+        fleet: u64,
+        /// The planet it unloads into.
+        planet: u64,
+        /// What the page showed aboard.
+        shown: Cargo,
+    },
 }
 
 /// A checked form: the command, its success words, and the numbers its refusals name.
@@ -381,11 +390,21 @@ pub fn order(p: &Posted) -> Result<Order, Check> {
         }
         "trigger_unload" => {
             let fleet = hidden(p, "fleet_id", number)?;
+            let planet = hidden(p, "planet_id", number)?;
+            let grams = |name| hidden(p, name, |v| v.parse::<i64>().ok().filter(|g| *g >= 0));
+            let shown = Cargo {
+                iron_ore_g: grams("aboard_ore_g")?,
+                iron_ingot_g: grams("aboard_ingots_g")?,
+            };
             (
                 CommandRequest::TriggerUnload(FleetRef {
                     fleet_id: FleetId(fleet),
                 }),
-                Done::Unloaded,
+                Done::Unloaded {
+                    fleet,
+                    planet,
+                    shown,
+                },
             )
         }
         _ => return Err(Check::Malformed),
@@ -487,14 +506,23 @@ pub fn event_line(e: &Event) -> String {
     }
 }
 
-/// A success, in words: the first line (§5.3) and one line per other event (§6.4). An unload's
-/// own `cargo_unloaded` is its first line, so it isn't repeated.
+/// A success, in words: the first line (§5.3), from the form's own fields and never from an
+/// event (D-028: a command emits none; the events in a 200 are the re-solve's, possibly another
+/// fleet's), then one line per event (§6.4). An unload without a read of the fleet after it
+/// gets the neutral line.
 #[must_use]
 pub fn done_lines(done: Done, accepted: &CommandAccepted) -> (String, Vec<String>) {
-    let unloaded = accepted
-        .events
-        .iter()
-        .position(|e| matches!(e, Event::CargoUnloaded { .. }));
+    done_lines_after(done, accepted, None)
+}
+
+/// [`done_lines`], knowing what an unloaded fleet has aboard now (read after the 200: D-055's
+/// read-your-writes), so an unload can say what moved without an event.
+#[must_use]
+pub fn done_lines_after(
+    done: Done,
+    accepted: &CommandAccepted,
+    aboard_now: Option<&Cargo>,
+) -> (String, Vec<String>) {
     let first = match done {
         Done::Built(t, p) => format!(
             "Done: construction of a {} started on Planet #{p}. It draws ingots until it's complete.",
@@ -508,10 +536,7 @@ pub fn done_lines(done: Done, accepted: &CommandAccepted) -> (String, Vec<String
             "Done: {} #{b} is being demolished. It has stopped working; its slot frees when demolition ends.",
             format::building(t)
         ),
-        Done::Queued(t, s) => format!(
-            "Done: a {} was queued at Shipyard #{s}.",
-            format::ship(t)
-        ),
+        Done::Queued(t, s) => format!("Done: a {} was queued at Shipyard #{s}.", format::ship(t)),
         Done::BuildCancelled(n) => {
             format!("Done: build #{n} cancelled. The ingots delivered are lost.")
         }
@@ -527,26 +552,64 @@ pub fn done_lines(done: Done, accepted: &CommandAccepted) -> (String, Vec<String
         Done::Disbanded(f, p) => {
             format!("Done: Fleet #{f} disbanded. Its ships are on Planet #{p}'s roster.")
         }
-        Done::Unloaded => match unloaded.map(|i| &accepted.events[i]) {
-            Some(Event::CargoUnloaded {
-                planet_id, cargo, ..
-            }) => format!(
-                "Done: unloaded {} into Planet #{}.",
-                cargo_words(cargo),
-                planet_id.0
-            ),
-            _ => "Done, but nothing was unloaded: the planet's storage is full. The cargo stays aboard."
-                .to_owned(),
-        },
+        Done::Unloaded {
+            fleet,
+            planet,
+            shown,
+        } => unload_line(fleet, planet, shown, aboard_now),
     };
-    let more = accepted
-        .events
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !(done == Done::Unloaded && Some(*i) == unloaded))
-        .map(|(_, e)| event_line(e))
-        .collect();
+    let more = accepted.events.iter().map(event_line).collect();
     (first, more)
+}
+
+/// An unload's words for what moved (§5.3): what went into storage, or that nothing did.
+fn moved_line(moved: &Cargo, planet: u64) -> String {
+    if moved.iron_ore_g == 0 && moved.iron_ingot_g == 0 {
+        NOTHING_UNLOADED.to_owned()
+    } else {
+        format!(
+            "Done: unloaded {} into Planet #{planet}.",
+            cargo_words(moved)
+        )
+    }
+}
+
+/// §5.3: an accepted unload that moved nothing (D-029).
+const NOTHING_UNLOADED: &str =
+    "Done, but nothing was unloaded: the planet's storage is full. The cargo stays aboard.";
+
+/// An unload's words without an event (the lead's T9): what moved is what the page showed
+/// aboard minus what the fleet has now. "Nothing was unloaded" only when something was shown
+/// and exactly that is still aboard; when part moved, what stays aboard too (dev-design, round
+/// 1); the neutral line when the read failed, the fleet is gone from it, or the numbers don't fit
+/// (more aboard now than shown).
+fn unload_line(fleet: u64, planet: u64, shown: Cargo, now: Option<&Cargo>) -> String {
+    let neutral =
+        || format!("Done: Fleet #{fleet} unloaded what fit into Planet #{planet}'s storage.");
+    let Some(now) = now else {
+        return neutral();
+    };
+    if now.iron_ore_g > shown.iron_ore_g || now.iron_ingot_g > shown.iron_ingot_g {
+        return neutral();
+    }
+    let moved = Cargo {
+        iron_ore_g: shown.iron_ore_g - now.iron_ore_g,
+        iron_ingot_g: shown.iron_ingot_g - now.iron_ingot_g,
+    };
+    let anything_shown = shown.iron_ore_g > 0 || shown.iron_ingot_g > 0;
+    match (
+        moved.iron_ore_g == 0 && moved.iron_ingot_g == 0,
+        anything_shown,
+    ) {
+        (true, true) => NOTHING_UNLOADED.to_owned(),
+        (true, false) => neutral(),
+        (false, _) if now.iron_ore_g > 0 || now.iron_ingot_g > 0 => format!(
+            "{} {} stays aboard: the storage is full.",
+            moved_line(&moved, planet),
+            cargo_words(now)
+        ),
+        (false, _) => moved_line(&moved, planet),
+    }
 }
 
 #[cfg(test)]
@@ -710,7 +773,13 @@ mod tests {
                 }),
             ),
             (
-                vec![("action", "trigger_unload"), ("fleet_id", "8")],
+                vec![
+                    ("action", "trigger_unload"),
+                    ("fleet_id", "8"),
+                    ("planet_id", "4"),
+                    ("aboard_ore_g", "0"),
+                    ("aboard_ingots_g", "5"),
+                ],
                 CommandRequest::TriggerUnload(FleetRef {
                     fleet_id: FleetId(8),
                 }),
@@ -880,30 +949,87 @@ mod tests {
         .unwrap()
     }
 
+    fn unloaded(ore: i64, ingots: i64) -> Done {
+        Done::Unloaded {
+            fleet: 8,
+            planet: 4,
+            shown: Cargo {
+                iron_ore_g: ore,
+                iron_ingot_g: ingots,
+            },
+        }
+    }
+
+    fn aboard(ore: i64, ingots: i64) -> Option<Cargo> {
+        Some(Cargo {
+            iron_ore_g: ore,
+            iron_ingot_g: ingots,
+        })
+    }
+
+    /// The lead's T9 with dev-design's three outcomes: what moved is shown minus now aboard.
     #[test]
-    fn an_unload_says_what_it_moved_or_that_it_moved_nothing() {
-        let moved = accepted(serde_json::json!([{
-            "type": "cargo_unloaded", "planet_id": 4, "fleet_id": 8,
-            "cargo": {"iron_ore_g": 0, "iron_ingot_g": 500_000_000},
+    fn an_unload_says_what_moved_from_the_fleet_after_it() {
+        let none = accepted(serde_json::json!([]));
+        let neutral = "Done: Fleet #8 unloaded what fit into Planet #4's storage.";
+        for (done, now, line) in [
+            (
+                unloaded(0, 500_000_000),
+                aboard(0, 0),
+                "Done: unloaded 500.0 t of ingots into Planet #4.",
+            ),
+            (
+                unloaded(250_000_000, 500_000_000),
+                aboard(0, 0),
+                "Done: unloaded 250.0 t of ore and 500.0 t of ingots into Planet #4.",
+            ),
+            (
+                unloaded(0, 500_000_000),
+                aboard(0, 20_000_000),
+                "Done: unloaded 480.0 t of ingots into Planet #4. 20.0 t of ingots stays aboard: the storage is full.",
+            ),
+            (
+                unloaded(250_000_000, 500_000_000),
+                aboard(250_000_000, 0),
+                "Done: unloaded 500.0 t of ingots into Planet #4. 250.0 t of ore stays aboard: the storage is full.",
+            ),
+            (
+                unloaded(0, 500_000_000),
+                aboard(0, 500_000_000),
+                "Done, but nothing was unloaded: the planet's storage is full. The cargo stays aboard.",
+            ),
+            // The guards: no read, more aboard than shown, nothing shown.
+            (unloaded(0, 500_000_000), None, neutral),
+            (unloaded(0, 500_000_000), aboard(1, 500_000_000), neutral),
+            (unloaded(0, 500_000_000), aboard(0, 500_000_001), neutral),
+            (unloaded(0, 0), aboard(0, 0), neutral),
+        ] {
+            assert_eq!(
+                done_lines_after(done, &none, now.as_ref()),
+                (line.to_owned(), vec![]),
+                "{done:?} {now:?}"
+            );
+        }
+    }
+
+    /// Point 6 of dev-design's round-1 note: a re-solve's `cargo_unloaded` (another fleet arriving)
+    /// is an event line, never this unload's result.
+    #[test]
+    fn an_event_in_the_answer_never_decides_a_success_line() {
+        let other = accepted(serde_json::json!([{
+            "type": "cargo_unloaded", "planet_id": 4, "fleet_id": 9,
+            "cargo": {"iron_ore_g": 0, "iron_ingot_g": 100_000_000},
         }]));
         assert_eq!(
-            done_lines(Done::Unloaded, &moved),
+            done_lines_after(unloaded(0, 500_000_000), &other, aboard(0, 500_000_000).as_ref()),
             (
-                "Done: unloaded 500.0 t of ingots into Planet #4.".to_owned(),
-                vec![]
+                "Done, but nothing was unloaded: the planet's storage is full. The cargo stays aboard.".to_owned(),
+                vec!["Unloaded 100.0 t of ingots into Planet #4.".to_owned()]
             )
         );
         assert_eq!(
-            done_lines(Done::Unloaded, &accepted(serde_json::json!([]))).0,
-            "Done, but nothing was unloaded: the planet's storage is full. The cargo stays aboard."
-        );
-        // On another action, the same event is an event line.
-        assert_eq!(
-            done_lines(Done::Disbanded(8, 4), &moved),
-            (
-                "Done: Fleet #8 disbanded. Its ships are on Planet #4's roster.".to_owned(),
-                vec!["Unloaded 500.0 t of ingots into Planet #4.".to_owned()]
-            )
+            done_lines(Done::Disbanded(8, 4), &other).1,
+            ["Unloaded 100.0 t of ingots into Planet #4."]
         );
     }
 

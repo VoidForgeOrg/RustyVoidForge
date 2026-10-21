@@ -960,7 +960,12 @@ fn fleet(f: &FleetView, me: &PlayerView, as_of: &Timestamp, acts: &Acts<'_>) -> 
                     }))
                     @if has_cargo(cargo) {
                         @if me.planet_ids.contains(at_planet_id) {
-                            (act_form(acts.key, acts.here, "trigger_unload", &fid_field, &html! {
+                            (act_form(acts.key, acts.here, "trigger_unload", &[
+                                ("fleet_id", fid.to_string()),
+                                ("planet_id", at_planet_id.0.to_string()),
+                                ("aboard_ore_g", cargo.iron_ore_g.to_string()),
+                                ("aboard_ingots_g", cargo.iron_ingot_g.to_string()),
+                            ], &html! {
                                 p { button type="submit" { "Unload cargo" } }
                             }))
                         } @else {
@@ -1443,6 +1448,16 @@ fn flown(departed_at: &Timestamp, as_of: &Timestamp) -> String {
     format::duration(secs.saturating_mul(1_000))
 }
 
+/// A mission and its target as Turn back's line names them (dev-design, P4.4 round 1):
+/// `Colonize Planet #12`, `Transport to Planet #12`, `Move to Planet #12`.
+fn mission_to(m: Mission, target: u64) -> String {
+    match m {
+        Mission::Colonize => format!("Colonize Planet #{target}"),
+        Mission::Transport => format!("Transport to Planet #{target}"),
+        Mission::Move => format!("Move to Planet #{target}"),
+    }
+}
+
 /// §5.4: turn fleet `f` back, once, abandoning its mission. The time flown is from this page's
 /// own read of the fleets.
 #[must_use]
@@ -1461,11 +1476,10 @@ pub fn confirm_turn_back(frame: Frame<'_>, view: &FleetsView, f: u64, key: &str)
             ..
         }) => Offer::Form {
             line: format!(
-                "It has flown {}, so it returns to Planet #{} in about that long, and can't be turned again. Its mission ({} Planet #{}) is abandoned.",
+                "It has flown {}, so it returns to Planet #{} in about that long, and can't be turned again. Its mission ({}) is abandoned.",
                 flown(departed_at, &view.as_of),
                 origin_planet_id.0,
-                format::mission(*mission),
-                target_planet_id.0
+                mission_to(*mission, target_planet_id.0)
             ),
             action: "recall_fleet",
             hidden: vec![
@@ -1643,5 +1657,16 @@ mod tests {
             !out.contains("<nav>") && !out.contains(r#"href="/fleets""#),
             "{out}"
         );
+    }
+
+    /// dev-design's round-1 phrases for Turn back's abandoned mission.
+    #[test]
+    fn each_mission_names_its_target_its_own_way() {
+        assert_eq!(mission_to(Mission::Colonize, 12), "Colonize Planet #12");
+        assert_eq!(
+            mission_to(Mission::Transport, 12),
+            "Transport to Planet #12"
+        );
+        assert_eq!(mission_to(Mission::Move, 19), "Move to Planet #19");
     }
 }
