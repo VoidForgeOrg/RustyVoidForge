@@ -12,6 +12,7 @@ Exit codes: 0 every case passed; 1 a case failed; 2 the cases couldn't run.
 """
 import importlib.util
 import os
+import queue
 import socket
 import socketserver
 import subprocess
@@ -19,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import urllib.request
 
 CHILD = r'''
@@ -35,6 +37,8 @@ except OSError as e:
     sys.exit(1)
 signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
 print(receipt.replace("BIND", bind), flush=True)
+if sys.argv[3:4] == ["exit"]:
+    sys.exit(0)  # serving, then gone at once
 server.serve_forever()
 '''
 
@@ -98,12 +102,13 @@ with open(child, "w") as f:
 RECEIPT = "voidforge-web: serving on http://BIND"
 
 
-def start(walk, port, delay=0.5, receipt=RECEIPT):
+def start(walk, port, delay=0.5, receipt=RECEIPT, then=()):
     """start_web with the stand-in child; returns (the process or None, the refusal or None)."""
     walk.WEB = "http://localhost:%d" % port
     log = open(os.path.join(work, "web-%d.log" % port), "w")
     try:
-        return walk.start_web([sys.executable, child, str(delay), receipt], dict(os.environ), log), None
+        argv = [sys.executable, child, str(delay), receipt, *then]
+        return walk.start_web(argv, dict(os.environ), log), None
     except RuntimeError as e:
         return None, str(e)
 
@@ -177,6 +182,18 @@ def main():
 
     # 5. A child that exits before serving is refused, with its log's tail.
     refused("a child that exits first", walk, free_port(), None, "exit 1", delay="x")
+
+    # 5b. A child that says it's serving and then exits isn't serving: the walk reads the receipt
+    # slowly here (a pipe read held 0.5 s), so the child is surely gone when it's judged.
+    class Slow(queue.Queue):
+        def get(self, *args, **kwargs):
+            item = super().get(*args, **kwargs)
+            time.sleep(0.5)
+            return item
+
+    walk.queue = types.SimpleNamespace(Queue=Slow, Empty=queue.Empty)
+    refused("a child gone after its receipt", walk, free_port(), None, "didn't say", then=["exit"])
+    walk.queue = queue
 
     # 6. The real path: a free port, a slow discovery, then the receipt; the first request reaches
     # the walk's own child.
