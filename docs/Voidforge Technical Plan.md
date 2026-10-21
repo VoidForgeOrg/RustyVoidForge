@@ -6,7 +6,7 @@ Oct 14, 2026 · @Tomáš Grbálik
 
 This plan turns Voidforge MVP Game Design and Voidforge Architectural Design into six phases of work for a factory of coding agents, on a Rust stack. Every choice in Decisions is agreed, so Phase 0 can start.
 
-It covers the tech stack, the workspace layering, auth through a local dex server, a rudimentary server-rendered web frontend, CI/CD, and the phases with the gate that closes each one. Each phase splits into work packages, each one incremental step for one agent and one pull request; each package names its crate and the tests that prove it done. Packages run strictly one after another, and the team closes every gate itself; the owner is told when a gate closes and is asked only when a decision needs them (see Agent factory rules).
+It covers the tech stack, the workspace layering, auth through a local dex server, a static browser frontend, CI/CD, and the phases with the gate that closes each one. Each phase splits into work packages, each one incremental step for one agent and one pull request; each package names its crate and the tests that prove it done. Packages run strictly one after another, and the team closes every gate itself; the owner is told when a gate closes and is asked only when a decision needs them (see Agent factory rules).
 
 The game design defines the rules and the architectural design defines engine behavior; this plan only decides how and in what order to build them. When the plan and those documents disagree, the documents win, and changes land there first.
 
@@ -25,9 +25,9 @@ Fourteen choices shape the build, and all of them are agreed. A later change sta
 | 5 | Rules data | Versioned TOML files in `rules/`, loaded at startup | Constants compiled into the core | Agreed |
 | 6 | Identity provider | dex with static users and clients for local runs and CI; real logins later through dex connectors | Keycloak or Zitadel, both heavier to run | Agreed |
 | 7 | API credential | The dex ID token as a bearer token, checked against dex's published signing keys | dex access tokens, or opaque tokens with introspection | Agreed |
-| 8 | Login flows | Web frontend: authorization code with PKCE, as a confidential client. Bots and CLI: device code. CI tests: password grant for test users only | Client credentials for bots, which needs a dex feature flag and yields tokens with no user | Agreed |
+| 8 | Login flows | Web frontend: authorization code with PKCE, as a public client run by the browser. Bots and CLI: device code. CI tests: password grant for test users only | Client credentials for bots, which needs a dex feature flag and yields tokens with no user | Changed: the web frontend was a confidential client holding the token server-side ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)) |
 | 9 | Player accounts | A Postgres `accounts` table maps issuer and subject to a player UUIDv7; the first call creates it and issues Join game | Derive the player ID from the subject | Agreed |
-| 10 | Web frontend | A separate `voidforge-web` binary rendering HTML with maud: plain forms, no CSS framework, no JavaScript. It calls the public API over HTTP and never links the server or the core | A static page with a little JavaScript | Agreed |
+| 10 | Web frontend | A static TypeScript React app in `web/`, built with Vite, calling the public API over HTTP with a client generated from `/openapi.json` | A server-rendered binary with plain forms and no JavaScript | Changed: it was the `voidforge-web` binary rendering HTML with maud ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)) |
 | 11 | Telemetry | tracing with OpenTelemetry over OTLP; locally the all-in-one `grafana/otel-lgtm` container | Jaeger plus Prometheus | Agreed |
 | 12 | CI/CD | GitHub Actions; images are built in CI but pushed nowhere; a registry and CD come later | One staging VM running docker compose | Agreed |
 | 13 | Test tooling | cargo-nextest, proptest and insta | The built-in runner and quickcheck | Agreed |
@@ -41,8 +41,8 @@ Every pick favors widely used, well-documented crates, because agents write most
 | --- | --- | --- |
 | Toolchain | Stable Rust, edition 2024, pinned in `rust-toolchain.toml` | One toolchain for local runs, CI and images |
 | Async runtime | tokio | Used by the shell crates only, never by the core |
-| HTTP server | axum with tower-http (tracing, request IDs, timeouts) | Same stack for the API and the web frontend |
-| HTTP client | reqwest | The web frontend and the bots call the API over HTTP |
+| HTTP server | axum with tower-http (tracing, request IDs, timeouts, CORS) | The API; CORS lets the browser app call it |
+| HTTP client | reqwest | The bots call the API over HTTP |
 | Serialization | serde and serde\_json | The wire format is JSON |
 | Database | PostgreSQL with sqlx and its migrations | Query metadata is committed, so CI builds without a database |
 | Snapshots | postcard with BLAKE3 | Deterministic bytes; the hash goes into the log and traces |
@@ -52,24 +52,27 @@ Every pick favors widely used, well-documented crates, because agents write most
 | Errors | thiserror in libraries, anyhow in binaries | Library errors stay typed for tests |
 | Configuration | clap reading environment variables | One config struct per binary |
 | Token checks | jsonwebtoken with a cached copy of dex's signing keys | API side |
-| OIDC client | Our own authorization code flow with PKCE, on jsonwebtoken and aws-lc-rs ([D-057](decision-log.md#d-057-web-login-our-own-code-flow-with-pkce-and-the-session); openidconnect was named first) | Web side: discovery, PKCE and ID token checks |
-| HTML | maud | Markup written and checked in Rust at compile time |
-| Web sessions | tower-sessions with the in-memory store | Sessions reset on restart, which is fine for testing |
+| Web frontend | React, Vite and TypeScript; TanStack Router and Query; Zustand; HeroUI with Tailwind; Perseus, the owner's HeroUI components | A static build in `web/`, pinned in `package-lock.json` ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)) |
+| Web API client | openapi-typescript, openapi-fetch and openapi-react-query | Types generated from the checked-in `openapi.json` |
+| OIDC client | oidc-client-ts | Browser side: discovery, PKCE, state, nonce and ID token checks |
+| Web toolchain | Node and npm, pinned in `web/.nvmrc` and `web/package.json` | Runs Vite, Vitest and Playwright |
 | API description | utoipa | OpenAPI built from the types the server already uses |
 | Telemetry | tracing, opentelemetry, opentelemetry-otlp and tracing-opentelemetry | Set up once in `voidforge-telemetry` |
-| Tests | cargo-nextest, proptest and insta | Plus scraper for the web smoke tests |
-| Supply chain | cargo-deny | Licenses, advisories and a dependency allowlist |
+| Tests | cargo-nextest, proptest and insta; Vitest with Testing Library and Playwright for the web app | Playwright drives the browser in the smoke test |
+| Supply chain | cargo-deny; npm audit | Licenses, advisories and a dependency allowlist; advisories for the web app's lockfile |
 | Task runner | just | One `justfile`: up, test, e2e, replay |
 | Images | Multi-stage Docker builds with cargo-chef | Small runtime images running as a non-root user |
 | Rate limits | Our own GCRA limiter in the server ([D-054](decision-log.md#d-054-rate-limits-per-principal-gcra-read-and-write-budgets); tower\_governor was named first) | Per-player request limits on the API |
 
 ## Project layering
 
-Twelve crates in three layers keep the deterministic core free of anything that could break a replay. Dependencies only point down, and the web frontend and the bots reach the server over HTTP alone.
+Eleven crates in three layers keep the deterministic core free of anything that could break a replay. Dependencies only point down, and the bots reach the server over HTTP alone. The web frontend is not a crate: it is a browser app in `web/` that reaches the server only over HTTP.
 
 ![Workspace layering: 12 crates in 3 layers](Dependecies.png)
 
-Only `voidforge-host` changes the live `World`, and only the binaries talk to the outside world. Two offline callers also drive the core's state-changing entry points, never against live state: `voidforge-replay`, which rebuilds a world from a snapshot and the log, and tests. Host recovery and replay map a log record to `advance_to` or `apply` through one shared function, so they cannot drift apart; P2.5 adds it to a crate both may depend on, and P2.7 reuses it. voidforge-web never links the server or the core: its only workspace dependencies are api-types and telemetry, and CI fails if that ever changes.
+The diagram predates the web redesign: it still shows `voidforge-web`, which the static app in `web/` replaced ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)).
+
+Only `voidforge-host` changes the live `World`, and only the binaries talk to the outside world. Two offline callers also drive the core's state-changing entry points, never against live state: `voidforge-replay`, which rebuilds a world from a snapshot and the log, and tests. Host recovery and replay map a log record to `advance_to` or `apply` through one shared function, so they cannot drift apart; P2.5 adds it to a crate both may depend on, and P2.7 reuses it.
 
 | Crate | Role | May depend on |
 | --- | --- | --- |
@@ -82,7 +85,6 @@ Only `voidforge-host` changes the live `World`, and only the binaries talk to th
 | `voidforge-api-types` | Wire types and OpenAPI schemas | No workspace crate |
 | `voidforge-telemetry` | Tracing and OTLP setup | No workspace crate |
 | `voidforge-server` | API, token checks, accounts and the leaderboard job | host, store, rules, worldgen, api-types, telemetry |
-| `voidforge-web` | Server-rendered HTML frontend and OIDC login; reaches the server only over HTTP | api-types, telemetry; never core, host, store or server |
 | `voidforge-bots` | Scripted players for end-to-end and nightly runs, plus a terminal client with device code login | api-types, telemetry |
 | `voidforge-replay` | Replay and divergence finder | core, rules, store, telemetry |
 
@@ -99,9 +101,10 @@ voidforge/
   rules/                versioned rules files (TOML)
   docs/                 game design and architectural design, as Markdown
   tests/golden/         recorded logs and their expected hashes
-  tests/guardrails/     fixtures proving the determinism bans and web isolation
+  tests/guardrails/     fixtures proving the determinism bans
+  web/                  the browser frontend: React, Vite and its own AGENTS.md
   deploy/               compose file and dex config
-  dockerfiles/          server and web images
+  dockerfiles/          server image
   .github/workflows/    CI
 ```
 
@@ -114,8 +117,9 @@ dex runs locally as the OpenID Connect provider. The web frontend logs players i
 The API never sees a password. It checks the token's signature against dex's published keys, plus its issuer, audience and expiry, then maps issuer and subject to the player; this is the pattern dex documents for backends that consume ID tokens.
 
 - dex config lives in `deploy/dex/`: the built-in local connector with two static test users, static clients and in-memory storage.
-- `voidforge-web` is a confidential client using the authorization code flow with PKCE, redirecting to `http://localhost:8081/callback`.
-- The ID token stays in the web app's server-side session; the browser only holds a session cookie.
+- The web app is the public client `voidforge-spa`. The browser runs the authorization code flow with PKCE itself through oidc-client-ts, redirecting to `http://localhost:8081/callback`. dex allows that origin for its token endpoint.
+- The ID token stays in the tab's sessionStorage, so a reload keeps the login and closing the tab ends it. There is no refresh token: a 401 or an expired token asks the player to log in again, and logout clears it.
+- The API allows the web app's origin through CORS, only when `--cors-origin` names it; without the flag it sends no CORS headers. Bearer tokens carry no cookies, so no credentials are allowed.
 - `voidforge-cli` is a public client for bots and command-line use, logging in with the device code grant.
 - CI end-to-end tests use the password grant for the static test users. dex supports it only when a password connector is set, so it is enabled in the CI config alone.
 - Client credentials stay off: dex needs a feature flag for them, and the tokens would carry no user to map to a player.
@@ -126,25 +130,27 @@ Sources: [dex OAuth2 configuration](https://dexidp.io/docs/configuration/oauth2/
 
 ## Web frontend
 
-The frontend exists so people can test and evaluate the game in a browser, nothing more. `voidforge-web` renders plain HTML on the server with maud: tables, forms and links, browser default styles, no JavaScript.
+The frontend exists so people can test and evaluate the game in a browser. It is a static TypeScript React app in `web/`, built with Vite, and served on `localhost:8081` in development and preview.
 
-- It is an ordinary API client. It logs the player in through dex, keeps the ID token in its session and calls the public API with it.
-- It never touches the server or the core. Its only workspace dependencies are `voidforge-api-types` and `voidforge-telemetry`, and a CI check fails if its dependency tree ever includes core, host, store or server.
-- Every form posts to `voidforge-web`, which sends one `POST /commands` and redirects back to the page. Each rendered form carries a fresh idempotency key in a hidden field, so a double submit runs once.
-- Values show as of page load, with their hourly rate and the time they next change. A Refresh link reloads the page.
-- A rejected command shows its reason code at the top of the page.
+- It is an ordinary API client. It logs the player in through dex and calls the public API with the ID token. Every call goes through one client generated from the checked-in `openapi.json`, so the app's types follow the server's.
+- It is not part of the cargo workspace and never touches the server's code; the only contract it sees is `/openapi.json`.
+- Its screens are free to group the data and actions below however serves the MVP loop best, as long as every action stays reachable at phone, tablet and desktop widths and nothing the API offers is left out.
+- It names the fast test rules visibly when the universe runs them.
+- Values are shown as of the view's `as_of`, with their hourly rate and the time they next change, and stay current without a manual reload.
+- Each opened command form carries one idempotency key, reused if the player retries, and its submit is disabled while the command is pending, so a double submit runs once. The four irreversible actions ask for confirmation first.
+- A rejected command or a failed read shows the error copy for its code, with the code beside it.
 
-| Page | Shows | Actions |
-| --- | --- | --- |
-| Home | Login link, or the player's score and planets | Log in, log out |
-| Planet | Stocks with rate and cap, buildings with status and progress, shipyard queues, roster | Build, cancel construction, demolish, queue ship, cancel ship build, assemble fleet |
-| Fleets | The player's fleets with state, cargo and arrival time | Send, recall, disband, trigger unload |
-| Universe | Planets within a radius of a chosen point, with their owners | Open a planet |
-| Leaderboard | Ranked scores and their as-of time | None |
+| Data | Actions |
+| --- | --- |
+| Login state; the player's name, score and planets | Log in, log out |
+| A planet's stocks with rate and cap, buildings with status and progress, shipyard queues and roster | Build, cancel construction, demolish, queue ship, cancel ship build, assemble fleet |
+| The player's fleets with state, cargo and arrival time | Send, recall, disband, trigger unload |
+| Planets within a radius of a chosen point, with their owners | Open a planet |
+| Ranked scores and their as-of time | None |
 
 ## Local development
 
-One `docker compose` file runs everything a developer or an agent needs, and `just up` starts it. The Rust binaries run either inside compose or with cargo against the same services.
+One `docker compose` file runs everything a developer or an agent needs, and `just up` starts it. The Rust binaries run either inside compose or with cargo against the same services, and the web app runs with npm beside them.
 
 | Service | Purpose | Local address |
 | --- | --- | --- |
@@ -152,7 +158,7 @@ One `docker compose` file runs everything a developer or an agent needs, and `ju
 | dex | OIDC provider with static users and clients | localhost:5556, issuer `http://localhost:5556/dex` |
 | otel-lgtm | Collector, traces, metrics and Grafana in one container | Grafana on localhost:3000, OTLP on 4317 and 4318 |
 | voidforge-server | Game API | localhost:8080 |
-| voidforge-web | Rudimentary server-rendered frontend | localhost:8081 |
+| web app | Static browser frontend, served by Vite (`npm run dev` in `web/`) | localhost:8081 |
 
 `just seed` creates a universe from a fixed seed in the local stack's `voidforge_dev` database, never in `voidforge`, and refuses when one already exists; `just seed-reset` drops and recreates `voidforge_dev`, then seeds (decision log D-043). Dex ships with two static test users. A fixed seed means every developer and every CI run starts from the same world. Rules v0 is the default; RULES=fast swaps in the fast test variant, where an hour of play takes a second, for end-to-end tests, smoke tests and hand-played gates.
 
@@ -164,13 +170,14 @@ GitHub Actions runs the same commands as the `justfile`, so any red check reprod
 
 | Stage | What runs | When | Blocks merge |
 | --- | --- | --- | --- |
-| Lint | `cargo fmt --check`; clippy with warnings as errors plus the banned APIs for core, rules and worldgen; the dependency check that keeps `voidforge-web` away from the server and the core | Every PR | Yes |
-| Supply chain | cargo-deny: licenses, advisories and the dependency allowlist | Every PR | Yes |
+| Lint | `cargo fmt --check`; clippy with warnings as errors plus the banned APIs for core, rules and worldgen | Every PR | Yes |
+| Supply chain | cargo-deny: licenses, advisories and the dependency allowlist; npm audit on the web app's lockfile | Every PR | Yes |
+| Web | The web app: a clean install from the lockfile, the generated API client checked against `openapi.json`, typecheck, eslint, Vitest and the production build | Every PR | Yes, once the ruleset names it |
 | Unit and property tests | cargo nextest across the workspace | Every PR | Yes |
 | Determinism suite | Double run, observation invariance, golden replays and snapshot round trip | Every PR | Yes |
 | Database tests | Migrations, store tests and the sqlx metadata check against a Postgres service | Every PR | Yes |
-| End-to-end | Compose runs Postgres and dex, CI runs the server and web app as cargo-built binaries beside them, and bots play a scripted game through the API on the fast test rules | Every PR | Yes |
-| Images | Build the server and web images; nothing is pushed | Main | No |
+| End-to-end | Compose runs Postgres and dex, CI runs the cargo-built server and the built web app beside them, bots play a scripted game through the API on the fast test rules, and Playwright plays the MVP loop through the web app in Chromium | Every PR | Yes |
+| Images | Build the server image; nothing is pushed | Main | No |
 | Nightly | Long bot simulation on the fast test rules, crash-and-retry runs and the full golden replay set | Nightly | No; a failure opens an issue |
 
 Once CD exists, rolling back means redeploying the previous image, so migrations only ever add: no destructive change ships in the same release as the code that stops using it.
@@ -290,7 +297,7 @@ Gate: the end-to-end scenario passes in CI with real dex tokens, and QA has trie
 
 ## Phase 4: Web frontend
 
-A person can play the whole MVP loop in a browser. Every package except P4.1r lives in `voidforge-web`, which never links the server or the core; P4.1r adds a public rules read to the server and `voidforge-api-types`.
+A person can play the whole MVP loop in a browser. P4.1 to P4.5 built it as the `voidforge-web` crate; P4.1r adds a public rules read to the server and `voidforge-api-types`; P4.6 replaces the crate with the static app in `web/`.
 
 | ID | Package | Done when |
 | --- | --- | --- |
@@ -300,6 +307,7 @@ A person can play the whole MVP loop in a browser. Every package except P4.1r li
 | P4.3 | Pages: home, planet, fleets, universe and leaderboard | Every page renders from live API data |
 | P4.4 | Command forms: one per action, a hidden idempotency key, post then redirect | Every MVP action works from the browser |
 | P4.5 | Smoke tests: an HTTP client with a cookie jar walks the login and one game loop | Passes in CI against the compose stack within minutes, on the fast test rules |
+| P4.6 | Web redesign: a static React app in `web/` with the same pages and actions, a public PKCE login, CORS on the API, a Playwright smoke test, and `voidforge-web` deleted | Every MVP action works from the new app, and the Playwright walk passes in the e2e job |
 
 Packages run one at a time, in ID order; P4.1r runs between P4.1 and P4.2.
 
@@ -312,13 +320,13 @@ Telemetry, container images built in CI and nightly checks. An image registry, C
 | ID | Package | Area | Done when |
 | --- | --- | --- | --- |
 | P5.1 | Telemetry: spans from the API through the engine step and log append; metrics for inbox depth, event lag, step and append latency, snapshot age | server, host | Grafana shows a command's full trace and every metric |
-| P5.2 | Container images for the server and the web app: multi-stage builds, non-root runtime, built in CI and pushed nowhere | `dockerfiles/`, `.github/workflows` | Both images run under compose and pass the smoke test |
+| P5.2 | Container image for the server: multi-stage build, non-root runtime, built in CI and pushed nowhere | `dockerfiles/`, `.github/workflows` | The image runs under compose and passes the smoke test |
 | P5.3 | Nightly runs: a long bot simulation on the fast test rules, crash-and-retry and the full golden replay set | CI | Results are posted, and a failure opens an issue |
 | P5.4 | Backup and restore drill: restore Postgres into a fresh stack and check the state hash | ops runbook | The restored hash matches the source |
 
 Packages run one at a time, in ID order, after the Phase 4 gate.
 
-Gate: both images build in CI and run under compose, and the nightly runs stay green for a week.
+Gate: the server image builds in CI and runs under compose, and the nightly runs stay green for a week.
 
 ## Agent factory rules
 

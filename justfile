@@ -49,6 +49,16 @@ lint:
 # The CI supply-chain job.
 supply-chain:
     cargo deny check
+    npm audit --prefix web
+
+# The CI web job.
+web:
+    cd web && npm ci
+    cd web && npm run gen:api && git diff --exit-code src/api/schema.ts
+    cd web && npm run typecheck
+    cd web && npm run lint
+    cd web && npm test
+    cd web && npm run build
 
 # The CI test job.
 test:

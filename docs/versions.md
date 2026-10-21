@@ -26,6 +26,7 @@ Pinned in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) ([D-007](dec
 | taiki-e/install-action | v2.87.27 | `ab6895351a88b908e96a4697860d4ffea5e57dbe` |
 | cargo-nextest | 0.9.148 | `tool: cargo-nextest@0.9.148` |
 | cargo-deny | 0.20.2 | `tool: cargo-deny@0.20.2` ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist)) |
+| actions/setup-node | v7.1.0 | `949feb2413d6458794dcd2491c4babbbce0c15c1`; Node from `web/.nvmrc` ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)) |
 | sqlx-cli | 0.9.0 (postgres only, no TLS) | `cargo install sqlx-cli@0.9.0 --locked --no-default-features --features postgres` in the `database` job; no install-action manifest exists ([D-034](decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)) |
 | Postgres service (`database` job) | 18.6, Alpine image | The same digest as the local stack's Postgres, below ([D-034](decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)) |
 
@@ -96,3 +97,42 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | async-trait | =0.1.92 | web, the bounded session store implements tower-sessions' `SessionStore`; already in the tree, so no new crate | P4.1 | D-057 |
 | maud | =0.27.0 (axum; default features off) | web, the pages | P4.1 | D-057 |
 | base64 | =0.23.1 (std; default features off) | web, state, nonce, the verifier and the challenge; already in the tree under reqwest, so no new version | P4.1 | D-057 |
+
+## Web app
+
+Pinned in [`web/`](../web/AGENTS.md) ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)). Every direct dependency is exact in `package.json`, and `package-lock.json` locks the tree. `package.json` overrides openapi-typescript's TypeScript peer to the project's TypeScript.
+
+| Item | Version | Pin |
+| --- | --- | --- |
+| Node | 26.12.0 | `web/.nvmrc`, `engines` |
+| npm | 11.20.0 | `packageManager` |
+
+| Package | Version | Kind | Used for |
+| --- | --- | --- | --- |
+| @heroui/react | 3.2.6 | runtime | Components |
+| @heroui/styles | 3.2.6 | runtime | HeroUI's theme and component styles |
+| @kedar42/perseus | 0.3.0 (GitHub release tarball) | runtime | The owner's HeroUI components (NavMenu) |
+| @tanstack/react-query | 5.104.5 | runtime | Server reads and command mutations |
+| @tanstack/react-router | 1.170.45 | runtime | Code routes |
+| openapi-fetch | 0.17.0 | runtime | The typed API client |
+| openapi-react-query | 0.5.4 | runtime | Binds the client to TanStack Query |
+| react | 19.3.1 | runtime | UI |
+| react-dom | 19.3.1 | runtime | UI |
+| zustand | 5.0.15 | runtime | Client state |
+| @eslint/js | 10.0.1 | dev | eslint's recommended rules |
+| @tailwindcss/vite | 4.3.3 | dev | Tailwind's Vite plugin |
+| @testing-library/jest-dom | 7.0.1 | dev | DOM matchers |
+| @testing-library/react | 16.3.3 | dev | Component tests |
+| @types/react | 19.3.0 | dev | React's types |
+| @types/react-dom | 19.3.0 | dev | React DOM's types |
+| @vitejs/plugin-react | 6.1.2 | dev | React in Vite |
+| eslint | 10.13.0 | dev | Lint |
+| eslint-plugin-react-hooks | 7.1.1 | dev | Hooks rules |
+| globals | 17.13.0 | dev | Browser globals for eslint |
+| jsdom | 30.1.3 | dev | The DOM for Vitest |
+| openapi-typescript | 7.13.0 | dev | Generates `src/api/schema.ts` |
+| tailwindcss | 4.3.3 | dev | Styles |
+| typescript | 6.0.3 | dev | Types; 6.0 because typescript-eslint supports below 6.1 |
+| typescript-eslint | 8.72.0 | dev | Strict type-checked lint |
+| vite | 8.3.5 | dev | Dev server and build |
+| vitest | 5.0.5 | dev | Unit and component tests |
