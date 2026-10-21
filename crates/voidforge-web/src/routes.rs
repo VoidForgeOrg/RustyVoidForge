@@ -852,9 +852,11 @@ async fn act(State(s): State<AppState>, session: Session, body: Bytes) -> Respon
                 return internal();
             }
             // Trigger unload emits no event (only an arrival does), so what moved is read from the
-            // fleet after it (the lead's T9); any failure here only makes the words neutral.
+            // fleet after it (the lead's T9); any failure here only makes the words neutral. A
+            // replayed key's answer is the first unload's, which the fleet now can't describe:
+            // no read, so the neutral line (review-r2's delta on 241e42a).
             let aboard_now = match order.done {
-                forms::Done::Unloaded { fleet, .. } => {
+                forms::Done::Unloaded { fleet, .. } if !again => {
                     s.api.my_fleets(&login.id_token).await.ok().and_then(|v| {
                         v.fleets.into_iter().find_map(|f| match f {
                             FleetView::Stationed {

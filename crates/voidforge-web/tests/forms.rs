@@ -1318,3 +1318,43 @@ fn act_form_fields(page: &str, action: &str) -> Vec<(String, String)> {
         .find(|fields| fields.iter().any(|(k, v)| k == "action" && v == action))
         .unwrap_or_else(|| panic!("no {action} form in:\n{page}"))
 }
+
+/// Review-r2's delta on 241e42a: an answered Unload form submitted again gets the first answer
+/// back (D-037), which the fleet's cargo now can't describe; the neutral line and "already
+/// submitted", and no read.
+#[tokio::test]
+async fn a_replayed_unload_is_neutral_and_already_submitted() {
+    let (w, mut b) = world().await;
+    w.api.reply("/commands", accepted(&json!([])));
+    let page = b.get("/fleets").await.body;
+    let fields = act_form_fields(&page, "trigger_unload");
+    let pairs: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let mut after = my_fleets();
+    after["fleets"][0]["cargo"]["iron_ingot_g"] = json!(0);
+    reply(&w, "/players/me/fleets", &after);
+    submit(&mut b, &pairs).await;
+    has(
+        &b.get("/fleets").await.body,
+        "<p><strong>Done: unloaded 500.0 t of ingots into Planet #7.</strong></p>",
+    );
+    // The fleet carries the same cargo again (say it was reloaded), then the old form comes back.
+    reply(&w, "/players/me/fleets", &my_fleets());
+    let reads = w.api.requests_to("/players/me/fleets").len();
+    submit(&mut b, &pairs).await;
+    assert_eq!(
+        w.api.requests_to("/players/me/fleets").len(),
+        reads,
+        "no read for a replay"
+    );
+    let shown = b.get("/fleets").await.body;
+    has(
+        &shown,
+        &format!(
+            "<p><strong>Done: Fleet #21 unloaded what fit into Planet #7's storage.</strong></p><p>{ALREADY_SUBMITTED}</p>"
+        ),
+    );
+    lacks(&shown, "nothing was unloaded");
+}
