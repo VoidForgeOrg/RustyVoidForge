@@ -1,4 +1,4 @@
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAuth } from "../auth/authStore";
 import type { Timed } from "./live";
@@ -15,7 +15,8 @@ interface QueryState<T> {
 function refetchAt<T extends Timed>(due: (view: T) => number | null) {
   return ({ state }: QueryState<T>) => {
     const at = state.data ? due(state.data) : null;
-    const wait = state.data && at !== null ? dueIn(state.data.as_of, at, state.dataUpdatedAt, Date.now()) : null;
+    const wait =
+      state.data && at !== null ? dueIn(state.data.as_of, at, state.dataUpdatedAt, Date.now()) : null;
     return refetchDelay(wait, state.error);
   };
 }
@@ -35,24 +36,33 @@ export const useFleets = () =>
 const planetQuery = (id: number) =>
   api.queryOptions("get", "/planets/{id}", { params: { path: { id } } }, { refetchInterval: atValidUntil });
 
-export const usePlanet = (id: number) => api.useQuery("get", "/planets/{id}", { params: { path: { id } } }, {
-  enabled: useLoggedIn(),
-  refetchInterval: atValidUntil,
-});
+export function usePlanet(id: number) {
+  return useQuery({ ...planetQuery(id), enabled: useLoggedIn() });
+}
 
 export function usePlanets(ids: readonly number[]) {
   const enabled = useLoggedIn();
   return useQueries({ queries: ids.map((id) => ({ ...planetQuery(id), enabled })) });
 }
 
-export const useNear = (near: string, radius: number) =>
-  api.useQuery("get", "/planets", { params: { query: { near, radius } } }, {
-    enabled: useLoggedIn(),
-    refetchInterval: atValidUntil,
-  });
+export const useNear = (near: string, radius: number, ready: boolean) =>
+  api.useQuery(
+    "get",
+    "/planets",
+    { params: { query: { near, radius } } },
+    {
+      enabled: useLoggedIn() && ready,
+      refetchInterval: atValidUntil,
+    },
+  );
 
 export const useLeaderboard = () =>
-  api.useQuery("get", "/leaderboard", {}, {
-    enabled: useLoggedIn(),
-    refetchInterval: refetchAt((v) => Date.parse(v.as_of) + LEADERBOARD_EVERY_MS),
-  });
+  api.useQuery(
+    "get",
+    "/leaderboard",
+    {},
+    {
+      enabled: useLoggedIn(),
+      refetchInterval: refetchAt((v) => Date.parse(v.as_of) + LEADERBOARD_EVERY_MS),
+    },
+  );

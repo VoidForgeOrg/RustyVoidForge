@@ -23,9 +23,7 @@ declare module "@tanstack/react-router" {
   }
 }
 
-const screens = () => import("./screens/placeholders");
-
-/** A planet or slot number the API could take: a safe non-negative integer, else not found. */
+/** A planet or building number the API could take: a safe non-negative integer, else not found. */
 export function number(text: string): number {
   const n = Number(text);
   if (!/^\d+$/.test(text) || !Number.isSafeInteger(n)) notFound({ throw: true });
@@ -74,47 +72,65 @@ const planets = createRoute({
   getParentRoute: () => game,
   path: "/planets",
   staticData: { title: titles.planets },
-  component: lazyRouteComponent(screens, "Planets"),
+  component: lazyRouteComponent(() => import("./screens/Planets"), "Planets"),
 });
 
 const planet = createRoute({
   getParentRoute: () => planets,
   path: "$planetId",
-  params: { parse: (p) => ({ planetId: number(p.planetId) }), stringify: (p) => ({ planetId: p.planetId.toString() }) },
-  component: lazyRouteComponent(screens, "Planet"),
+  params: {
+    parse: (p) => ({ planetId: number(p.planetId) }),
+    stringify: (p) => ({ planetId: p.planetId.toString() }),
+  },
+  component: lazyRouteComponent(() => import("./screens/Planets"), "Planet"),
 });
 
-const slot = createRoute({
+const buildingRoute = createRoute({
   getParentRoute: () => planet,
-  path: "slots/$slot",
-  params: { parse: (p) => ({ slot: number(p.slot) }), stringify: (p) => ({ slot: p.slot.toString() }) },
-  component: lazyRouteComponent(screens, "Slot"),
+  path: "buildings/$buildingId",
+  params: {
+    parse: (p) => ({ buildingId: number(p.buildingId) }),
+    stringify: (p) => ({ buildingId: p.buildingId.toString() }),
+  },
+  component: lazyRouteComponent(() => import("./screens/Building"), "BuildingDrawer"),
+});
+
+const build = createRoute({
+  getParentRoute: () => planet,
+  path: "build",
+  component: lazyRouteComponent(() => import("./screens/Building"), "BuildDrawer"),
 });
 
 const fleets = createRoute({
   getParentRoute: () => game,
   path: "/fleets",
   staticData: { title: titles.fleets },
-  component: lazyRouteComponent(screens, "Fleets"),
+  component: lazyRouteComponent(() => import("./screens/Fleets"), "Fleets"),
 });
 
 const universe = createRoute({
   getParentRoute: () => game,
   path: "/universe",
   staticData: { title: titles.universe },
-  component: lazyRouteComponent(screens, "Universe"),
+  component: lazyRouteComponent(() => import("./screens/Universe"), "Universe"),
 });
 
 const leaderboard = createRoute({
   getParentRoute: () => game,
   path: "/leaderboard",
   staticData: { title: titles.leaderboard },
-  component: lazyRouteComponent(screens, "Leaderboard"),
+  component: lazyRouteComponent(() => import("./screens/Leaderboard"), "Leaderboard"),
 });
 
 export const routeTree = root.addChildren([
   callback,
-  game.addChildren([home, planets.addChildren([planet.addChildren([slot])]), fleets, universe, leaderboard]),
+  game.addChildren([
+    home,
+    planets.addChildren([planet.addChildren([buildingRoute, build])]),
+    fleets,
+    universe,
+    leaderboard,
+  ]),
 ]);
 
 export const router = createRouter({ routeTree });

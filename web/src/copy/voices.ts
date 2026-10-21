@@ -14,6 +14,13 @@ export const access = {
   full: "Registry closed",
 };
 
+export const empties = {
+  roster: "No ships in orbit.",
+  fleets: "No fleets under your command.",
+  near: "No worlds within range.",
+  slot: "This slot stands empty.",
+};
+
 export const failures = {
   read: "Transmission failed",
   order: "Order refused",

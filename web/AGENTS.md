@@ -23,6 +23,9 @@ Every dependency is pinned exactly in `package.json` and locked in `package-lock
 - Every value a screen shows is formatted by `src/format.ts`, on integers only (BigInt inside); a value outside JavaScript's safe integers shows as `—`. Never format a number in a component.
 - Values between reads come from `src/game/live.ts`: a view's `as_of` plus the time since it arrived, at its rates, held at `valid_until`. Never the browser's clock alone.
 - Reads go through the hooks in `src/game/queries.ts`. A view refetches at its `valid_until` (the leaderboard at `as_of` plus 60 s) and on focus, never sooner than `FLOOR_MS` (2 s) after its last answer, and not while the tab is hidden. Nothing retries on its own; a refusal waits its Retry-After (D-054's read budget).
+- The top bar (`src/shell/TopBar.tsx`) shows empire-wide figures from reads the screens already make, through `src/game/empire.ts`, never an endpoint of its own. It never scrolls sideways: it wraps, and on phones the figures past Ore, Ingots and Next move into the More sheet.
+- A building's drawer is keyed by its id (`/planets/:id/buildings/:buildingId`), never by slot position: the API numbers no slots, and a position would shift after a demolition. Free slots are interchangeable, so every "+" tile opens `/planets/:id/build`. Tile labels name the building and its state ("Shipyard, working") or say "Free slot".
+- Screens live in `src/screens/`, one lazily loaded module per route, with shared pieces (meters, status words) in `parts.tsx`. A status is always an icon and a word, never colour alone.
 - The theme is `src/theme/theme.css`, one dark theme over HeroUI's tokens in hex; `theme.test.ts` holds its text and edge pairs to WCAG AA. Icons come from `src/theme/icons.tsx` and are always beside a word.
 - `VITE_API_URL` names the API. `.env` holds the local default; override it in `.env.local` or the environment.
 

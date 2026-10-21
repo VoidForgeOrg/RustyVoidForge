@@ -1,13 +1,14 @@
 import { Button, Chip, Spinner } from "@heroui/react";
-import { NavMenu, useNavMenu } from "@kedar42/perseus";
+import { NavMenu } from "@kedar42/perseus";
 import { Outlet, useLocation, useMatches } from "@tanstack/react-router";
 import { useState } from "react";
 import { login, logout } from "../auth/auth";
 import { useAuth } from "../auth/authStore";
 import { failure } from "../copy/messages";
 import { access } from "../copy/voices";
-import { thousands } from "../format";
-import { useFleets, useMe, useRules } from "../game/queries";
+import type { components } from "../api/schema";
+import { homeworldFirst } from "../game/empire";
+import { useFleets, useMe } from "../game/queries";
 import {
   FleetsIcon,
   LeaderboardIcon,
@@ -19,6 +20,7 @@ import {
 } from "../theme/icons";
 import { Failure, Notice } from "./Failure";
 import { useNavStore } from "./navStore";
+import { FastRules, TopBar } from "./TopBar";
 import { useLayout } from "./useLayout";
 
 const modes = { desktop: "inline", tablet: "compact", phone: "overlay" } as const;
@@ -76,10 +78,11 @@ function Command() {
       </div>
     );
   }
-  return <Frame homeworld={me.data.homeworld_id} planets={me.data.planet_ids} score={me.data.score} />;
+  return <Frame me={me.data} />;
 }
 
-function Frame({ homeworld, planets, score }: { homeworld: number; planets: number[]; score: number }) {
+function Frame({ me }: { me: components["schemas"]["PlayerView"] }) {
+  const { homeworld_id: homeworld, planet_ids: planets } = me;
   const layout = useLayout();
   const { desktopOpen, setDesktopOpen } = useNavStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -138,14 +141,16 @@ function Frame({ homeworld, planets, score }: { homeworld: number; planets: numb
           </NavMenu.Item>
         </NavMenu.Content>
         <NavMenu.Footer>
-          <Account email={email} />
           <NavMenu.Item icon={<LogoutIcon />} onPress={() => void logout()}>
             Log out
           </NavMenu.Item>
         </NavMenu.Footer>
       </NavMenu>
       <div className="flex min-w-0 flex-1 flex-col">
-        <Bar
+        <TopBar
+          me={me}
+          email={email}
+          layout={layout}
           menu={
             layout === "phone" && (
               <Button
@@ -160,9 +165,9 @@ function Frame({ homeworld, planets, score }: { homeworld: number; planets: numb
               </Button>
             )
           }
-          score={score}
         />
         <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          <Title />
           <Outlet />
         </main>
       </div>
@@ -170,36 +175,22 @@ function Frame({ homeworld, planets, score }: { homeworld: number; planets: numb
   );
 }
 
-/** Who is logged in; the compact rail has no room for it. */
-function Account({ email }: { email: string | undefined }) {
-  const { isCompact } = useNavMenu();
-  return isCompact ? null : <span className="truncate px-3 text-xs text-muted">{email}</span>;
-}
-
-/** The header: the screen's title, the rules when they're the fast ones, and the score. */
-function Bar({ menu, score }: { menu?: React.ReactNode; score?: number }) {
-  const title = useMatches({ select: (m) => m.findLast((r) => r.staticData.title)?.staticData.title });
-  const rules = useRules();
+/** The bar before the game is reachable: the mark and the rules when they're the fast ones. */
+function Bar() {
   return (
     <header className="flex items-center gap-3 border-b border-separator px-4 py-3">
-      {menu}
-      {title && <h1 className="truncate text-base sm:text-xl">{title}</h1>}
-      {rules.data?.name === "v0-fast" && (
-        <Chip color="warning" variant="soft">
-          fast test rules
-        </Chip>
-      )}
-      {score !== undefined && (
-        <span className="ml-auto whitespace-nowrap">
-          <span className="display text-muted">Score</span> {thousands(score)}
-        </span>
-      )}
+      <MarkIcon />
+      <span className="display">Voidforge</span>
+      <FastRules />
     </header>
   );
 }
 
-const homeworldFirst = (planets: number[], homeworld: number) =>
-  [...planets].sort((a, b) => Number(b === homeworld) - Number(a === homeworld) || a - b);
+/** The screen's in-universe title, from its route. */
+function Title() {
+  const title = useMatches({ select: (m) => m.findLast((r) => r.staticData.title)?.staticData.title });
+  return title ? <h1 className="mb-4 text-2xl">{title}</h1> : null;
+}
 
 const planetName = (id: number, homeworld: number) =>
   id === homeworld ? `#${id.toString()} Home` : `#${id.toString()}`;

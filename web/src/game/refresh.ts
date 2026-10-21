@@ -14,7 +14,8 @@ export function dueIn(asOf: string, due: number, receivedAt: number, now: number
  */
 export function refetchDelay(dueInMs: number | null, error: unknown): number | false {
   if (error) {
-    const wait = error instanceof ApiError && error.failure.kind === "refused" ? error.failure.retryAfter : null;
+    const wait =
+      error instanceof ApiError && error.failure.kind === "refused" ? error.failure.retryAfter : null;
     return wait === null ? false : Math.max(wait * 1_000, FLOOR_MS);
   }
   return dueInMs === null ? false : Math.max(dueInMs, FLOOR_MS);

@@ -135,6 +135,7 @@ The frontend exists so people can test and evaluate the game in a browser. It is
 - It is an ordinary API client. It logs the player in through dex and calls the public API with the ID token. Every call goes through one client generated from the checked-in `openapi.json`, so the app's types follow the server's.
 - It is not part of the cargo workspace and never touches the server's code; the only contract it sees is `/openapi.json`.
 - The screens follow the owner's pick: planet cards that expand into building slots, a routed building drawer and a Perseus navigation pane, with a three-step mission flow, all framed as an in-universe console. Verbs, numbers and the error copy stay plain.
+- A strategy-game top bar sums the empire: ore and ingots (each opening a per-planet list), holdings, fleets, score with rank, and the next completion, each linking to its detail.
 - The screens may group the data and actions below however serves the MVP loop best, as long as every action stays reachable at phone, tablet and desktop widths and nothing the API offers is left out.
 - It names the fast test rules visibly when the universe runs them.
 - Values are shown as of the view's `as_of`, with their hourly rate and the time they next change, and stay current without a manual reload.

@@ -1,10 +1,7 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
-import { cleanup, render, screen } from "@testing-library/react";
-import { User } from "oidc-client-ts";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAuth } from "../auth/authStore";
-import { routeTree } from "../router";
+import { logIn, renderAt, serve as answer, wideWindow } from "../test-harness";
 
 // openapi-fetch keeps the global fetch it finds at import, so the stub must exist first.
 const fetchMock = vi.hoisted(() => {
@@ -22,46 +19,12 @@ const me = {
   score: 1_240,
 };
 
-type Answer = Response | (() => Response);
-
-function serve(answers: Record<string, Answer>) {
-  fetchMock.mockImplementation((input) => {
-    const path = new URL((input as Request).url).pathname;
-    const answer = answers[path] ?? Response.json({ code: "not_found", message: "" }, { status: 404 });
-    return Promise.resolve(typeof answer === "function" ? answer() : answer.clone());
-  });
-}
-
-function renderAt(path: string) {
-  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }) });
-  render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
-}
-
-function logIn() {
-  const exp = Math.floor(Date.now() / 1000) + 3600;
-  useAuth.setState({
-    user: new User({
-      id_token: "t",
-      access_token: "",
-      token_type: "Bearer",
-      session_state: null,
-      profile: { sub: "alice", iss: "i", aud: "a", exp, iat: 0, email: "alice@voidforge.test" },
-      expires_at: exp,
-    }),
-  });
-}
+const serve = (answers: Parameters<typeof answer>[1]) => {
+  answer(fetchMock, answers);
+};
 
 beforeEach(() => {
-  vi.stubGlobal("matchMedia", (query: string) => ({
-    matches: true,
-    media: query,
-    addEventListener: () => undefined,
-    removeEventListener: () => undefined,
-  }));
+  wideWindow();
   serve({ "/rules": Response.json({ name: "v0-fast" }) });
 });
 
