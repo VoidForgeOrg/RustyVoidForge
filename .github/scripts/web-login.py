@@ -54,6 +54,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import HTTPConnection
 from http.cookiejar import CookieJar
 
 # Fixed: dex registers the redirect by exact string. test-web-login-ready.py points it elsewhere.
@@ -89,6 +90,31 @@ def check(condition, message, detail=""):
     return condition
 
 
+class PinnedConnection(HTTPConnection):
+    """An HTTP connection that sends WEB's requests to 127.0.0.1, the address start_web made the
+    child bind and its receipt names, never to whatever else `localhost` resolves to (R2's delta on
+    96f71b7: an app binding [::1]:8081 after the pre-check got them). The URL, so the Host header,
+    the cookies and dex's exact redirect, stays `localhost`."""
+
+    def connect(self):
+        if self.host == "localhost" and self.port == urllib.parse.urlsplit(WEB).port:
+            self.sock = socket.create_connection(("127.0.0.1", self.port), self.timeout)
+        else:
+            super().connect()
+
+
+class PinnedHTTP(urllib.request.HTTPHandler):
+    """Every http:// request of the walk, through a Browser or a bare urlopen, on PinnedConnection.
+    Redirects aren't followed (NoRedirect), so each hop, dex's absolute callback URL included, is
+    a request of its own through here."""
+
+    def http_open(self, req):
+        return self.do_open(PinnedConnection, req)
+
+
+urllib.request.install_opener(urllib.request.build_opener(PinnedHTTP()))
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     """Every redirect is returned, not followed, so each hop can be checked."""
 
@@ -101,7 +127,8 @@ class Browser:
 
     def __init__(self):
         self.jar = CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar), NoRedirect())
+        self.opener = urllib.request.build_opener(PinnedHTTP(), urllib.request.HTTPCookieProcessor(self.jar),
+                                                  NoRedirect())
         self.pages = []
 
     def request(self, url, data=None, method=None):

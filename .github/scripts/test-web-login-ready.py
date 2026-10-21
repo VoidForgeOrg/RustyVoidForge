@@ -195,6 +195,40 @@ def main():
     refused("a child gone after its receipt", walk, free_port(), None, "didn't say", then=["exit"])
     walk.queue = queue
 
+    # 5c. R2's delta on 96f71b7: another app binds [::1]:8081 after the check, so the child's
+    # 127.0.0.1 bind and its receipt are genuine, but `localhost` may resolve to ::1 first. Every
+    # request of the walk must still reach its own child: a Browser's, a bare urlopen's, and one
+    # to an absolute URL as dex's redirect gives it.
+    if ipv6():
+        port = free_port()
+        late = []
+        check = walk.listeners
+
+        def then_v6():
+            found = check()
+            late.append(StandIn("::1", socket.AF_INET6, port=port))
+            return found
+
+        walk.listeners = then_v6
+        proc, refusal = start(walk, port)
+        walk.listeners = check
+        try:
+            expect("an app on ::1 after the check: the walk's child is ready", proc is not None, repr(refusal))
+            if proc is not None:
+                b = walk.Browser()
+                bodies = [b.request(walk.WEB + "/login")[2], b.request("http://localhost:%d/callback?code=c" % port)[2],
+                          urllib.request.urlopen(walk.WEB + "/", timeout=5).read().decode()]
+                expect("an app on ::1 after the check: every request reaches the walk's own child",
+                       bodies == ["child"] * 3, repr(bodies))
+            expect("an app on ::1 after the check: the other app received zero requests",
+                   late and not late[0].requests_seen, repr(late and late[0].requests_seen))
+        finally:
+            stop(proc)
+            for server in late:
+                server.shutdown()
+    else:
+        print("skip: an app on ::1 after the check (no IPv6 loopback here)")
+
     # 6. The real path: a free port, a slow discovery, then the receipt; the first request reaches
     # the walk's own child.
     port = free_port()
