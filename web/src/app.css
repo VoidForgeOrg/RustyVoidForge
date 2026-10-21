@@ -1,3 +1,4 @@
 @import "tailwindcss";
 @import "@heroui/styles";
 @import "@kedar42/perseus/styles.css";
+@import "./theme/theme.css";

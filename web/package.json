@@ -16,6 +16,7 @@
     "gen:api": "openapi-typescript ../crates/voidforge-api-types/openapi.json -o src/api/schema.ts"
   },
   "dependencies": {
+    "@fontsource/chakra-petch": "5.3.0",
     "@heroui/react": "3.2.6",
     "@heroui/styles": "3.2.6",
     "@kedar42/perseus": "https://github.com/kedar42/perseus/releases/download/v0.3.0/kedar42-perseus-0.3.0.tgz",

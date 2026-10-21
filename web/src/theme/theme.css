@@ -1,0 +1,107 @@
+/* The console theme (D13): one dark theme over HeroUI's tokens. Colours are hex, so the contrast
+   test can read them; theme.test.ts holds every text and edge pair to WCAG AA. */
+
+.dark {
+  color-scheme: dark;
+
+  --background: #05080d;
+  --foreground: #d8e6ee;
+  --surface: #0d1520;
+  --surface-foreground: #d8e6ee;
+  --surface-secondary: #111c2a;
+  --surface-secondary-foreground: #d8e6ee;
+  --surface-tertiary: #16243a;
+  --surface-tertiary-foreground: #d8e6ee;
+  --overlay: #0f1926;
+  --overlay-foreground: #d8e6ee;
+  --muted: #8ea3b0;
+  --default: #16243a;
+  --default-foreground: #d8e6ee;
+
+  --accent: #4fd6e8;
+  --accent-foreground: #031016;
+  --success: #5ee0a0;
+  --success-foreground: #03140c;
+  --warning: #f0b44c;
+  --warning-foreground: #1a1000;
+  --danger: #ff7a6b;
+  --danger-foreground: #1a0503;
+
+  /* Edges a control is found by; separators are decoration only. */
+  --border: #4f7088;
+  --field-border: #4f7088;
+  --separator: #1d3040;
+  --focus: #4fd6e8;
+
+  --field-background: #0a1018;
+  --field-foreground: #d8e6ee;
+  --field-placeholder: #8ea3b0;
+  --backdrop: rgba(2, 5, 9, 0.75);
+
+  --radius: 0.25rem;
+  --font-display: "Chakra Petch", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(ellipse at 70% -10%, #0f2a3a 0%, transparent 55%),
+    var(--background);
+  color: var(--foreground);
+  font: 14px/1.45 system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3,
+.display {
+  font-family: var(--font-display);
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Corner brackets on a panel or card. */
+.frame {
+  position: relative;
+}
+
+.frame::before,
+.frame::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+
+.frame::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.frame::after {
+  right: -1px;
+  bottom: -1px;
+  border-top: 0;
+  border-left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
