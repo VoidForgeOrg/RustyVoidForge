@@ -141,15 +141,17 @@ fn stationed(id: u64, at: u64, ingots: i64) -> Value {
     })
 }
 
-/// Fleet 21 stationed at 7 with ingots, fleet 22 flying 7 → 12 to colonize (5 h 2 min 0.4 s
-/// flown at `as_of`), fleet 23 returning, fleet 24 stationed at 9 with nothing.
+/// Fleet 21 stationed at 7 with ingots, fleet 22 flying 7 → 12 to colonize, fleet 23 returning,
+/// fleet 24 stationed at 9 with nothing. Fleet 22 left 62.8 s before `as_of`: shown, the two
+/// times are 62 s apart (18:03:10 and 18:04:12), so the confirm says `1 min 2 s`; from the raw
+/// times it would round up to `1 min 3 s` (dev-design's R1 rule).
 fn my_fleets() -> Value {
-    json!({"as_of": AS_OF, "valid_until": null, "fleets": [
+    json!({"as_of": "2026-10-20T18:04:12.900Z", "valid_until": null, "fleets": [
         stationed(21, 7, 500_000_000),
         {"state": "in_transit", "fleet_id": 22, "ships": [{"ship_id": 40, "ship_type": "colony_ship"}],
          "cargo": {"iron_ore_g": 0, "iron_ingot_g": 0}, "capacity_g": 0, "speed_du_per_h": 10_000,
          "origin_planet_id": 7, "target_planet_id": 12, "mission": "colonize",
-         "departed_at": "2026-10-20T13:02:11.600Z", "arrives_at": "2026-10-20T18:20:00.000Z"},
+         "departed_at": "2026-10-20T18:03:10.100Z", "arrives_at": "2026-10-20T18:20:00.000Z"},
         {"state": "returning", "fleet_id": 23, "ships": [{"ship_id": 41, "ship_type": "colony_ship"}],
          "cargo": {"iron_ore_g": 0, "iron_ingot_g": 0}, "capacity_g": 0, "speed_du_per_h": 10_000,
          "origin_planet_id": 7, "arrives_at": "2026-10-20T18:07:00.000Z"},
@@ -971,7 +973,7 @@ async fn the_confirm_pages_state_the_loss_and_carry_their_own_key() {
         (
             "/fleets/22/turn-back",
             "Turn Fleet #22 back?",
-            "It has flown 5 h 2 min, so it returns to Planet #7 in about that long, and can't be turned again. Its mission (Colonize Planet #12) is abandoned.",
+            "It has flown 1 min 2 s, so it returns to Planet #7 in about that long, and can't be turned again. Its mission (Colonize Planet #12) is abandoned.",
             vec![
                 ("action", "recall_fleet"),
                 ("return_to", "/fleets"),
@@ -993,7 +995,12 @@ async fn the_confirm_pages_state_the_loss_and_carry_their_own_key() {
         } else {
             "/planets/7"
         };
-        has(&page.body, &format!(r#"<a href="{back}">Keep it</a>"#));
+        let keep = if path.starts_with("/fleets") {
+            "Keep flying"
+        } else {
+            "Keep it"
+        };
+        has(&page.body, &format!(r#"<a href="{back}">{keep}</a>"#));
         let key = key_of(&page.body);
         assert_ne!(key, planet_key, "the confirm page issues its own key");
         let mut want: Vec<(String, String)> = hidden
@@ -1138,4 +1145,65 @@ async fn logged_out_a_confirm_page_is_the_logged_out_home_there() {
         r#"href="/login?next=%2Fplanets%2F7%2Fdemolish%2F12""#,
     );
     lacks(&page.body, r#"action="/act""#);
+}
+
+#[tokio::test]
+async fn fleets_target_pre_fills_every_send_form() {
+    let (_w, mut b) = world().await;
+    let body = b.get("/fleets?target=12").await.body;
+    let filled = r#"<input type="text" name="target_planet_id" size="8" value="12">"#;
+    // Fleets 21 and 24 are stationed: one Send form each, both pre-filled.
+    assert_eq!(body.matches(filled).count(), 2, "{body}");
+    // The Send forms return to the page as it was asked for.
+    has(&body, r#"name="return_to" value="/fleets?target=12""#);
+    for odd in ["/fleets?target=x", "/fleets?target=-1", "/fleets"] {
+        let body = b.get(odd).await.body;
+        assert_eq!(
+            body.matches(r#"name="target_planet_id" size="8" value="">"#)
+                .count(),
+            2,
+            "{odd}"
+        );
+    }
+}
+
+fn max_age(set_cookie: &str) -> u64 {
+    set_cookie
+        .to_ascii_lowercase()
+        .split(';')
+        .find_map(|a| a.trim().strip_prefix("max-age=").map(str::to_owned))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("no max-age: {set_cookie}"))
+}
+
+/// Every step that changes the session (a render's key, a confirm page's key, a submit's banner
+/// and answered mark, the page that takes the banner) keeps the login's lifetime: a save
+/// otherwise cuts it to the anonymous 10 minutes (D-057's tower-sessions lesson).
+#[tokio::test]
+async fn issuing_keys_and_banners_keeps_the_login_s_lifetime() {
+    let (w, mut b) = world().await;
+    w.api.reply("/commands", accepted(&json!([])));
+    let want = 3600 + voidforge_web::routes::EXPIRED_GRACE_SECS;
+    let check = |b: &Browser, step: &str, from: usize| {
+        let set: Vec<&String> = b.set_cookies[from..].iter().collect();
+        assert!(
+            !set.is_empty(),
+            "{step}: the session was saved, with its cookie"
+        );
+        for c in set {
+            assert!((want - 5..=want).contains(&max_age(c)), "{step}: {c}");
+        }
+    };
+    let from = b.set_cookies.len();
+    let key = key_of(&b.get("/planets/7").await.body);
+    check(&b, "a planet render", from);
+    let from = b.set_cookies.len();
+    b.get("/planets/7/demolish/12").await;
+    check(&b, "a confirm page", from);
+    let from = b.set_cookies.len();
+    submit(&mut b, &build_fields(&key)).await;
+    check(&b, "a submit", from);
+    let from = b.set_cookies.len();
+    b.get("/fleets").await;
+    check(&b, "the page taking the banner", from);
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The web login by effect against a real dex (Technical Plan P4.1 to P4.3; decision log D-057, D-059, D-060).
+"""The web login by effect against a real dex (Technical Plan P4.1 to P4.4; decision log D-057, D-059 to D-061).
 
 Starts `voidforge-web` on localhost:8081 (dex registers the redirect by exact string), then
 logs alice in and out as a browser would, with two cookie jars: one for dex's pages and one for
@@ -18,6 +18,13 @@ does.
                    homeworld's planet page (its Storage and the Drill and Refinery it starts
                    with), Fleets, the Universe around it (the homeworld at 0.0 u) and the
                    Leaderboard ("you", or its not-ready page); a bad planet number is refused
+  5c forms:        the MVP loop through the web's forms (P4.4, D-061), paced under the write
+                   limit and each step checked against the API's JSON with alice's own token:
+                   build a Shipyard (a double submit says "already submitted", a forged key is
+                   "expired", and neither builds twice), queue a Colony Ship and a Cargo Vessel,
+                   assemble them with 1 t of ingots, colonize an unowned neighbour, disband
+                   there, assemble the Cargo Vessel with 0.5 t, and Transport it home (each load
+                   waits until the planet holds twice it, since ship builds drain the ingots)
   6  replay:       the same callback again is refused (400), with or without the cookie
   7  tampered:     a callback whose state was changed is refused (400) and logs nobody in
   8  logout:       a GET can't log out; the POST does and says so, and the old cookie is logged
@@ -32,6 +39,8 @@ Usage: web-login.py --web <voidforge-web> --api <url> --issuer <dex issuer> --lo
 Exit codes: 0 every check passed; 1 a check failed; 2 the checks couldn't run.
 """
 import argparse
+import html
+import json
 import os
 import re
 import signal
@@ -208,6 +217,10 @@ def run(args):
         if homeworld:
             walk(web, homeworld.group(1))
 
+        # 5c. The forms, through the whole MVP loop (P4.4).
+        if homeworld:
+            forms_walk(web, homeworld.group(1), args.api.rstrip("/"), issuer)
+
         # 6. Replay.
         status, _, body = web.request(callback)
         check(status == 400 and "Login failed" in body, "a replayed callback is refused (400)", str(status))
@@ -317,6 +330,189 @@ def walk(web, home):
     status, _, body = web.request(WEB + "/planets/not-a-number")
     check(status == 400 and "That isn't a planet number." in body, "a bad planet number is refused (400)",
           str(status))
+
+
+def api_token(issuer):
+    """Alice's own ID token through dex's password grant (the bots' public client): the same
+    account the web logs in, so the walk can read the API's JSON beside the pages."""
+    data = urllib.parse.urlencode({"grant_type": "password", "username": USER, "password": PASSWORD,
+                                   "client_id": "voidforge-cli", "scope": "openid"}).encode()
+    with urllib.request.urlopen(urllib.request.Request(issuer + "/token", data=data), timeout=15) as r:
+        return json.loads(r.read())["id_token"]
+
+
+def api_get(api, token, path):
+    """One API read, waiting out a rate limit or a catch-up (D-054, D-049)."""
+    for _ in range(10):
+        req = urllib.request.Request(api + path, headers={"Authorization": "Bearer " + token})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 503):
+                raise
+            time.sleep(1)
+    raise RuntimeError("the API kept refusing %s" % path)
+
+
+def wait_for(what, probe, seconds=90):
+    """Polls `probe` once a second until it returns something truthy; fails after `seconds`."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        value = probe()
+        if value:
+            return value
+        time.sleep(1)
+    fail("%s didn't happen within %d s" % (what, seconds))
+    raise RuntimeError("the form walk can't go on without: " + what)
+
+
+def act_form(body, action, **hidden):
+    """The hidden fields of the page's form for `action` (and any given hidden values)."""
+    for form in re.findall(r'<form method="post" action="/act">(.*?)</form>', body, re.S):
+        fields = [(n, html.unescape(v)) for n, v in
+                  re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', form)]
+        values = dict(fields)
+        if values.get("action") == action and all(values.get(k) == str(v) for k, v in hidden.items()):
+            return fields
+    return None
+
+
+def submit(web, page, action, choose, hidden=None, expect="Done:"):
+    """Opens `page`, submits its form for `action` with the fields `choose` sets, paced under the
+    write limit (D-054: 2/s), then reads the page it redirects to. Returns (fields sent, banner page)."""
+    status, _, body = web.request(WEB + page)
+    fields = act_form(body, action, **(hidden or {}))
+    if not check(status == 200 and fields, "%s: the %s form is on %s" % (action, action, page), body[:300]):
+        raise RuntimeError("no %s form on %s" % (action, page))
+    sent = fields + list(choose)
+    time.sleep(0.6)
+    status, headers, _ = web.request(WEB + "/act", data=urllib.parse.urlencode(sent).encode(), method="POST")
+    location = headers.get("Location", "")
+    _, _, shown = web.request(WEB + location) if status == 303 else (None, None, "")
+    banner = re.search(r"<hr>(.*?)(<h1>|$)", shown, re.S)
+    check(status == 303 and expect in shown, "%s: one POST, a 303 and %r" % (action, expect),
+          "%s %s; banner: %s" % (status, location, banner.group(1)[:400] if banner else re.sub(r"\s+", " ", shown)[:400]))
+    return sent, shown
+
+
+def tonnes(g):
+    """Grams as the exact tonnes a cargo field takes: 6 decimals."""
+    return "%d.%06d" % (g // 1_000_000, g % 1_000_000)
+
+
+def load(api, token, planet, grams):
+    """`grams`, once the planet holds twice that, as the API shows it: ship builds drain the
+    ingots, and a load of 0 would test nothing (run 2 of P4.4's e2e did exactly that)."""
+    wait_for("%s t of ingots on %s" % (tonnes(2 * grams), planet), lambda:
+             api_get(api, token, planet)["stocks"]["iron_ingot"]["amount_g"] >= 2 * grams, 60)
+    return grams
+
+
+def buildings_of(planet, kind):
+    return [b for b in planet["buildings"] if b["type"] == kind]
+
+
+def forms_walk(web, home, api, issuer):
+    """Step 5c: the MVP loop through the web's forms (P4.4, §7's gate walk without a browser), each
+    step checked against the API's JSON (T6): build, queue ships, assemble, colonize, transport."""
+    token = api_token(issuer)
+    me = api_get(api, token, "/players/me")
+    check(str(me["homeworld_id"]) == home, "the password-grant token is the web's player (same homeworld)")
+    here = "/planets/" + home
+
+    # Build a Shipyard; then the same form again (a double submit) and a form this session never issued.
+    yards = len(buildings_of(api_get(api, token, here), "shipyard"))
+    sent, _ = submit(web, here, "build_building", [("building_type", "shipyard")])
+    planet = api_get(api, token, here)
+    check(len(buildings_of(planet, "shipyard")) == yards + 1, "build: the API shows one new Shipyard")
+    time.sleep(0.6)
+    status, headers, _ = web.request(WEB + "/act", data=urllib.parse.urlencode(sent).encode(), method="POST")
+    _, _, shown = web.request(WEB + headers.get("Location", "/"))
+    check(status == 303 and "This form was already submitted; this is its result. Nothing was done twice." in shown,
+          "a double submit says it was already submitted (§5.2)", re.sub(r"\s+", " ", shown)[:300])
+    forged = [(k, "AAAAAAAAAAAAAAAAAAAAAA" if k == "key" else v) for k, v in sent]
+    time.sleep(0.6)
+    web.request(WEB + "/act", data=urllib.parse.urlencode(forged).encode(), method="POST")
+    _, _, shown = web.request(WEB + here)
+    check("That form has expired." in shown, "a key the session never issued is refused (Q3)")
+    check(len(buildings_of(api_get(api, token, here), "shipyard")) == yards + 1,
+          "neither the double submit nor the forged form built a second Shipyard")
+    yard = wait_for("the Shipyard becoming operational", lambda: next(
+        (b["id"] for b in buildings_of(api_get(api, token, here), "shipyard") if b["state"] == "operational"), None))
+    ok("the Shipyard #%s is operational" % yard)
+
+    # Queue a Colony Ship and a Cargo Vessel; wait until both are on the roster.
+    for ship in ("colony_ship", "cargo_vessel"):
+        submit(web, here, "queue_ship", [("ship_type", ship)], {"shipyard_id": yard})
+    builds = [b["ship_type"] for b in api_get(api, token, here)["ship_builds"] if b["shipyard_id"] == yard]
+    check(sorted(builds) == ["cargo_vessel", "colony_ship"] or len(builds) < 2,
+          "queue: the API shows both builds at the Shipyard", repr(builds))
+
+    def roster():
+        r = {s["ship_type"]: s["ship_id"] for s in api_get(api, token, here)["roster"] if s["owner"] == me["player_id"]}
+        return r if {"colony_ship", "cargo_vessel"} <= set(r) else None
+    ships = wait_for("both ships on the homeworld's roster", roster, 150)
+    ok("both ships are on the roster")
+
+    # An unowned neighbour from the Universe page.
+    _, _, body = web.request(WEB + "/universe")
+    target = re.search(r'<th scope="row"><a href="/planets/(\d+)">Planet #\d+</a></th><td>unowned</td>', body)
+    if not check(target, "the Universe page lists an unowned neighbour to colonize"):
+        raise RuntimeError("no unowned neighbour")
+    colony = target.group(1)
+
+    # Assemble both ships with up to 1 t of ingots; the API shows the fleet and its exact cargo.
+    loaded = load(api, token, here, 1_000_000)
+    submit(web, here, "assemble_fleet",
+           [("ship", str(ships["colony_ship"])), ("ship", str(ships["cargo_vessel"])), ("ore", ""),
+            ("ingots", tonnes(loaded))],
+           expect="Done: a fleet of 2 ships was assembled at Planet #%s." % home)
+    fleets = api_get(api, token, "/players/me/fleets")["fleets"]
+    fleet = next((f for f in fleets if f["state"] == "stationed" and str(f["at_planet_id"]) == home
+                  and {s["ship_id"] for s in f["ships"]} == set(ships.values())), None)
+    check(fleet and fleet["cargo"] == {"iron_ore_g": 0, "iron_ingot_g": loaded},
+          "assemble: the API shows the fleet of both ships carrying exactly the %s t loaded" % tonnes(loaded),
+          repr(fleet))
+    if not fleet:
+        raise RuntimeError("no fleet to send")
+    fid = fleet["fleet_id"]
+
+    # Colonize from the Fleets page; wait until the planet is the player's.
+    submit(web, "/fleets", "send_fleet", [("target_planet_id", colony), ("mission", "colonize")], {"fleet_id": fid},
+           expect="Done: Fleet #%s left for Planet #%s (Colonize)." % (fid, colony))
+    flying = next((f for f in api_get(api, token, "/players/me/fleets")["fleets"] if f["fleet_id"] == fid), {})
+    check(flying.get("state") == "in_transit" and str(flying.get("target_planet_id")) == colony
+          and flying.get("mission") == "colonize", "send: the API shows the fleet flying to colonize", repr(flying))
+    wait_for("Planet #%s becoming the player's" % colony,
+             lambda: int(colony) in api_get(api, token, "/players/me")["planet_ids"], 60)
+    planet = api_get(api, token, "/planets/" + colony)
+    check(planet["owner"] == me["player_id"] and planet["stocks"]["iron_ingot"]["amount_g"] >= loaded,
+          "colonize: the planet is the player's, with the ingots unloaded")
+    _, _, body = web.request(WEB + "/planets/" + colony)
+    check("Owner: you" in body, "the colony's page says Owner: you")
+
+    # Disband the Cargo Vessel's fleet at the colony, assemble it there with 0.5 t, and Transport it home.
+    submit(web, "/fleets", "disband_fleet", [], {"fleet_id": fid})
+    on_roster = [s["ship_id"] for s in api_get(api, token, "/planets/" + colony)["roster"]]
+    check(ships["cargo_vessel"] in on_roster, "disband: the Cargo Vessel is on the colony's roster")
+    carried = load(api, token, "/planets/" + colony, 500_000)
+    submit(web, "/planets/" + colony, "assemble_fleet",
+           [("ship", str(ships["cargo_vessel"])), ("ingots", tonnes(carried))])
+    fleet = next((f for f in api_get(api, token, "/players/me/fleets")["fleets"]
+                  if f["state"] == "stationed" and str(f["at_planet_id"]) == colony), None)
+    check(fleet and fleet["cargo"]["iron_ingot_g"] == carried,
+          "assemble at the colony: the %s t loaded is aboard" % tonnes(carried), repr(fleet))
+    if not fleet:
+        raise RuntimeError("no fleet to send home")
+    fid = fleet["fleet_id"]
+    submit(web, "/fleets", "send_fleet", [("target_planet_id", home), ("mission", "transport")], {"fleet_id": fid},
+           expect="Done: Fleet #%s left for Planet #%s (Transport)." % (fid, home))
+    back = wait_for("the transport arriving home", lambda: next(
+        (f for f in api_get(api, token, "/players/me/fleets")["fleets"]
+         if f["fleet_id"] == fid and f["state"] == "stationed" and str(f["at_planet_id"]) == home), None), 60)
+    check(back["cargo"] == {"iron_ore_g": 0, "iron_ingot_g": 0},
+          "transport: the fleet arrived home and its cargo was unloaded", repr(back))
 
 
 def unreachable(args, issuer, origin, env, secrets_seen):

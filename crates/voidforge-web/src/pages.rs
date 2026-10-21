@@ -1221,14 +1221,14 @@ enum Offer {
 }
 
 /// A confirm page (§5.4): the question, then the consequence line and the real form with this
-/// page's own key, and `Keep it` back to the page it came from; or the code's copy and a link
-/// back, with no form.
+/// page's own key, and `keep` (`Keep it`, or Turn back's `Keep flying`: dev-design's U3) back to
+/// the page it came from; or the code's copy and a link back, with no form.
 fn confirm(
     frame: Frame<'_>,
     question: &str,
     offer: Offer,
     key: &str,
-    back: &str,
+    (back, keep): (&str, &str),
     fill: Fill,
 ) -> Markup {
     layout(
@@ -1242,7 +1242,7 @@ fn confirm(
                     (act_form(key, back, action, &hidden, &html! {
                         p { button type="submit" { (button) } }
                     }))
-                    p { a href=(back) { "Keep it" } }
+                    p { a href=(back) { (keep) } }
                 }
                 Offer::Gone(code) => {
                     @let m = Message {
@@ -1315,7 +1315,7 @@ pub fn confirm_cancel_construction(
         &format!("Cancel construction of {name}?"),
         offer,
         key,
-        &back,
+        (&back, "Keep it"),
         fill,
     )
 }
@@ -1380,7 +1380,14 @@ pub fn confirm_demolish(
         },
         Some(_) => Offer::Gone(ErrorCode::NotOperational),
     };
-    confirm(frame, &format!("Demolish {name}?"), offer, key, &back, fill)
+    confirm(
+        frame,
+        &format!("Demolish {name}?"),
+        offer,
+        key,
+        (&back, "Keep it"),
+        fill,
+    )
 }
 
 /// §5.4: cancel ship build `n` on `p`, losing the ingots delivered so far.
@@ -1422,7 +1429,7 @@ pub fn confirm_cancel_build(
             button: format!("Cancel build #{n}"),
         },
     };
-    confirm(frame, &question, offer, key, &back, fill)
+    confirm(frame, &question, offer, key, (&back, "Keep it"), fill)
 }
 
 /// How long a fleet has flown as the page shows it: `as_of` and `departed_at` each as their
@@ -1473,7 +1480,7 @@ pub fn confirm_turn_back(frame: Frame<'_>, view: &FleetsView, f: u64, key: &str)
         &format!("Turn Fleet #{f} back?"),
         offer,
         key,
-        back,
+        (back, "Keep flying"),
         Fill::default(),
     )
 }

@@ -34,9 +34,10 @@ pub const ALREADY_SUBMITTED: &str =
     "This form was already submitted; this is its result. Nothing was done twice.";
 /// §5.1: after a 401 on a submit and the login that follows it.
 pub const ORDER_NOT_SENT: &str = "Your session ended, so that order wasn't sent. Submit it again.";
-/// D-057's line carried to P4.4: a submit on an expired login.
+/// A submit on an expired login: D-057's carried line, worded with "order" as the rest of the
+/// copy is (dev-design's U9).
 pub const ACTION_EXPIRED: &str =
-    "Your login expired, so that action wasn't sent. Log in again and retry.";
+    "Your login expired, so that order wasn't sent. Log in again, then submit it again.";
 /// A submit without a login: the session ended or was never there, so there's nothing to send
 /// with (P4.4's dev-design question U1, built as recommended).
 pub const NOT_LOGGED_IN: &str =

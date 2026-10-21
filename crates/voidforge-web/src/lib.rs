@@ -2,7 +2,9 @@
 //!
 //! P4.1 (D-057) is the login: an authorization code flow with PKCE through dex, a server-side
 //! session holding the ID token, Home in its two states, and the logout. P4.2 (D-059) is the
-//! typed API client ([`api`]) and the messages a failed call shows ([`messages`]). The binary in
+//! typed API client ([`api`]) and the messages a failed call shows ([`messages`]). P4.3 (D-060) is
+//! the game's pages ([`pages`], [`format`]); P4.4 (D-061) the command forms ([`forms`]) and the
+//! session's form keys ([`session`]). The binary in
 //! `main.rs` wires these together; tests drive [`routes::app`] directly.
 
 pub mod api;
