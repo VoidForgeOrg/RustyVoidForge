@@ -22,13 +22,23 @@
 //!   so (§4.1, E9). It's a POST, and the cookie is SameSite=Lax, so another site can't log a user
 //!   out with a link or a form.
 //!
+//! - `POST /act` is every form's target (P4.4, D-061; phase4-ux §5.1): the session's form-key
+//!   check (Q3, also the CSRF check), the web's own input check (§6.3), then exactly one `POST
+//!   /commands` with the form key as its `Idempotency-Key`, and a 303 back with the outcome in the
+//!   one-shot banner; a retryable failure is §5.5's retry page, re-posting the same key. Nothing
+//!   is ever sent twice by the web, and a 401 or an expired login sends nothing again by itself.
+//! - `GET /planets/{p}/cancel-construction/{b}`, `/planets/{p}/demolish/{b}`,
+//!   `/planets/{p}/cancel-build/{n}` and `/fleets/{f}/turn-back` are §5.4's confirm pages: they
+//!   only read and render the real form with their own key; the link to them carries none.
+//!
 //! Every response says `Cache-Control: no-store` and `Referrer-Policy: no-referrer`: pages
 //! show the viewer's email, and the callback's URL holds a code.
 
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Query, State};
+use axum::body::Bytes;
+use axum::extract::{Path, Query, State};
 use axum::http::header::{CACHE_CONTROL, LOCATION, REFERRER_POLICY, RETRY_AFTER};
 use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -39,16 +49,20 @@ use tower_sessions::cookie::SameSite;
 use tower_sessions::cookie::time::{Duration as CookieDuration, OffsetDateTime};
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 
+use voidforge_api_types::command::IdempotencyKey;
 use voidforge_api_types::error::ErrorCode;
+use voidforge_api_types::rules::RulesView;
 use voidforge_api_types::wire::{PlanetId, Position};
 
 use crate::api::{Api, ApiError};
 use crate::format;
+use crate::forms::{self, Posted};
 use crate::messages::{self, Context, Fill, Kind, Message};
 use crate::oidc::{self, LoginError, Provider};
 use crate::pages::{self, Found, Frame, Nav, Notice, Refusal, SearchForm};
 use crate::session::{
-    self, LOGIN_KEY, LoggedIn, NOTICE_KEY, PENDING_KEY, PENDING_LIFETIME_SECS, RENEWING_KEY,
+    self, Banner, KeyState, LOGIN_KEY, LoggedIn, NOTICE_KEY, PENDING_KEY, PENDING_LIFETIME_SECS,
+    RENEWING_KEY,
 };
 use crate::store::BoundedStore;
 
@@ -93,6 +107,17 @@ pub fn app(state: AppState, secure_cookie: bool) -> Router {
         .route("/fleets", get(fleets))
         .route("/universe", get(universe))
         .route("/leaderboard", get(leaderboard))
+        .route("/act", post(act))
+        .route(
+            "/planets/{id}/cancel-construction/{building}",
+            get(confirm_cancel_construction),
+        )
+        .route("/planets/{id}/demolish/{building}", get(confirm_demolish))
+        .route(
+            "/planets/{id}/cancel-build/{build}",
+            get(confirm_cancel_build),
+        )
+        .route("/fleets/{id}/turn-back", get(confirm_turn_back))
         .fallback(not_found)
         .layer(sessions)
         .layer(axum::middleware::from_fn(refuse_head))
@@ -190,26 +215,37 @@ fn busy(s: &AppState) -> Response {
 /// The rules' name for the fast test rules: the frame says so (phase4-ux §2).
 pub const FAST_RULES: &str = "v0-fast";
 
+/// The public rules, or None when the read failed: a page then only drops what it would have
+/// shown from them (§5.7).
+async fn rules(s: &AppState) -> Option<RulesView> {
+    s.api.rules().await.ok()
+}
+
+/// Whether these rules are the fast test rules (§2).
+fn is_fast(rules: Option<&RulesView>) -> bool {
+    rules.is_some_and(|r| r.name == FAST_RULES)
+}
+
 /// Whether the universe runs the fast test rules. A failed read only drops the line (§5.7).
 async fn fast_rules(s: &AppState) -> bool {
-    s.api.rules().await.is_ok_and(|r| r.name == FAST_RULES)
+    is_fast(rules(s).await.as_ref())
 }
 
 /// The Universe page's default radius: 100 u around the homeworld, a UI default (Q5).
 pub const DEFAULT_RADIUS_DU: i64 = 100_000;
 
-/// Ends the session and shows the expired notice, offering to return to `next`. The fresh
-/// session it leaves is marked [`RENEWING_KEY`], so logging in again from here says so once
-/// (§5.6); it lives as long as a login attempt. With the store full, it's left unmarked: the
-/// line is a courtesy, never a reason to fail the page.
-async fn expired(s: &AppState, session: &Session, next: &str, fast: bool) -> Response {
+/// Ends the session. The fresh session it leaves is marked [`RENEWING_KEY`] with `renewing`, the
+/// banner the first page after logging in again shows once (§5.6, §5.1); it lives as long as a
+/// login attempt. With the store full, it's left unmarked: the line is a courtesy, never a reason
+/// to fail the page. Err is the page for a store that failed.
+async fn end_login(s: &AppState, session: &Session, renewing: Banner) -> Result<(), Box<Response>> {
     if let Err(e) = session.flush().await {
         tracing::error!(error = %e, "ending an expired session failed");
-        return internal();
+        return Err(Box::new(internal()));
     }
     if s.sessions.has_room() {
         let marked = async {
-            session.insert(RENEWING_KEY, true).await?;
+            session.insert(RENEWING_KEY, renewing).await?;
             session.set_expiry(Some(anonymous_expiry()));
             session.save().await
         };
@@ -217,14 +253,34 @@ async fn expired(s: &AppState, session: &Session, next: &str, fast: bool) -> Res
             s.sessions.admitted();
         } else if let Err(e) = session.flush().await {
             tracing::error!(error = %e, "ending an expired session failed");
-            return internal();
+            return Err(Box::new(internal()));
         }
+    }
+    Ok(())
+}
+
+/// Ends the session and shows `notice` on the logged-out Home, offering to return to `next`;
+/// logging in again from there says so once (§5.6).
+async fn expired_with(
+    s: &AppState,
+    session: &Session,
+    next: &str,
+    fast: bool,
+    notice: Notice,
+) -> Response {
+    if let Err(r) = end_login(s, session, Banner::line(pages::RENEWED)).await {
+        return *r;
     }
     let next = local_path(next).unwrap_or("/");
     page(
         StatusCode::OK,
-        pages::home_logged_out(Some(Notice::Expired), &login_href(next), fast),
+        pages::home_logged_out(Some(notice), &login_href(next), fast),
     )
+}
+
+/// Ends an expired login and says so (P4.1 A4).
+async fn expired(s: &AppState, session: &Session, next: &str, fast: bool) -> Response {
+    expired_with(s, session, next, fast, Notice::Expired).await
 }
 
 /// The page a request is on, path and query: Refresh and Try again link to it, and a login
@@ -236,7 +292,7 @@ fn here(uri: &Uri) -> String {
 /// A logged-in viewer: the login, and the one-shot banner this page shows.
 struct Viewer {
     login: LoggedIn,
-    banner: Option<&'static str>,
+    banner: Option<Banner>,
 }
 
 /// A logged-in page's start: the viewer, or the response for one without a usable login. A
@@ -273,16 +329,16 @@ async fn begin(
         let fast = fast_rules(s).await;
         return Err(Box::new(expired(s, session, here, fast).await));
     }
-    let renewed = match session.get::<bool>(NOTICE_KEY).await {
-        Ok(n) => n == Some(true),
+    let banner = match session.get::<Banner>(NOTICE_KEY).await {
+        Ok(b) => b,
         Err(e) => {
             tracing::error!(error = %e, "reading the session failed");
             return Err(Box::new(internal()));
         }
     };
-    if renewed {
+    if banner.is_some() {
         let taken = async {
-            session.remove::<bool>(NOTICE_KEY).await?;
+            session.remove::<Banner>(NOTICE_KEY).await?;
             keep_expiry(session).await
         };
         if let Err(e) = taken.await {
@@ -290,10 +346,7 @@ async fn begin(
             return Err(Box::new(internal()));
         }
     }
-    Ok(Viewer {
-        login,
-        banner: renewed.then_some(pages::RENEWED),
-    })
+    Ok(Viewer { login, banner })
 }
 
 /// A failed read, as its page (§5.5, §6): the expired notice for a refused login, the full
@@ -332,7 +385,28 @@ fn frame(fast: bool, viewer: &Viewer, nav: Option<Nav>) -> Frame<'_> {
         login: Some(&viewer.login),
         me: None,
         nav,
-        banner: viewer.banner,
+        banner: viewer.banner.as_ref(),
+    }
+}
+
+/// A fresh form key for the page being rendered (P4.4's T1), kept in the session (§5.1.1); Err
+/// is the page for a store or CSPRNG that failed.
+async fn form_key(session: &Session) -> Result<String, Box<Response>> {
+    let issued = async {
+        let key = session::issue_form_key(session).await?;
+        keep_expiry(session).await?;
+        Ok::<_, session::SessionError>(key)
+    };
+    match issued.await {
+        Ok(Some(key)) => Ok(key),
+        Ok(None) => {
+            tracing::error!("the CSPRNG failed to make a form key");
+            Err(Box::new(internal()))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "keeping a form key failed");
+            Err(Box::new(internal()))
+        }
     }
 }
 
@@ -355,7 +429,7 @@ async fn home(State(s): State<AppState>, session: Session, uri: Uri) -> Response
     match me {
         Ok(me) => page(
             StatusCode::OK,
-            pages::home_logged_in(&viewer.login, &me, fast, viewer.banner),
+            pages::home_logged_in(&viewer.login, &me, fast, viewer.banner.as_ref()),
         ),
         Err(e) => {
             let frame = frame(fast, &viewer, Some(Nav::Home));
@@ -386,12 +460,13 @@ async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
         );
     };
     let token = &viewer.login.id_token;
-    let (fast, me, planet, fleets) = tokio::join!(
-        fast_rules(&s),
+    let (rules, me, planet, fleets) = tokio::join!(
+        rules(&s),
         s.api.me(token),
         s.api.planet(token, PlanetId(id)),
         s.api.my_fleets(token)
     );
+    let fast = is_fast(rules.as_ref());
     let fill = Fill {
         planet: Some(id),
         target: None,
@@ -418,13 +493,18 @@ async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
         }
         Err(e) => return failed(&s, &session, frame, &e, fill, &here).await,
     };
-    match fleets {
-        Ok(fleets) => page(
-            StatusCode::OK,
-            pages::planet(frame, &here, &me, &planet, &fleets),
-        ),
-        Err(e) => failed(&s, &session, frame, &e, fill, &here).await,
-    }
+    let fleets = match fleets {
+        Ok(f) => f,
+        Err(e) => return failed(&s, &session, frame, &e, fill, &here).await,
+    };
+    let key = match form_key(&session).await {
+        Ok(k) => k,
+        Err(r) => return *r,
+    };
+    page(
+        StatusCode::OK,
+        pages::planet(frame, &here, &me, &planet, &fleets, rules.as_ref(), &key),
+    )
 }
 
 #[tracing::instrument(name = "web.fleets", skip_all)]
@@ -445,10 +525,22 @@ async fn fleets(State(s): State<AppState>, session: Session, uri: Uri) -> Respon
         me: Some(&me),
         ..frame
     };
-    match fleets {
-        Ok(fleets) => page(StatusCode::OK, pages::fleets(frame, &here, &me, &fleets)),
-        Err(e) => failed(&s, &session, frame, &e, Fill::default(), &here).await,
-    }
+    let fleets = match fleets {
+        Ok(f) => f,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    };
+    let key = match form_key(&session).await {
+        Ok(k) => k,
+        Err(r) => return *r,
+    };
+    // §4.3: `?target=` pre-fills every Send form; anything but a planet number is ignored.
+    let target = query_pairs(uri.query())
+        .get("target")
+        .and_then(|t| planet_number(t));
+    page(
+        StatusCode::OK,
+        pages::fleets(frame, &here, &me, &fleets, &key, target),
+    )
 }
 
 #[tracing::instrument(name = "web.leaderboard", skip_all)]
@@ -494,6 +586,13 @@ async fn leaderboard(State(s): State<AppState>, session: Session, uri: Uri) -> R
     }
 }
 
+/// A query string's fields, decoded; the last of a repeated one wins.
+fn query_pairs(query: Option<&str>) -> std::collections::HashMap<String, String> {
+    reqwest::Url::parse(&format!("http://x/?{}", query.unwrap_or("")))
+        .map(|u| u.query_pairs().into_owned().collect())
+        .unwrap_or_default()
+}
+
 /// Where a Universe search is centred.
 enum Centre {
     /// The viewer's homeworld, at the default radius (Q5).
@@ -507,10 +606,7 @@ enum Centre {
 /// The search a Universe query asks for, and the form as typed; Err when the web can't use it
 /// (§4.4, §6.3). Any of x, y, z or radius makes it an explicit search, which needs all four.
 fn search(query: Option<&str>) -> (Result<Centre, ()>, SearchForm) {
-    let pairs: std::collections::HashMap<String, String> =
-        reqwest::Url::parse(&format!("http://x/?{}", query.unwrap_or("")))
-            .map(|u| u.query_pairs().into_owned().collect())
-            .unwrap_or_default();
+    let pairs = query_pairs(query);
     let field = |k: &str| pairs.get(k).cloned().unwrap_or_default();
     let typed = SearchForm {
         x: field("x"),
@@ -643,6 +739,321 @@ async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Resp
         }
         Err(e) => failed(&s, &session, frame, &e, Fill::default(), &here).await,
     }
+}
+
+/// Puts `banner` in the session for the next page, and sends the browser there (§5.1's 303).
+async fn banner_back(session: &Session, to: &str, banner: Banner) -> Response {
+    let stored = async {
+        session.insert(NOTICE_KEY, banner).await?;
+        keep_expiry(session).await
+    };
+    if let Err(e) = stored.await {
+        tracing::error!(error = %e, "keeping the banner failed");
+        return internal();
+    }
+    see_other(to)
+}
+
+/// Records that the host answered `key` (a 200 or a 422) and keeps the session's expiry.
+async fn answered(session: &Session, key: &str) -> Result<(), session::SessionError> {
+    session::mark_answered(session, key).await?;
+    keep_expiry(session).await
+}
+
+/// `POST /act`: every form's target (§5.1). In order: the login (none, or expired: nothing is
+/// sent, and the player is told so); the form key, which this session must have issued (Q3: an
+/// old tab's or another site's form is "expired", with no call); the web's own checks (§6.3);
+/// then one `POST /commands` with that key. The outcome:
+/// - 200: 303 to the page (Fleets after Assemble and Send) with `Done: …` and the events;
+/// - a refusal: 303 back with `Not done: {copy} ({code})`; the next render has a new key;
+/// - 429, 503, 500, unreachable or unexpected: §5.5's retry page, re-posting the same key;
+/// - 401: the session ends, and the login returns to the page with §5.1's line. Never resent.
+///
+/// Only a 200 or a 422 marks the key answered: those are the outcomes the host recorded
+/// (D-037). A key answered before gets its first outcome again with §5.2's line.
+#[tracing::instrument(name = "web.act", skip_all)]
+async fn act(State(s): State<AppState>, session: Session, body: Bytes) -> Response {
+    let posted = Posted::parse(&body);
+    let return_to = posted.return_to().to_owned();
+    let login = match session.get::<LoggedIn>(LOGIN_KEY).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(error = %e, "reading the session failed");
+            return internal();
+        }
+    };
+    let Some(login) = login else {
+        tracing::info!(outcome = "not_logged_in", "a form without a login");
+        let fast = fast_rules(&s).await;
+        return page(
+            StatusCode::OK,
+            pages::home_logged_out(Some(Notice::NotLoggedIn), &login_href(&return_to), fast),
+        );
+    };
+    let Some(now) = oidc::unix_now() else {
+        return internal();
+    };
+    if now >= login.exp {
+        tracing::info!(outcome = "expired", "a form on an expired login");
+        let fast = fast_rules(&s).await;
+        return expired_with(&s, &session, &return_to, fast, Notice::ActionExpired).await;
+    }
+    let state = match posted.key() {
+        Some(k) => match session::form_key_state(&session, k).await {
+            Ok(state) => state,
+            Err(e) => {
+                tracing::error!(error = %e, "reading the session failed");
+                return internal();
+            }
+        },
+        None => KeyState::Unknown,
+    };
+    let (Some(key), KeyState::Issued | KeyState::Answered) = (posted.key(), state) else {
+        tracing::info!(
+            outcome = "expired_form",
+            "a form key this session didn't issue"
+        );
+        return banner_back(&session, &return_to, Banner::line(forms::EXPIRED_FORM)).await;
+    };
+    let order = match forms::order(&posted) {
+        Ok(o) => o,
+        Err(check) => {
+            tracing::info!(outcome = "checked", check = ?check, "the web refused a form");
+            let (copy, code) = check.copy();
+            let banner = Banner {
+                text: copy.to_owned(),
+                code: code.map(str::to_owned),
+                more: Vec::new(),
+            };
+            return banner_back(&session, &return_to, banner).await;
+        }
+    };
+    // Issued keys are 22 base64url characters, always a valid key.
+    let Ok(idempotency) = IdempotencyKey::parse(Some(key)) else {
+        return internal();
+    };
+    let again = state == KeyState::Answered;
+    let already = || {
+        if again {
+            vec![forms::ALREADY_SUBMITTED.to_owned()]
+        } else {
+            Vec::new()
+        }
+    };
+    let error = match s
+        .api
+        .command(&login.id_token, &idempotency, &order.command)
+        .await
+    {
+        Ok(accepted) => {
+            tracing::info!(outcome = "done", "a command was accepted");
+            if let Err(e) = answered(&session, key).await {
+                tracing::error!(error = %e, "keeping the answer failed");
+                return internal();
+            }
+            let (text, mut more) = forms::done_lines(order.done, &accepted);
+            more.extend(already());
+            let banner = Banner {
+                text,
+                code: None,
+                more,
+            };
+            return banner_back(&session, order.after_success(&return_to), banner).await;
+        }
+        Err(e) => e,
+    };
+    let m = messages::for_error(&error, Context::Command, order.fill);
+    match m.kind {
+        Kind::Login => {
+            tracing::info!(
+                outcome = "api_unauthorized",
+                "the API refused the token on a command"
+            );
+            if let Err(r) = end_login(&s, &session, Banner::line(forms::ORDER_NOT_SENT)).await {
+                return *r;
+            }
+            see_other(&login_href(&return_to))
+        }
+        Kind::Retry {
+            status,
+            retry_after,
+        } => {
+            tracing::info!(outcome = "retry", status, "a command wasn't answered");
+            let fast = fast_rules(&s).await;
+            let frame = Frame {
+                fast,
+                login: Some(&login),
+                me: None,
+                nav: None,
+                banner: None,
+            };
+            retry(
+                status,
+                retry_after,
+                &pages::command_retry(frame, &m, &posted, &return_to),
+            )
+        }
+        Kind::Banner | Kind::UniverseFull => {
+            tracing::info!(outcome = "refused", code = m.code, "a command was refused");
+            if matches!(error, ApiError::Refused { status: 422, .. })
+                && let Err(e) = answered(&session, key).await
+            {
+                tracing::error!(error = %e, "keeping the answer failed");
+                return internal();
+            }
+            let banner = Banner {
+                text: format!("Not done: {}", m.copy),
+                code: m.code.map(str::to_owned),
+                more: already(),
+            };
+            banner_back(&session, &return_to, banner).await
+        }
+    }
+}
+
+/// Which planet confirm page (§5.4).
+#[derive(Clone, Copy)]
+enum PlanetConfirm {
+    CancelConstruction,
+    Demolish,
+    CancelBuild,
+}
+
+async fn confirm_cancel_construction(
+    State(s): State<AppState>,
+    session: Session,
+    uri: Uri,
+    Path((p, b)): Path<(String, String)>,
+) -> Response {
+    planet_confirm(s, session, uri, &p, &b, PlanetConfirm::CancelConstruction).await
+}
+
+async fn confirm_demolish(
+    State(s): State<AppState>,
+    session: Session,
+    uri: Uri,
+    Path((p, b)): Path<(String, String)>,
+) -> Response {
+    planet_confirm(s, session, uri, &p, &b, PlanetConfirm::Demolish).await
+}
+
+async fn confirm_cancel_build(
+    State(s): State<AppState>,
+    session: Session,
+    uri: Uri,
+    Path((p, n)): Path<(String, String)>,
+) -> Response {
+    planet_confirm(s, session, uri, &p, &n, PlanetConfirm::CancelBuild).await
+}
+
+/// A planet's confirm page: the login, then `/rules`, `/players/me` and the planet at once, so
+/// the amounts are current (§5.4), then the page with its own key. A path that isn't two numbers
+/// is §6.2's Not found, with no call.
+#[tracing::instrument(name = "web.confirm", skip_all)]
+async fn planet_confirm(
+    s: AppState,
+    session: Session,
+    uri: Uri,
+    p: &str,
+    thing: &str,
+    which: PlanetConfirm,
+) -> Response {
+    let here = here(&uri);
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    let (Some(id), Some(thing)) = (planet_number(p), planet_number(thing)) else {
+        return not_found().await;
+    };
+    let token = &viewer.login.id_token;
+    let (rules, me, planet) = tokio::join!(
+        rules(&s),
+        s.api.me(token),
+        s.api.planet(token, PlanetId(id))
+    );
+    let fill = Fill {
+        planet: Some(id),
+        target: None,
+    };
+    let frame = frame(is_fast(rules.as_ref()), &viewer, None);
+    let me = match me {
+        Ok(me) => me,
+        Err(e) => return failed(&s, &session, frame, &e, fill, &here).await,
+    };
+    let frame = Frame {
+        me: Some(&me),
+        ..frame
+    };
+    let planet = match planet {
+        Ok(p) => p,
+        Err(
+            e @ ApiError::Refused {
+                code: ErrorCode::UnknownPlanet,
+                ..
+            },
+        ) => {
+            let m = messages::for_error(&e, Context::Page, fill);
+            return page(StatusCode::NOT_FOUND, pages::no_such_planet(frame, &m));
+        }
+        Err(e) => return failed(&s, &session, frame, &e, fill, &here).await,
+    };
+    let key = match form_key(&session).await {
+        Ok(k) => k,
+        Err(r) => return *r,
+    };
+    let markup = match which {
+        PlanetConfirm::CancelConstruction => {
+            pages::confirm_cancel_construction(frame, &me, &planet, thing, &key)
+        }
+        PlanetConfirm::Demolish => {
+            pages::confirm_demolish(frame, &me, &planet, rules.as_ref(), thing, &key)
+        }
+        PlanetConfirm::CancelBuild => pages::confirm_cancel_build(frame, &me, &planet, thing, &key),
+    };
+    page(StatusCode::OK, markup)
+}
+
+/// Turn back's confirm page (§5.4): `/players/me/fleets` for the time flown, beside `/rules` and
+/// `/players/me`, then the page with its own key.
+#[tracing::instrument(name = "web.confirm", skip_all)]
+async fn confirm_turn_back(
+    State(s): State<AppState>,
+    session: Session,
+    uri: Uri,
+    Path(f): Path<String>,
+) -> Response {
+    let here = here(&uri);
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    let Some(f) = planet_number(&f) else {
+        return not_found().await;
+    };
+    let token = &viewer.login.id_token;
+    let (fast, me, fleets) = tokio::join!(fast_rules(&s), s.api.me(token), s.api.my_fleets(token));
+    let frame = frame(fast, &viewer, None);
+    let me = match me {
+        Ok(me) => me,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    };
+    let frame = Frame {
+        me: Some(&me),
+        ..frame
+    };
+    let fleets = match fleets {
+        Ok(f) => f,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    };
+    let key = match form_key(&session).await {
+        Ok(k) => k,
+        Err(r) => return *r,
+    };
+    page(
+        StatusCode::OK,
+        pages::confirm_turn_back(frame, &fleets, f, &key),
+    )
 }
 
 /// §6.2: any other path. It reads nothing, so it has no frame.
@@ -792,8 +1203,8 @@ async fn callback(
     let stored = async {
         session.cycle_id().await?;
         session.remove::<serde_json::Value>(PENDING_KEY).await?;
-        if session.remove::<bool>(RENEWING_KEY).await? == Some(true) {
-            session.insert(NOTICE_KEY, true).await?;
+        if let Some(banner) = session.remove::<Banner>(RENEWING_KEY).await? {
+            session.insert(NOTICE_KEY, banner).await?;
         }
         session.insert(LOGIN_KEY, LoggedIn::from(identity)).await
     };

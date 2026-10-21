@@ -39,6 +39,13 @@ expression: pretty(body)
 <tr><th scope="row">build #20</th><td>Colony Ship</td><td>building: 0% (0 of 800.0 t), +80.0 t/h, done at 18:14:12 UTC (in 10 min)</td></tr></tbody>
 </table>
 <h2>Your ships here</h2>
-<ul>
-<li>Cargo Vessel #30</li>
-</ul></body></html>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="assemble_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/planets/4">
+<input type="hidden" name="planet_id" value="4">
+<p><label>
+<input type="checkbox" name="ship" value="30"> Cargo Vessel #30 (carries 500.0 t, 15.0 u/h)</label></p>
+<p>A fleet carries the total of its Cargo Vessels and flies at its slowest ship's speed.</p>
+<p>You can load cargo only at your own planets.</p>
+<p><button type="submit">Assemble fleet</button></p></form></body></html>

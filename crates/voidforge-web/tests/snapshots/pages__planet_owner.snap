@@ -26,13 +26,42 @@ expression: pretty(body)
 <h2>Buildings</h2>
 <table>
 <thead>
-<tr><th scope="col">Building</th><th scope="col">State</th></tr></thead>
+<tr><th scope="col">Building</th><th scope="col">State</th><th scope="col">Action</th></tr></thead>
 <tbody>
-<tr><th scope="row">Drill #2</th><td>running</td></tr>
-<tr><th scope="row">Refinery #3</th><td>running</td></tr>
-<tr><th scope="row">Drill #8</th><td>under construction: 0% (0 of 150.0 t), +50.0 t/h, done at 11:53:20 UTC (in 3 h)</td></tr></tbody>
+<tr><th scope="row">Drill #2</th><td>running</td><td><a href="/planets/7/demolish/2">Demolish…</a></td></tr>
+<tr><th scope="row">Refinery #3</th><td>running</td><td><a href="/planets/7/demolish/3">Demolish…</a></td></tr>
+<tr><th scope="row">Drill #8</th><td>under construction: 0% (0 of 150.0 t), +50.0 t/h, done at 11:53:20 UTC (in 3 h)</td><td><a href="/planets/7/cancel-construction/8">Cancel construction…</a></td></tr></tbody>
 </table>
+<h3>Build</h3>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="build_building">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/planets/7">
+<input type="hidden" name="planet_id" value="7">
+<p><label>
+<input type="radio" name="building_type" value="drill"> Drill: 150.0 t of ingots over 3 h (50.0 t/h) · mines 10.0 t of ore per hour</label></p>
+<p><label>
+<input type="radio" name="building_type" value="refinery"> Refinery: 250.0 t over 4 h (62.5 t/h) · turns 8.0 t of ore into 16.0 t of ingots per hour</label></p>
+<p><label>
+<input type="radio" name="building_type" value="shipyard"> Shipyard: 1,200.0 t over 12 h (100.0 t/h) · builds up to 3 ships at once</label></p>
+<p><button type="submit">Build</button></p></form>
+<p>Ingots in storage: 1,500.0 t (−34.0 t/h).</p>
+<p>A building takes a slot at once and draws ingots from storage until it's complete.</p>
 <h2>Your fleets here</h2>
 <ul>
 <li>Fleet #21: 2 Cargo Vessels, carrying 500.0 t of ingots. <a href="/fleets#fleet-21">Manage on the Fleets page</a></li>
-</ul></body></html>
+</ul>
+<h2>Send a fleet here</h2>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="send_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/planets/7">
+<input type="hidden" name="target_planet_id" value="7">
+<p><label>Fleet: 
+<select name="fleet_id"><option value="">Choose a fleet</option><option value="22">Fleet #22 at Planet #9 (1 Colony Ship)</option></select></label></p>
+<p>Mission: <label>
+<input type="radio" name="mission" value="colonize"> Colonize</label> <label>
+<input type="radio" name="mission" value="transport"> Transport</label> <label>
+<input type="radio" name="mission" value="move"> Move</label> </p>
+<p><button type="submit">Send</button></p></form>
+<p>Colonize needs a Colony Ship and an unowned planet. Transport needs a Cargo Vessel and one of your planets. Move goes anywhere.</p></body></html>

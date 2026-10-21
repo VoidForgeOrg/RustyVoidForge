@@ -5,22 +5,26 @@
 //! Leaderboard (§4.5), with the navigation and the freshness line (§2) and the edge states of
 //! §4.6. Every value is formatted by [`crate::format`]; nothing here formats a number.
 //!
-//! The forms that act are P4.4's: these pages render no form control and no placeholder for
-//! them (T2, D2), only the information around them, including §4.3's lines that explain why an
-//! action isn't offered.
+//! P4.4 (D-061) brings the forms that act (§5.3): each posts to `/act` with the page's form key,
+//! its `return_to` and its `action`. The four irreversible actions are links to their confirm
+//! pages (§5.4), which carry the real form. §4.3's lines that explain why an action isn't offered
+//! stay where it's hidden, and §5.7's cost lines show when `/rules` answered.
 
 use maud::{DOCTYPE, Markup, html};
+use voidforge_api_types::error::ErrorCode;
+use voidforge_api_types::rules::RulesView;
 use voidforge_api_types::view::{
     BuildingView, FleetShip, FleetView, FleetsView, FlowStatus, Leaderboard, PlanetView,
     PlanetsNearView, PlayerView, ShipBuildState, ShipBuildView,
 };
 use voidforge_api_types::wire::{
-    BuildingId, BuildingType, Cargo, PlayerId, Position, ShipType, Timestamp,
+    BuildingId, BuildingType, Cargo, Mission, PlayerId, Position, ShipType, Timestamp,
 };
 
 use crate::format::{self, Flow};
-use crate::messages::Message;
-use crate::session::LoggedIn;
+use crate::forms::{self, Posted};
+use crate::messages::{self, Context, Fill, Message};
+use crate::session::{Banner, LoggedIn};
 
 /// A line shown above the logged-out Home.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +33,10 @@ pub enum Notice {
     Expired,
     /// The viewer just logged out (§4.1; P4.3's E9).
     LoggedOut,
+    /// A form was submitted on an expired login, so it wasn't sent (D-057, carried to P4.4).
+    ActionExpired,
+    /// A form was submitted without a login, so it wasn't sent (P4.4).
+    NotLoggedIn,
 }
 
 /// The advisor's sentence for an expired login (P4.1 A4; kept for P4.2 by its A1).
@@ -84,7 +92,7 @@ pub struct Frame<'a> {
     /// (a planet page, D3).
     pub nav: Option<Nav>,
     /// The one-shot banner at the top of the page (§2).
-    pub banner: Option<&'a str>,
+    pub banner: Option<&'a Banner>,
 }
 
 fn layout(title: &str, frame: Frame<'_>, body: Markup) -> Markup {
@@ -120,7 +128,13 @@ fn layout(title: &str, frame: Frame<'_>, body: Markup) -> Markup {
                     }
                     hr;
                     @if let Some(banner) = frame.banner {
-                        p { strong { (banner) } }
+                        p {
+                            strong { (banner.text) }
+                            @if let Some(c) = &banner.code { " (" code { (c) } ")" }
+                        }
+                        @for line in &banner.more {
+                            p { (line) }
+                        }
                     }
                 }
                 @if frame.fast {
@@ -217,6 +231,8 @@ pub fn home_logged_out(notice: Option<Notice>, login_href: &str, fast: bool) -> 
             @match notice {
                 Some(Notice::Expired) => p { strong { (EXPIRED) } },
                 Some(Notice::LoggedOut) => p { strong { (LOGGED_OUT) } },
+                Some(Notice::ActionExpired) => p { strong { (forms::ACTION_EXPIRED) } },
+                Some(Notice::NotLoggedIn) => p { strong { (forms::NOT_LOGGED_IN) } },
                 None => {}
             }
             p { "A persistent space strategy game. Log in to play." }
@@ -231,7 +247,7 @@ pub fn home_logged_in(
     login: &LoggedIn,
     me: &PlayerView,
     fast: bool,
-    banner: Option<&str>,
+    banner: Option<&Banner>,
 ) -> Markup {
     let home = me.homeworld_id.0;
     let mut others: Vec<u64> = me
@@ -430,20 +446,164 @@ fn has_cargo(c: &Cargo) -> bool {
     c.iron_ore_g != 0 || c.iron_ingot_g != 0
 }
 
-/// Planet (§4.2). Owned by the viewer when the planet's owner is their player.
+/// The API's name of a building type, as a form sends it.
+fn wire_building(t: BuildingType) -> &'static str {
+    match t {
+        BuildingType::Drill => "drill",
+        BuildingType::Refinery => "refinery",
+        BuildingType::Shipyard => "shipyard",
+    }
+}
+
+/// The API's name of a ship type, as a form sends it.
+fn wire_ship(t: ShipType) -> &'static str {
+    match t {
+        ShipType::ColonyShip => "colony_ship",
+        ShipType::CargoVessel => "cargo_vessel",
+    }
+}
+
+/// The missions in the order forms offer them, with the API's names.
+const MISSIONS: [(Mission, &str); 3] = [
+    (Mission::Colonize, "colonize"),
+    (Mission::Transport, "transport"),
+    (Mission::Move, "move"),
+];
+
+/// A form that posts an order (§5.1): the page's key, where to return, the action, its hidden
+/// fields, then what the player sets.
+fn act_form(
+    key: &str,
+    return_to: &str,
+    action: &str,
+    hidden: &[(&str, String)],
+    body: &Markup,
+) -> Markup {
+    html! {
+        form method="post" action="/act" {
+            input type="hidden" name="action" value=(action);
+            input type="hidden" name="key" value=(key);
+            input type="hidden" name="return_to" value=(return_to);
+            @for (name, value) in hidden {
+                input type="hidden" name=(name) value=(value);
+            }
+            (body)
+        }
+    }
+}
+
+/// A cost spread over a build: `150.0 t over 3 h (50.0 t/h)` (§5.7).
+fn cost_over(cost_g: i64, build_time_ms: i64, what: &str) -> String {
+    let rate = format::per_hour(cost_g, build_time_ms)
+        .map(|r| format!(" ({r})"))
+        .unwrap_or_default();
+    format!(
+        "{}{what} over {}{rate}",
+        format::mass(cost_g),
+        format::duration(build_time_ms)
+    )
+}
+
+/// A Build radio's words, with §5.7's line when `/rules` answered.
+fn build_choice(t: BuildingType, rules: Option<&RulesView>) -> String {
+    let name = format::building(t);
+    let Some(r) = rules else {
+        return name.to_owned();
+    };
+    let b = &r.buildings;
+    match t {
+        BuildingType::Drill => format!(
+            "{name}: {} · mines {} t of ore per hour",
+            cost_over(b.drill.cost_g, b.drill.build_time_ms, " of ingots"),
+            format::tonnes(b.drill.output_g_per_h)
+        ),
+        BuildingType::Refinery => format!(
+            "{name}: {} · turns {} t of ore into {} t of ingots per hour",
+            cost_over(b.refinery.cost_g, b.refinery.build_time_ms, ""),
+            format::tonnes(b.refinery.intake_g_per_h),
+            format::tonnes(b.refinery.output_g_per_h)
+        ),
+        BuildingType::Shipyard => format!(
+            "{name}: {} · builds up to {} ships at once",
+            cost_over(b.shipyard.cost_g, b.shipyard.build_time_ms, ""),
+            b.shipyard.parallel_builds
+        ),
+    }
+}
+
+/// A ship type's rules.
+fn ship_rules(r: &RulesView, t: ShipType) -> &voidforge_api_types::rules::ShipKindRules {
+    match t {
+        ShipType::ColonyShip => &r.ships.colony_ship,
+        ShipType::CargoVessel => &r.ships.cargo_vessel,
+    }
+}
+
+/// What a ship carries: `carries 500.0 t`, or `carries nothing` (§5.7).
+fn carries(capacity_g: i64) -> String {
+    if capacity_g == 0 {
+        "carries nothing".to_owned()
+    } else {
+        format!("carries {}", format::mass(capacity_g))
+    }
+}
+
+/// A Queue radio's words: `Cargo Vessel: 300.0 t over 4 h · 15.0 u/h · carries 500.0 t` (§5.7).
+fn ship_choice(t: ShipType, rules: Option<&RulesView>) -> String {
+    let name = format::ship(t);
+    match rules.map(|r| ship_rules(r, t)) {
+        Some(s) => format!(
+            "{name}: {} over {} · {} · {}",
+            format::mass(s.cost_g),
+            format::duration(s.build_time_ms),
+            format::speed(s.speed_du_per_h),
+            carries(s.cargo_capacity_g)
+        ),
+        None => name.to_owned(),
+    }
+}
+
+/// A Buildings row's Action cell on your planet (§4.2): a link to the confirm page, the reason
+/// Demolish isn't offered on a Shipyard with builds, or nothing while demolishing.
+fn building_action(b: &BuildingView, p: &PlanetView) -> Markup {
+    let planet = p.planet_id.0;
+    html! {
+        @match b {
+            BuildingView::UnderConstruction { id, .. } => {
+                a href={ "/planets/" (planet) "/cancel-construction/" (id.0) } { "Cancel construction…" }
+            }
+            BuildingView::Operational { id, building_type: BuildingType::Shipyard, .. }
+                if p.ship_builds.iter().any(|s| s.shipyard_id == *id) => { "Cancel its ship builds first" }
+            BuildingView::Operational { id, .. } => {
+                a href={ "/planets/" (planet) "/demolish/" (id.0) } { "Demolish…" }
+            }
+            BuildingView::Demolishing { .. } => {}
+        }
+    }
+}
+
+/// Planet (§4.2). Owned by the viewer when the planet's owner is their player. The forms carry
+/// `key` (§5.1); the cost lines come from `rules` when it answered (§5.7).
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one page in §4.2's order reads best as one template"
+)]
 pub fn planet(
     frame: Frame<'_>,
     here: &str,
     me: &PlayerView,
     p: &PlanetView,
     fleets: &FleetsView,
+    rules: Option<&RulesView>,
+    key: &str,
 ) -> Markup {
     let id = p.planet_id.0;
     let you = &me.player_id;
     let mine = p.owner.as_ref() == Some(you);
     let as_of = &p.as_of;
     let blocks = shipyards(p);
+    let full = p.buildings.len() >= usize::try_from(p.slots).unwrap_or(usize::MAX);
     // The server lists only the viewer's ships (D-049); "your ships" keeps to them regardless.
     let mut roster: Vec<_> = p.roster.iter().filter(|s| &s.owner == you).collect();
     roster.sort_by_key(|s| (SHIP_TYPES.iter().position(|t| *t == s.ship_type), s.ship_id));
@@ -462,6 +622,26 @@ pub fn planet(
         })
         .collect();
     here_fleets.sort_by_key(|f| f.0);
+    let mut elsewhere: Vec<_> = fleets
+        .fleets
+        .iter()
+        .filter_map(|f| match f {
+            FleetView::Stationed {
+                fleet_id,
+                ships,
+                at_planet_id,
+                ..
+            } if at_planet_id.0 != id => Some((fleet_id.0, at_planet_id.0, ships)),
+            _ => None,
+        })
+        .collect();
+    elsewhere.sort_by_key(|f| f.0);
+    let operational = |yard: &BuildingId| {
+        p.buildings
+            .iter()
+            .any(|b| matches!(b, BuildingView::Operational { id, .. } if id == yard))
+    };
+    let stocks = &p.stocks;
     layout(
         &format!("Planet #{id}"),
         frame,
@@ -480,7 +660,7 @@ pub fn planet(
             table {
                 thead { tr { th scope="col" { "Resource" } th scope="col" { "Stored" } th scope="col" { "Rate" } } }
                 tbody {
-                    @for (name, s) in [("Iron ore", &p.stocks.iron_ore), ("Iron ingots", &p.stocks.iron_ingot)] {
+                    @for (name, s) in [("Iron ore", &stocks.iron_ore), ("Iron ingots", &stocks.iron_ingot)] {
                         tr { th scope="row" { (name) } td { (format::stock(s)) } td { (format::rate(s.rate_g_per_h)) } }
                     }
                 }
@@ -491,14 +671,39 @@ pub fn planet(
                 p { "No buildings." }
             } @else {
                 table {
-                    thead { tr { th scope="col" { "Building" } th scope="col" { "State" } } }
+                    thead {
+                        tr {
+                            th scope="col" { "Building" } th scope="col" { "State" }
+                            @if mine { th scope="col" { "Action" } }
+                        }
+                    }
                     tbody {
                         @for b in &p.buildings {
                             @let (bid, t) = building_parts(b);
-                            tr { th scope="row" { (format::building(t)) " #" (bid.0) } td { (building_state(b, p)) } }
+                            tr {
+                                th scope="row" { (format::building(t)) " #" (bid.0) }
+                                td { (building_state(b, p)) }
+                                @if mine { td { (building_action(b, p)) } }
+                            }
                         }
                     }
                 }
+            }
+            @if mine {
+                h3 { "Build" }
+                (act_form(key, here, "build_building", &[("planet_id", id.to_string())], &html! {
+                    @for t in [BuildingType::Drill, BuildingType::Refinery, BuildingType::Shipyard] {
+                        p { label { input type="radio" name="building_type" value=(wire_building(t)); " " (build_choice(t, rules)) } }
+                    }
+                    @if full {
+                        p { "Every slot is taken: demolish or cancel a building to free one." }
+                        p { button type="submit" disabled { "Build" } }
+                    } @else {
+                        p { button type="submit" { "Build" } }
+                    }
+                }))
+                p { "Ingots in storage: " (format::mass(stocks.iron_ingot.amount_g)) " (" (format::rate(stocks.iron_ingot.rate_g_per_h)) ")." }
+                p { "A building takes a slot at once and draws ingots from storage until it's complete." }
             }
 
             @if !blocks.is_empty() {
@@ -510,16 +715,36 @@ pub fn planet(
                         p { "No ships building." }
                     } @else {
                         table {
-                            thead { tr { th scope="col" { "Build" } th scope="col" { "Ship" } th scope="col" { "State" } } }
+                            thead {
+                                tr {
+                                    th scope="col" { "Build" } th scope="col" { "Ship" } th scope="col" { "State" }
+                                    @if mine { th scope="col" { "Action" } }
+                                }
+                            }
                             tbody {
                                 @for (s, state) in &rows {
                                     tr {
                                         th scope="row" { "build #" (s.id.0) }
                                         td { (format::ship(s.ship_type)) }
                                         td { (state) }
+                                        @if mine {
+                                            td { a href={ "/planets/" (id) "/cancel-build/" (s.id.0) } { "Cancel…" } }
+                                        }
                                     }
                                 }
                             }
+                        }
+                    }
+                    @if mine && operational(yard) {
+                        (act_form(key, here, "queue_ship", &[("shipyard_id", yard.0.to_string())], &html! {
+                            p { "Queue a ship:" }
+                            @for t in SHIP_TYPES {
+                                p { label { input type="radio" name="ship_type" value=(wire_ship(t)); " " (ship_choice(t, rules)) } }
+                            }
+                            p { button type="submit" { "Queue" } }
+                        }))
+                        @if let Some(r) = rules {
+                            p { "Up to " (r.buildings.shipyard.parallel_builds) " ships build at once; the rest wait their turn." }
                         }
                     }
                 }
@@ -527,11 +752,32 @@ pub fn planet(
 
             @if !roster.is_empty() {
                 h2 { "Your ships here" }
-                ul {
+                (act_form(key, here, "assemble_fleet", &[("planet_id", id.to_string())], &html! {
                     @for s in &roster {
-                        li { (format::ship(s.ship_type)) " #" (s.ship_id.0) }
+                        p {
+                            label {
+                                input type="checkbox" name="ship" value=(s.ship_id.0);
+                                " " (format::ship(s.ship_type)) " #" (s.ship_id.0)
+                                @if let Some(k) = rules.map(|r| ship_rules(r, s.ship_type)) {
+                                    " (" (carries(k.cargo_capacity_g)) ", " (format::speed(k.speed_du_per_h)) ")"
+                                }
+                            }
+                        }
                     }
-                }
+                    p { "A fleet carries the total of its Cargo Vessels and flies at its slowest ship's speed." }
+                    @if mine {
+                        p {
+                            "Cargo to load: "
+                            label { "Iron ore " input type="text" name="ore" size="10"; " t" }
+                            " (" (format::mass(stocks.iron_ore.amount_g)) " in storage) "
+                            label { "Iron ingots " input type="text" name="ingots" size="10"; " t" }
+                            " (" (format::mass(stocks.iron_ingot.amount_g)) " in storage)"
+                        }
+                    } @else {
+                        p { "You can load cargo only at your own planets." }
+                    }
+                    p { button type="submit" { "Assemble fleet" } }
+                }))
             }
 
             @if !here_fleets.is_empty() {
@@ -549,8 +795,40 @@ pub fn planet(
                     }
                 }
             }
+
+            @if !elsewhere.is_empty() {
+                h2 { "Send a fleet here" }
+                (act_form(key, here, "send_fleet", &[("target_planet_id", id.to_string())], &html! {
+                    p {
+                        label {
+                            "Fleet: "
+                            select name="fleet_id" {
+                                option value="" { "Choose a fleet" }
+                                @for (fid, at, ships) in &elsewhere {
+                                    option value=(fid) { "Fleet #" (fid) " at Planet #" (at) " (" (ship_summary(ships)) ")" }
+                                }
+                            }
+                        }
+                    }
+                    (mission_radios())
+                    p { button type="submit" { "Send" } }
+                }))
+                p { "Colonize needs a Colony Ship and an unowned planet. Transport needs a Cargo Vessel and one of your planets. Move goes anywhere." }
+            }
         },
     )
+}
+
+/// The three missions as radios, none preselected (§5.3).
+fn mission_radios() -> Markup {
+    html! {
+        p {
+            "Mission: "
+            @for (m, wire) in MISSIONS {
+                label { input type="radio" name="mission" value=(wire); " " (format::mission(m)) } " "
+            }
+        }
+    }
 }
 
 /// The order §4.3 lists fleets in: stationed, in transit, returning; then by ID.
@@ -562,9 +840,18 @@ fn fleet_order(f: &FleetView) -> (u8, u64) {
     }
 }
 
-/// Fleets (§4.3): the viewer's own, only ever (D-030).
+/// Fleets (§4.3): the viewer's own, only ever (D-030). The forms carry `key`; `target`
+/// pre-fills every Send form's target (§4.3's `?target=`).
 #[must_use]
-pub fn fleets(frame: Frame<'_>, here: &str, me: &PlayerView, view: &FleetsView) -> Markup {
+pub fn fleets(
+    frame: Frame<'_>,
+    here: &str,
+    me: &PlayerView,
+    view: &FleetsView,
+    key: &str,
+    target: Option<u64>,
+) -> Markup {
+    let acts = Acts { key, here, target };
     let as_of = &view.as_of;
     let mut list: Vec<&FleetView> = view.fleets.iter().collect();
     list.sort_by_key(|f| fleet_order(f));
@@ -578,13 +865,20 @@ pub fn fleets(frame: Frame<'_>, here: &str, me: &PlayerView, view: &FleetsView) 
                 p { "You have no fleets. Assemble one from ships on a planet's roster." }
             }
             @for f in list {
-                (fleet(f, me, as_of))
+                (fleet(f, me, as_of, &acts))
             }
         },
     )
 }
 
-fn fleet(f: &FleetView, me: &PlayerView, as_of: &Timestamp) -> Markup {
+/// What a Fleets page's forms share.
+struct Acts<'a> {
+    key: &'a str,
+    here: &'a str,
+    target: Option<u64>,
+}
+
+fn fleet(f: &FleetView, me: &PlayerView, as_of: &Timestamp, acts: &Acts<'_>) -> Markup {
     let (FleetView::Stationed {
         fleet_id,
         ships,
@@ -651,17 +945,41 @@ fn fleet(f: &FleetView, me: &PlayerView, as_of: &Timestamp) -> Markup {
                 }
                 " · Speed " (format::speed(*speed_du_per_h))
             }
+            @let fid_field = [("fleet_id", fid.to_string())];
             @match f {
-                FleetView::Stationed { at_planet_id, .. } if has_cargo(cargo) => {
-                    @if !me.planet_ids.contains(at_planet_id) {
-                        p { "Move this fleet to one of your planets to unload its cargo." }
+                FleetView::Stationed { at_planet_id, .. } => {
+                    (act_form(acts.key, acts.here, "send_fleet", &fid_field, &html! {
+                        p {
+                            label {
+                                "Send: Target planet # "
+                                input type="text" name="target_planet_id" size="8" value=(acts.target.map(|t| t.to_string()).unwrap_or_default());
+                            }
+                        }
+                        (mission_radios())
+                        p { button type="submit" { "Send" } }
+                    }))
+                    @if has_cargo(cargo) {
+                        @if me.planet_ids.contains(at_planet_id) {
+                            (act_form(acts.key, acts.here, "trigger_unload", &fid_field, &html! {
+                                p { button type="submit" { "Unload cargo" } }
+                            }))
+                        } @else {
+                            p { "Move this fleet to one of your planets to unload its cargo." }
+                        }
+                        p { "Unload the cargo before disbanding." }
+                    } @else {
+                        (act_form(acts.key, acts.here, "disband_fleet", &[("fleet_id", fid.to_string()), ("planet_id", at_planet_id.0.to_string())], &html! {
+                            p { button type="submit" { "Disband" } }
+                        }))
                     }
-                    p { "Unload the cargo before disbanding." }
+                }
+                FleetView::InTransit { .. } => {
+                    p { a href={ "/fleets/" (fid) "/turn-back" } { "Turn back…" } }
+                    p { "A fleet can turn back once; it takes as long to return as it has flown." }
                 }
                 FleetView::Returning { .. } => {
                     p { "Already turned back; it can't be recalled again." }
                 }
-                _ => {}
             }
         }
     }
@@ -865,6 +1183,298 @@ pub fn retry_page(frame: Frame<'_>, m: &Message, again: &str) -> Markup {
             p { (m.copy) (code(m)) }
             p { a href=(again) { "Try again" } }
         },
+    )
+}
+
+/// §5.5 for a submitted order: the copy and code, **Try again** posting the identical fields
+/// with the same key, and a link back to `return_to` that sends nothing (P4.4's D1 labels it).
+#[must_use]
+pub fn command_retry(frame: Frame<'_>, m: &Message, posted: &Posted, return_to: &str) -> Markup {
+    layout(
+        "Not sent yet",
+        frame,
+        html! {
+            h1 { "Not sent yet" }
+            p { (m.copy) (code(m)) }
+            form method="post" action="/act" {
+                @for (name, value) in &posted.pairs {
+                    input type="hidden" name=(name) value=(value);
+                }
+                button type="submit" { "Try again" }
+            }
+            p { a href=(return_to) { (forms::back_label(return_to)) } }
+        },
+    )
+}
+
+/// What a confirm page offers (§5.4): the real form, or why there's nothing left to confirm.
+enum Offer {
+    /// The consequence line, the action, its hidden fields and the button's words.
+    Form {
+        line: String,
+        action: &'static str,
+        hidden: Vec<(&'static str, String)>,
+        button: String,
+    },
+    /// The thing is gone or changed since the page it came from: the matching code's copy.
+    Gone(ErrorCode),
+}
+
+/// A confirm page (§5.4): the question, then the consequence line and the real form with this
+/// page's own key, and `Keep it` back to the page it came from; or the code's copy and a link
+/// back, with no form.
+fn confirm(
+    frame: Frame<'_>,
+    question: &str,
+    offer: Offer,
+    key: &str,
+    back: &str,
+    fill: Fill,
+) -> Markup {
+    layout(
+        question,
+        frame,
+        html! {
+            h1 { (question) }
+            @match offer {
+                Offer::Form { line, action, hidden, button } => {
+                    p { (line) }
+                    (act_form(key, back, action, &hidden, &html! {
+                        p { button type="submit" { (button) } }
+                    }))
+                    p { a href=(back) { "Keep it" } }
+                }
+                Offer::Gone(code) => {
+                    @let m = Message {
+                        copy: messages::copy(code, Context::Command, fill),
+                        code: Some(code.as_str()),
+                        kind: messages::Kind::Banner,
+                    };
+                    p { (m.copy) (self::code(&m)) }
+                    p { a href=(back) { (forms::back_label(back)) } }
+                }
+            }
+        },
+    )
+}
+
+/// The building `id` on `p`, if the view lists it.
+fn find_building(p: &PlanetView, id: u64) -> Option<&BuildingView> {
+    p.buildings.iter().find(|b| building_parts(b).0.0 == id)
+}
+
+/// Whether the viewer owns `p`.
+fn owns(p: &PlanetView, me: &PlayerView) -> bool {
+    p.owner.as_ref() == Some(&me.player_id)
+}
+
+/// §5.4: cancel construction of building `b` on `p`, losing the ingots delivered so far (as of
+/// this page's own read).
+#[must_use]
+pub fn confirm_cancel_construction(
+    frame: Frame<'_>,
+    me: &PlayerView,
+    p: &PlanetView,
+    b: u64,
+    key: &str,
+) -> Markup {
+    let planet = p.planet_id.0;
+    let back = format!("/planets/{planet}");
+    let fill = Fill {
+        planet: Some(planet),
+        target: None,
+    };
+    let found = find_building(p, b);
+    let name = found.map_or_else(
+        || format!("building #{b}"),
+        |x| format!("{} #{b}", format::building(building_parts(x).1)),
+    );
+    let offer = match found {
+        None => Offer::Gone(ErrorCode::UnknownBuilding),
+        Some(_) if !owns(p, me) => Offer::Gone(ErrorCode::NotOwner),
+        Some(BuildingView::UnderConstruction {
+            building_type,
+            delivered_g,
+            ..
+        }) => Offer::Form {
+            line: format!(
+                "Planet #{planet}. The {} of ingots delivered so far are lost, and the slot frees now.",
+                format::mass(*delivered_g)
+            ),
+            action: "cancel_construction",
+            hidden: vec![
+                ("building_id", b.to_string()),
+                ("building_type", wire_building(*building_type).to_owned()),
+            ],
+            button: format!("Cancel construction of {name}"),
+        },
+        Some(_) => Offer::Gone(ErrorCode::NotUnderConstruction),
+    };
+    confirm(
+        frame,
+        &format!("Cancel construction of {name}?"),
+        offer,
+        key,
+        &back,
+        fill,
+    )
+}
+
+/// The demolition time of a building type (§5.7).
+fn demolition_ms(r: &RulesView, t: BuildingType) -> i64 {
+    match t {
+        BuildingType::Drill => r.buildings.drill.demolition_time_ms,
+        BuildingType::Refinery => r.buildings.refinery.demolition_time_ms,
+        BuildingType::Shipyard => r.buildings.shipyard.demolition_time_ms,
+    }
+}
+
+/// §5.4: demolish building `b` on `p`, with nothing refunded; the time the slot frees comes from
+/// `/rules` when it answered (§5.7).
+#[must_use]
+pub fn confirm_demolish(
+    frame: Frame<'_>,
+    me: &PlayerView,
+    p: &PlanetView,
+    rules: Option<&RulesView>,
+    b: u64,
+    key: &str,
+) -> Markup {
+    let planet = p.planet_id.0;
+    let back = format!("/planets/{planet}");
+    let fill = Fill {
+        planet: Some(planet),
+        target: None,
+    };
+    let found = find_building(p, b);
+    let name = found.map_or_else(
+        || format!("building #{b}"),
+        |x| format!("{} #{b}", format::building(building_parts(x).1)),
+    );
+    let offer = match found {
+        None => Offer::Gone(ErrorCode::UnknownBuilding),
+        Some(_) if !owns(p, me) => Offer::Gone(ErrorCode::NotOwner),
+        Some(BuildingView::Operational {
+            id,
+            building_type: BuildingType::Shipyard,
+            ..
+        }) if p.ship_builds.iter().any(|s| s.shipyard_id == *id) => {
+            Offer::Gone(ErrorCode::ShipyardHasBuilds)
+        }
+        Some(BuildingView::Operational { building_type, .. }) => Offer::Form {
+            line: match rules {
+                Some(r) => format!(
+                    "Planet #{planet}. It stops working now, and nothing is refunded. The slot frees in {}, when demolition ends.",
+                    format::duration(demolition_ms(r, *building_type))
+                ),
+                None => format!(
+                    "Planet #{planet}. It stops working now, and nothing is refunded. The slot frees when demolition ends."
+                ),
+            },
+            action: "demolish_building",
+            hidden: vec![
+                ("building_id", b.to_string()),
+                ("building_type", wire_building(*building_type).to_owned()),
+            ],
+            button: format!("Demolish {name}"),
+        },
+        Some(_) => Offer::Gone(ErrorCode::NotOperational),
+    };
+    confirm(frame, &format!("Demolish {name}?"), offer, key, &back, fill)
+}
+
+/// §5.4: cancel ship build `n` on `p`, losing the ingots delivered so far.
+#[must_use]
+pub fn confirm_cancel_build(
+    frame: Frame<'_>,
+    me: &PlayerView,
+    p: &PlanetView,
+    n: u64,
+    key: &str,
+) -> Markup {
+    let planet = p.planet_id.0;
+    let back = format!("/planets/{planet}");
+    let fill = Fill {
+        planet: Some(planet),
+        target: None,
+    };
+    let found = p.ship_builds.iter().find(|s| s.id.0 == n);
+    let question = found.map_or_else(
+        || format!("Cancel build #{n}?"),
+        |s| {
+            format!(
+                "Cancel build #{n} ({}) at Shipyard #{}?",
+                format::ship(s.ship_type),
+                s.shipyard_id.0
+            )
+        },
+    );
+    let offer = match found {
+        None => Offer::Gone(ErrorCode::UnknownShipBuild),
+        Some(_) if !owns(p, me) => Offer::Gone(ErrorCode::NotOwner),
+        Some(s) => Offer::Form {
+            line: format!(
+                "Planet #{planet}. The {} of ingots delivered so far are lost.",
+                format::mass(s.delivered_g)
+            ),
+            action: "cancel_ship_build",
+            hidden: vec![("ship_build_id", n.to_string())],
+            button: format!("Cancel build #{n}"),
+        },
+    };
+    confirm(frame, &question, offer, key, &back, fill)
+}
+
+/// How long a fleet has flown as the page shows it: `as_of` and `departed_at` each as their
+/// clocks show them (both at or before `as_of`, so cut to the second), then the difference
+/// (dev-design's R1 rule: a derived value comes from the shown ones).
+fn flown(departed_at: &Timestamp, as_of: &Timestamp) -> String {
+    let secs = match format::unix_ms(departed_at).zip(format::unix_ms(as_of)) {
+        Some((d, a)) => (a.div_euclid(1_000) - d.div_euclid(1_000)).max(0),
+        None => 0,
+    };
+    format::duration(secs.saturating_mul(1_000))
+}
+
+/// §5.4: turn fleet `f` back, once, abandoning its mission. The time flown is from this page's
+/// own read of the fleets.
+#[must_use]
+pub fn confirm_turn_back(frame: Frame<'_>, view: &FleetsView, f: u64, key: &str) -> Markup {
+    let back = "/fleets";
+    let found = view.fleets.iter().find(|x| fleet_order(x).1 == f);
+    let offer = match found {
+        None => Offer::Gone(ErrorCode::UnknownFleet),
+        Some(FleetView::Stationed { .. }) => Offer::Gone(ErrorCode::FleetNotInTransit),
+        Some(FleetView::Returning { .. }) => Offer::Gone(ErrorCode::AlreadyRecalled),
+        Some(FleetView::InTransit {
+            origin_planet_id,
+            target_planet_id,
+            mission,
+            departed_at,
+            ..
+        }) => Offer::Form {
+            line: format!(
+                "It has flown {}, so it returns to Planet #{} in about that long, and can't be turned again. Its mission ({} Planet #{}) is abandoned.",
+                flown(departed_at, &view.as_of),
+                origin_planet_id.0,
+                format::mission(*mission),
+                target_planet_id.0
+            ),
+            action: "recall_fleet",
+            hidden: vec![
+                ("fleet_id", f.to_string()),
+                ("origin", origin_planet_id.0.to_string()),
+            ],
+            button: format!("Turn Fleet #{f} back"),
+        },
+    };
+    confirm(
+        frame,
+        &format!("Turn Fleet #{f} back?"),
+        offer,
+        key,
+        back,
+        Fill::default(),
     )
 }
 

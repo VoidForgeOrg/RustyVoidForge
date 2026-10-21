@@ -25,7 +25,7 @@ async fn logged_in(w: &World) -> Browser {
 }
 
 /// The tags a snapshot breaks its line before.
-const BREAK_BEFORE: [&str; 21] = [
+const BREAK_BEFORE: [&str; 23] = [
     "<head",
     "<title",
     "<body",
@@ -47,9 +47,25 @@ const BREAK_BEFORE: [&str; 21] = [
     "</ul",
     "<section",
     "</section",
+    "<input",
+    "<select",
 ];
 
+/// The page with each form key replaced by `[key]` (a fresh random value every render), broken
+/// before block tags.
 fn pretty(html: &str) -> String {
+    let marker = r#"name="key" value=""#;
+    let mut redacted = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(i) = rest.find(marker) {
+        let after = &rest[i + marker.len()..];
+        let end = after.find('"').unwrap_or(0);
+        redacted.push_str(&rest[..i + marker.len()]);
+        redacted.push_str("[key]");
+        rest = &after[end..];
+    }
+    redacted.push_str(rest);
+    let html = redacted.as_str();
     let mut out = String::with_capacity(html.len() + html.len() / 16);
     for (i, c) in html.char_indices() {
         if i > 0 && BREAK_BEFORE.iter().any(|t| html[i..].starts_with(t)) {
@@ -100,13 +116,42 @@ fn lacks(body: &str, unwanted: &str) {
     );
 }
 
-/// T2: no form control but Log out's one button (P4.4 brings the forms).
-fn no_controls(body: &str) {
-    assert_eq!(body.matches("<form").count(), 1, "{}", pretty(body));
-    assert_eq!(body.matches("<button").count(), 1, "{}", pretty(body));
-    for control in ["<input", "<select", "<textarea"] {
-        lacks(body, control);
-    }
+/// P4.4: the page's forms, in order, by the action each posts; besides them only Log out's. Each
+/// posts to `/act` with the page's one key (T1) and returns to the page.
+fn forms_are(body: &str, here: &str, actions: &[&str]) {
+    let marker = r#"name="action" value=""#;
+    let found: Vec<&str> = body
+        .match_indices(marker)
+        .map(|(i, _)| {
+            let rest = &body[i + marker.len()..];
+            &rest[..rest.find('"').unwrap()]
+        })
+        .collect();
+    assert_eq!(found, actions, "{}", pretty(body));
+    assert_eq!(
+        body.matches("<form").count(),
+        actions.len() + 1,
+        "{}",
+        pretty(body)
+    );
+    assert_eq!(
+        body.matches(r#"<form method="post" action="/act">"#)
+            .count(),
+        actions.len()
+    );
+    let keys: Vec<&str> = body
+        .match_indices(r#"name="key" value=""#)
+        .map(|(i, _)| &body[i + 18..i + 18 + 22])
+        .collect();
+    assert_eq!(keys.len(), actions.len());
+    assert!(keys.windows(2).all(|k| k[0] == k[1]), "one key per render");
+    assert_eq!(
+        body.matches(&format!(r#"name="return_to" value="{here}""#))
+            .count(),
+        actions.len()
+    );
+    // No key ever rides in a link (§5.4, dev-design's note 1).
+    lacks(body, "key=");
 }
 
 fn reply(w: &World, path: &str, body: &Value) {
@@ -223,7 +268,8 @@ async fn your_homeworld_from_the_server_s_own_view() {
         body,
         r##"Fleet #21: 2 Cargo Vessels, carrying 500.0 t of ingots. <a href="/fleets#fleet-21">Manage on the Fleets page</a>"##,
     );
-    lacks(body, "Fleet #22");
+    // Fleet 22 is elsewhere: not under "Your fleets here", only offered to send here.
+    lacks(body, "Fleet #22:");
     lacks(body, "<h2>Shipyards</h2>");
     lacks(body, "<h2>Your ships here</h2>");
     // D3: on a planet page all four are links.
@@ -231,7 +277,19 @@ async fn your_homeworld_from_the_server_s_own_view() {
         body,
         r#"<a href="/">Home</a> · <a href="/fleets">Fleets</a> · <a href="/universe">Universe</a> · <a href="/leaderboard">Leaderboard</a>"#,
     );
-    no_controls(body);
+    forms_are(body, "/planets/7", &["build_building", "send_fleet"]);
+    has(
+        body,
+        r#"<option value="22">Fleet #22 at Planet #9 (1 Colony Ship)</option>"#,
+    );
+    has(
+        body,
+        r#"<td><a href="/planets/7/demolish/2">Demolish…</a></td>"#,
+    );
+    has(
+        body,
+        r#"<td><a href="/planets/7/cancel-construction/8">Cancel construction…</a></td>"#,
+    );
     insta::assert_snapshot!("planet_owner", pretty(body));
 }
 
@@ -371,10 +429,63 @@ async fn every_building_and_build_state() {
     // Your ships, grouped by type, ascending ID.
     has(
         body,
-        "<h2>Your ships here</h2><ul><li>Colony Ship #31</li><li>Cargo Vessel #30</li><li>Cargo Vessel #33</li></ul>",
+        concat!(
+            r#"<p><label><input type="checkbox" name="ship" value="31"> Colony Ship #31 (carries nothing, 10.0 u/h)</label></p>"#,
+            r#"<p><label><input type="checkbox" name="ship" value="30"> Cargo Vessel #30 (carries 500.0 t, 15.0 u/h)</label></p>"#,
+            r#"<p><label><input type="checkbox" name="ship" value="33"> Cargo Vessel #33 (carries 500.0 t, 15.0 u/h)</label></p>"#,
+        ),
     );
     lacks(body, "<h2>Your fleets here</h2>");
-    no_controls(body);
+    forms_are(
+        body,
+        "/planets/7",
+        &[
+            "build_building",
+            "queue_ship",
+            "queue_ship",
+            "assemble_fleet",
+        ],
+    );
+    // Eleven buildings on eight slots: Build stays, disabled, with the line (§4.2).
+    has(
+        body,
+        r#"<p>Every slot is taken: demolish or cancel a building to free one.</p><p><button type="submit" disabled>Build</button></p>"#,
+    );
+    // Queue forms only for the operational Shipyards, 15 and 16 (not 19, demolishing).
+    has(
+        body,
+        r#"<input type="hidden" name="shipyard_id" value="15">"#,
+    );
+    has(
+        body,
+        r#"<input type="hidden" name="shipyard_id" value="16">"#,
+    );
+    lacks(body, r#"name="shipyard_id" value="19""#);
+    // The Action column: Demolish on operational buildings, including the idle Shipyard; the
+    // reason on the one with builds; nothing while demolishing.
+    has(
+        body,
+        r#"<th scope="row">Shipyard #15</th><td>running</td><td>Cancel its ship builds first</td>"#,
+    );
+    has(
+        body,
+        r#"<td><a href="/planets/7/demolish/16">Demolish…</a></td>"#,
+    );
+    has(
+        body,
+        r#"<td><a href="/planets/7/cancel-construction/18">Cancel construction…</a></td>"#,
+    );
+    has(
+        body,
+        r#"<th scope="row">Drill #12</th><td>being demolished; the slot frees at 18:05:00 UTC (in 48 s)</td><td></td>"#,
+    );
+    has(
+        body,
+        r#"<td><a href="/planets/7/cancel-build/24">Cancel…</a></td>"#,
+    );
+    // Cargo fields on your planet, with the stock beside each (§5.3).
+    has(body, r#"name="ore""#);
+    has(body, r#"name="ingots""#);
     insta::assert_snapshot!("planet_every_state", pretty(body));
 }
 
@@ -416,10 +527,15 @@ async fn someone_else_s_planet_and_an_unowned_empty_one() {
     );
     has(
         body,
-        "<h2>Your ships here</h2><ul><li>Cargo Vessel #30</li></ul>",
+        r#"<p><label><input type="checkbox" name="ship" value="30"> Cargo Vessel #30 (carries 500.0 t, 15.0 u/h)</label></p><p>A fleet carries"#,
     );
     lacks(body, "#31");
-    no_controls(body);
+    // Your ship on their planet: Assemble without cargo, and no other action (§4.2).
+    forms_are(body, "/planets/4", &["assemble_fleet"]);
+    has(body, "<p>You can load cargo only at your own planets.</p>");
+    lacks(body, r#"name="ore""#);
+    lacks(body, "Demolish…");
+    lacks(body, "Cancel…");
     insta::assert_snapshot!("planet_non_owner", pretty(body));
 
     // The viewer's homeworld number owned by someone else isn't "(homeworld)": the line is
@@ -807,7 +923,21 @@ async fn fleets_in_every_state_in_their_order() {
         body,
         r#"<nav><p><strong>Voidforge</strong> <a href="/">Home</a> · Fleets · <a href="/universe">Universe</a>"#,
     );
-    no_controls(body);
+    forms_are(
+        body,
+        "/fleets",
+        &[
+            "send_fleet",
+            "disband_fleet",
+            "send_fleet",
+            "disband_fleet",
+            "send_fleet",
+            "trigger_unload",
+            "send_fleet",
+        ],
+    );
+    has(body, r#"<a href="/fleets/8/turn-back">Turn back…</a>"#);
+    lacks(body, "/fleets/3/turn-back");
     insta::assert_snapshot!("fleets_every_state", pretty(body));
 
     reply(&w, "/players/me/fleets", &fleets_view(json!([]), None));

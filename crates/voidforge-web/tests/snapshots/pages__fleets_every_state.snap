@@ -17,22 +17,90 @@ expression: pretty(body)
 <h2 id="fleet-5">Fleet #5: stationed at <a href="/planets/7">Planet #7</a></h2>
 <p>Ships: 1 Cargo Vessel (#61)</p>
 <p>Cargo: none (500.0 t capacity) · Speed 10.0 u/h</p>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="send_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/fleets">
+<input type="hidden" name="fleet_id" value="5">
+<p><label>Send: Target planet # 
+<input type="text" name="target_planet_id" size="8" value=""></label></p>
+<p>Mission: <label>
+<input type="radio" name="mission" value="colonize"> Colonize</label> <label>
+<input type="radio" name="mission" value="transport"> Transport</label> <label>
+<input type="radio" name="mission" value="move"> Move</label> </p>
+<p><button type="submit">Send</button></p></form>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="disband_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/fleets">
+<input type="hidden" name="fleet_id" value="5">
+<input type="hidden" name="planet_id" value="7">
+<p><button type="submit">Disband</button></p></form>
 </section>
 <section>
 <h2 id="fleet-6">Fleet #6: stationed at <a href="/planets/7">Planet #7</a></h2>
 <p>Ships: 1 Colony Ship (#62)</p>
 <p>Cargo: none · Speed 10.0 u/h</p>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="send_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/fleets">
+<input type="hidden" name="fleet_id" value="6">
+<p><label>Send: Target planet # 
+<input type="text" name="target_planet_id" size="8" value=""></label></p>
+<p>Mission: <label>
+<input type="radio" name="mission" value="colonize"> Colonize</label> <label>
+<input type="radio" name="mission" value="transport"> Transport</label> <label>
+<input type="radio" name="mission" value="move"> Move</label> </p>
+<p><button type="submit">Send</button></p></form>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="disband_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/fleets">
+<input type="hidden" name="fleet_id" value="6">
+<input type="hidden" name="planet_id" value="7">
+<p><button type="submit">Disband</button></p></form>
 </section>
 <section>
 <h2 id="fleet-7">Fleet #7: stationed at <a href="/planets/9">Planet #9</a></h2>
 <p>Ships: 1 Colony Ship, 2 Cargo Vessels (#30, #31, #33)</p>
 <p>Cargo: 250.0 t of ore, 500.0 t of ingots (750.0 t of 1,000.0 t capacity) · Speed 10.0 u/h</p>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="send_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/fleets">
+<input type="hidden" name="fleet_id" value="7">
+<p><label>Send: Target planet # 
+<input type="text" name="target_planet_id" size="8" value=""></label></p>
+<p>Mission: <label>
+<input type="radio" name="mission" value="colonize"> Colonize</label> <label>
+<input type="radio" name="mission" value="transport"> Transport</label> <label>
+<input type="radio" name="mission" value="move"> Move</label> </p>
+<p><button type="submit">Send</button></p></form>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="trigger_unload">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/fleets">
+<input type="hidden" name="fleet_id" value="7">
+<p><button type="submit">Unload cargo</button></p></form>
 <p>Unload the cargo before disbanding.</p>
 </section>
 <section>
 <h2 id="fleet-9">Fleet #9: stationed at <a href="/planets/12">Planet #12</a></h2>
 <p>Ships: 1 Cargo Vessel (#60)</p>
 <p>Cargo: 100.0 t of ingots (100.0 t of 500.0 t capacity) · Speed 10.0 u/h</p>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="send_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/fleets">
+<input type="hidden" name="fleet_id" value="9">
+<p><label>Send: Target planet # 
+<input type="text" name="target_planet_id" size="8" value=""></label></p>
+<p>Mission: <label>
+<input type="radio" name="mission" value="colonize"> Colonize</label> <label>
+<input type="radio" name="mission" value="transport"> Transport</label> <label>
+<input type="radio" name="mission" value="move"> Move</label> </p>
+<p><button type="submit">Send</button></p></form>
 <p>Move this fleet to one of your planets to unload its cargo.</p>
 <p>Unload the cargo before disbanding.</p>
 </section>
@@ -41,6 +109,8 @@ expression: pretty(body)
 <p>Left <a href="/planets/7">Planet #7</a> at 18:00:00 UTC; arrives 18:20:00 UTC (in 15 min 48 s)</p>
 <p>Ships: 1 Colony Ship (#41)</p>
 <p>Cargo: none · Speed 10.0 u/h</p>
+<p><a href="/fleets/8/turn-back">Turn back…</a></p>
+<p>A fleet can turn back once; it takes as long to return as it has flown.</p>
 </section>
 <section>
 <h2 id="fleet-3">Fleet #3: returning to <a href="/planets/7">Planet #7</a></h2>

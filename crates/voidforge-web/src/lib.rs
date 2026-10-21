@@ -8,6 +8,7 @@
 pub mod api;
 pub mod config;
 pub mod format;
+pub mod forms;
 pub mod messages;
 pub mod oidc;
 pub mod pages;
