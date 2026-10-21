@@ -470,6 +470,8 @@ mod tests {
         );
         // A rounding never makes a stock read full: only the exact cap does.
         assert_eq!(s(4_999_999_999, 5_000_000_000), "4,999.9 t of 5,000.0 t");
+        // Both round to 5,000.0 t, but only the exact cap is full.
+        assert_eq!(s(5_000_000_000, 5_000_050_000), "5,000.0 t of 5,000.0 t");
         assert_eq!(s(0, 5_000_000_000), "0 t of 5,000.0 t (empty)");
         assert_eq!(s(1, 5_000_000_000), "< 0.1 t of 5,000.0 t");
     }

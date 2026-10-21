@@ -241,6 +241,8 @@ async fn every_building_and_build_state() {
     let mut b = logged_in(&w).await;
     let eta = "2026-10-20T18:10:00.000Z";
     let buildings = json!([
+        // First in the view, so its block is placed by the view's order, not appended after.
+        {"state": "demolishing", "id": 19, "type": "shipyard", "demolition_ends_at": "2026-10-21T06:00:00.000Z"},
         {"state": "operational", "id": 2, "type": "drill", "status": "running"},
         {"state": "operational", "id": 3, "type": "refinery", "status": "throttled"},
         {"state": "operational", "id": 4, "type": "drill", "status": "halted"},
@@ -252,7 +254,6 @@ async fn every_building_and_build_state() {
         {"state": "under_construction", "id": 18, "type": "refinery", "status": "halted",
          "delivered_g": 1, "cost_g": 250_000_000, "rate_g_per_h": 0, "eta": null},
         {"state": "demolishing", "id": 12, "type": "drill", "demolition_ends_at": "2026-10-20T18:05:00.000Z"},
-        {"state": "demolishing", "id": 19, "type": "shipyard", "demolition_ends_at": "2026-10-21T06:00:00.000Z"},
     ]);
     let build = |id: u64,
                  yard: u64,
@@ -335,8 +336,8 @@ async fn every_building_and_build_state() {
     }
     // A block per Shipyard operational or with builds, in view order; not #17 (neither).
     let at = |s: &str| body.find(s).unwrap_or_else(|| panic!("{s}"));
+    assert!(at("<h3>Shipyard #19</h3>") < at("<h3>Shipyard #15</h3>"));
     assert!(at("<h3>Shipyard #15</h3>") < at("<h3>Shipyard #16</h3>"));
-    assert!(at("<h3>Shipyard #16</h3>") < at("<h3>Shipyard #19</h3>"));
     lacks(body, "<h3>Shipyard #17</h3>");
     has(body, "<h3>Shipyard #16</h3><p>No ships building.</p>");
     for (build, ship, state) in [
@@ -416,6 +417,17 @@ async fn someone_else_s_planet_and_an_unowned_empty_one() {
     lacks(body, "#31");
     no_controls(body);
     insta::assert_snapshot!("planet_non_owner", pretty(body));
+
+    // The viewer's homeworld number owned by someone else isn't "(homeworld)": the line is
+    // about the viewer's own planet.
+    reply(
+        &w,
+        "/planets/7",
+        &planet(7, Some(OTHER), json!([]), json!([]), json!([])),
+    );
+    let taken = b.get("/planets/7").await.body;
+    has(&taken, "Owner: <span");
+    lacks(&taken, "(homeworld)");
 
     let mut empty = planet(9, None, json!([]), json!([]), json!([]));
     empty["valid_until"] = Value::Null;

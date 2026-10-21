@@ -28,6 +28,7 @@ expression: pretty(body)
 <thead>
 <tr><th scope="col">Building</th><th scope="col">State</th></tr></thead>
 <tbody>
+<tr><th scope="row">Shipyard #19</th><td>being demolished; the slot frees at 2026-10-21 06:00:00 UTC (in 11 h 55 min)</td></tr>
 <tr><th scope="row">Drill #2</th><td>running</td></tr>
 <tr><th scope="row">Refinery #3</th><td>slowed: short of ore, or ingot storage is full</td></tr>
 <tr><th scope="row">Drill #4</th><td>halted: ore storage is full</td></tr>
@@ -36,10 +37,16 @@ expression: pretty(body)
 <tr><th scope="row">Shipyard #16</th><td>operational</td></tr>
 <tr><th scope="row">Shipyard #17</th><td>under construction: 42% (504.0 of 1,200.0 t), +100.0 t/h, done at 18:10:00 UTC (in 5 min 48 s); slowed: short of ingots</td></tr>
 <tr><th scope="row">Refinery #18</th><td>under construction: 0% (&lt; 0.1 of 250.0 t), waiting for ingots; halted: no ingots</td></tr>
-<tr><th scope="row">Drill #12</th><td>being demolished; the slot frees at 18:05:00 UTC (in 48 s)</td></tr>
-<tr><th scope="row">Shipyard #19</th><td>being demolished; the slot frees at 2026-10-21 06:00:00 UTC (in 11 h 55 min)</td></tr></tbody>
+<tr><th scope="row">Drill #12</th><td>being demolished; the slot frees at 18:05:00 UTC (in 48 s)</td></tr></tbody>
 </table>
 <h2>Shipyards</h2>
+<h3>Shipyard #19</h3>
+<table>
+<thead>
+<tr><th scope="col">Build</th><th scope="col">Ship</th><th scope="col">State</th></tr></thead>
+<tbody>
+<tr><th scope="row">build #24</th><td>Cargo Vessel</td><td>building: 30% (240.0 of 800.0 t), waiting for ingots; halted: no ingots</td></tr></tbody>
+</table>
 <h3>Shipyard #15</h3>
 <table>
 <thead>
@@ -52,13 +59,6 @@ expression: pretty(body)
 </table>
 <h3>Shipyard #16</h3>
 <p>No ships building.</p>
-<h3>Shipyard #19</h3>
-<table>
-<thead>
-<tr><th scope="col">Build</th><th scope="col">Ship</th><th scope="col">State</th></tr></thead>
-<tbody>
-<tr><th scope="row">build #24</th><td>Cargo Vessel</td><td>building: 30% (240.0 of 800.0 t), waiting for ingots; halted: no ingots</td></tr></tbody>
-</table>
 <h2>Your ships here</h2>
 <ul>
 <li>Colony Ship #31</li>
