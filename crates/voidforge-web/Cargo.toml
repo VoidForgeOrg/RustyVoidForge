@@ -33,6 +33,9 @@ voidforge-telemetry.workspace = true
 # The login tests (D-057) capture every tracing event to prove nothing secret is logged, as the
 # server's account tests do (D-047). Already in this crate's tree through telemetry.
 tracing-subscriber.workspace = true
+# The pages' HTML snapshots (P4.3, D-060), each beside a by-effect assertion (T4); pinned in the
+# workspace, as the server's contract snapshots use it.
+insta.workspace = true
 
 [lints]
 workspace = true

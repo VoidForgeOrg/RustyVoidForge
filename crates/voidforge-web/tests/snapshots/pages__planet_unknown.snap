@@ -1,0 +1,16 @@
+---
+source: crates/voidforge-web/tests/pages.rs
+expression: pretty(&page.body)
+---
+<!DOCTYPE html><html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>No such planet – Voidforge</title></head>
+<body>
+<nav>
+<p><strong>Voidforge</strong> <a href="/">Home</a> · <a href="/fleets">Fleets</a> · <a href="/universe">Universe</a> · <a href="/leaderboard">Leaderboard</a> · You: <span title="01890a5d-ac96-774b-bcce-b302099a8057">player 099a8057</span> · score 42</p></nav>
+<p>Logged in as <strong>alice@voidforge.test</strong>.</p>
+<form method="post" action="/logout"><button type="submit">Log out</button></form>
+<hr>
+<h1>No such planet</h1>
+<p>There's no planet #5. Check the number on the Universe page. (<code>unknown_planet</code>)</p>
+<p><a href="/universe">Find a planet on the Universe page</a></p></body></html>
