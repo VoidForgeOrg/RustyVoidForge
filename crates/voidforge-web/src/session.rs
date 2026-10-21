@@ -15,6 +15,13 @@ use crate::oidc::{Identity, PendingLogin};
 pub const PENDING_KEY: &str = "pending";
 /// The session key of the login.
 pub const LOGIN_KEY: &str = "login";
+/// The session key marking a login that renews an ended one (§5.6; P4.3, carried by D-059): the
+/// web sets it in the fresh session when it ends an expired login, never from a URL, and the
+/// callback takes it.
+pub const RENEWING_KEY: &str = "renewing";
+/// The session key of the one-shot notice the next page shows: set by a renewing login's
+/// callback, removed by the page that shows it.
+pub const NOTICE_KEY: &str = "notice";
 /// The most login attempts one session keeps: one per open tab, within reason.
 pub const MAX_PENDING: usize = 8;
 /// How long a login attempt waits for its callback.

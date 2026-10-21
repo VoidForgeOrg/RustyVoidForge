@@ -77,8 +77,17 @@ async fn a_user_logs_in_sees_home_and_logs_out() {
     );
 
     let out = b.post("/logout").await;
-    assert_eq!((out.status, out.location.as_deref()), (303, Some("/")));
-    assert!(!logged_in(&b.get("/").await.body));
+    assert_eq!(
+        (out.status, out.location.as_deref()),
+        (303, Some("/?logged_out"))
+    );
+    // §4.1 (E9): the logged-out Home says so, only where the logout sent it.
+    let bye = b.get("/?logged_out").await.body;
+    assert!(
+        !logged_in(&bye) && bye.contains("You're logged out."),
+        "{bye}"
+    );
+    assert!(!b.get("/").await.body.contains("logged out"));
 }
 
 #[tokio::test]

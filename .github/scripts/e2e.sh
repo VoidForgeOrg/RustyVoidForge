@@ -142,7 +142,8 @@ if [ "$bots_code" = 0 ]; then
 fi
 # 5c. The web login (P4.1, D-057): alice logs in and out of voidforge-web through dex's
 # authorization code flow, driven over HTTP with cookie jars; Home's score proves the API took
-# the web app's token. It starts and stops voidforge-web itself, on localhost:8081.
+# the web app's token, and the page walk (P4.3, D-060) reads every page from the live game. It
+# starts and stops voidforge-web itself, on localhost:8081.
 web_code=0
 if [ "$bots_code" = 0 ]; then
     python3 .github/scripts/web-login.py --web "$web" --api "http://$addr" --issuer "$issuer" \

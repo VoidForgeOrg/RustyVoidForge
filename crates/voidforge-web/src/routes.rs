@@ -1,16 +1,26 @@
-//! The routes (P4.1, D-057): Home, the login, its callback and the logout.
+//! The routes: Home, the login, its callback and the logout (P4.1, D-057), and the game's pages
+//! (P4.3, D-060).
 //!
-//! - `GET /` shows Home. It reads the public `GET /rules` for the fast-rules line and, logged in,
-//!   `GET /players/me` with the ID token, side by side, on every render (P4.2, D-059). An expired login, or
-//!   a 401 from the API, ends the session and shows the expired notice; a full universe is its
-//!   own page; any other failure is the retry page with the API's status (§5.5).
+//! - Every logged-in page starts the same way ([`begin`]): the login, or the logged-out Home at
+//!   that URL with Log in returning there (§4.6, E4), or the expired notice. Then it makes all
+//!   its reads **at once** (T1): the public `GET /rules` for the fast-rules line, `GET
+//!   /players/me` (the read that joins, D-047) and the page's own, each within its bound, so a
+//!   hung API holds a page for one bound. The Universe's centre needs a read before its search.
+//! - The first failing read decides the page ([`failed`]), `/players/me` first: an expired login
+//!   or a 401 ends the session and shows the expired notice; a full universe is its own page;
+//!   any other failure is the retry page with the API's status (§5.5). A failed `/rules` only
+//!   drops its line (§5.7).
+//! - `GET /` is Home (§4.1); `/planets/{id}` (§4.2), `/fleets` (§4.3), `/universe` (§4.4) and
+//!   `/leaderboard` (§4.5) are the game's pages. A planet number or a search the web can't use
+//!   is refused before any call (T5). Any other path is §6.2's Not found.
 //! - `GET /login?next=<local path>` starts an attempt and sends the browser to dex.
 //! - `GET /callback` takes the attempt matching `state` out of the session (once), exchanges the
 //!   code, checks the ID token, then gives the session a **new id** (against fixation) and
 //!   returns to `next`. Every refusal is a page and leaves no login.
 //! - HEAD is 404 on every path, before any handler runs.
-//! - `POST /logout` ends the session. It's a POST, and the cookie is SameSite=Lax, so another
-//!   site can't log a user out with a link or a form.
+//! - `POST /logout` ends the session and returns to `/?logged_out`, whose logged-out Home says
+//!   so (§4.1, E9). It's a POST, and the cookie is SameSite=Lax, so another site can't log a user
+//!   out with a link or a form.
 //!
 //! Every response says `Cache-Control: no-store` and `Referrer-Policy: no-referrer`: pages
 //! show the viewer's email, and the callback's URL holds a code.
@@ -20,7 +30,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::header::{CACHE_CONTROL, LOCATION, REFERRER_POLICY, RETRY_AFTER};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use maud::Markup;
@@ -29,11 +39,17 @@ use tower_sessions::cookie::SameSite;
 use tower_sessions::cookie::time::{Duration as CookieDuration, OffsetDateTime};
 use tower_sessions::{Expiry, Session, SessionManagerLayer};
 
-use crate::api::Api;
-use crate::messages::{self, Context, Fill, Kind};
+use voidforge_api_types::error::ErrorCode;
+use voidforge_api_types::wire::{PlanetId, Position};
+
+use crate::api::{Api, ApiError};
+use crate::format;
+use crate::messages::{self, Context, Fill, Kind, Message};
 use crate::oidc::{self, LoginError, Provider};
-use crate::pages::{self, Frame, Notice, Refusal};
-use crate::session::{self, LOGIN_KEY, LoggedIn, PENDING_KEY, PENDING_LIFETIME_SECS};
+use crate::pages::{self, Found, Frame, Nav, Notice, Refusal, SearchForm};
+use crate::session::{
+    self, LOGIN_KEY, LoggedIn, NOTICE_KEY, PENDING_KEY, PENDING_LIFETIME_SECS, RENEWING_KEY,
+};
 use crate::store::BoundedStore;
 
 /// The session cookie's name.
@@ -73,6 +89,11 @@ pub fn app(state: AppState, secure_cookie: bool) -> Router {
         .route("/login", get(login))
         .route("/callback", get(callback))
         .route("/logout", post(logout))
+        .route("/planets/{id}", get(planet))
+        .route("/fleets", get(fleets))
+        .route("/universe", get(universe))
+        .route("/leaderboard", get(leaderboard))
+        .fallback(not_found)
         .layer(sessions)
         .layer(axum::middleware::from_fn(refuse_head))
         .layer(axum::middleware::map_response(headers))
@@ -174,77 +195,459 @@ async fn fast_rules(s: &AppState) -> bool {
     s.api.rules().await.is_ok_and(|r| r.name == FAST_RULES)
 }
 
-/// Ends the session and shows the expired notice, offering to return to `next`.
-async fn expired(session: &Session, next: &str, fast: bool) -> Response {
+/// The Universe page's default radius: 100 u around the homeworld, a UI default (Q5).
+pub const DEFAULT_RADIUS_DU: i64 = 100_000;
+
+/// Ends the session and shows the expired notice, offering to return to `next`. The fresh
+/// session it leaves is marked [`RENEWING_KEY`], so logging in again from here says so once
+/// (§5.6); it lives as long as a login attempt. With the store full, it's left unmarked: the
+/// line is a courtesy, never a reason to fail the page.
+async fn expired(s: &AppState, session: &Session, next: &str, fast: bool) -> Response {
     if let Err(e) = session.flush().await {
         tracing::error!(error = %e, "ending an expired session failed");
         return internal();
     }
+    if s.sessions.has_room() {
+        let marked = async {
+            session.insert(RENEWING_KEY, true).await?;
+            session.set_expiry(Some(anonymous_expiry()));
+            session.save().await
+        };
+        if marked.await.is_ok() {
+            s.sessions.admitted();
+        } else if let Err(e) = session.flush().await {
+            tracing::error!(error = %e, "ending an expired session failed");
+            return internal();
+        }
+    }
+    let next = local_path(next).unwrap_or("/");
     page(
         StatusCode::OK,
         pages::home_logged_out(Some(Notice::Expired), &login_href(next), fast),
     )
 }
 
-#[tracing::instrument(name = "web.home", skip_all)]
-async fn home(State(s): State<AppState>, session: Session) -> Response {
+/// The page a request is on, path and query: Refresh and Try again link to it, and a login
+/// returns to it.
+fn here(uri: &Uri) -> String {
+    uri.path_and_query().map_or("/", |p| p.as_str()).to_owned()
+}
+
+/// A logged-in viewer: the login, and the one-shot banner this page shows.
+struct Viewer {
+    login: LoggedIn,
+    banner: Option<&'static str>,
+}
+
+/// A logged-in page's start: the viewer, or the response for one without a usable login. A
+/// logged-out viewer gets the logged-out Home at this URL, with `notice` and Log in returning
+/// here (§4.6, E4); an expired login ends the session and says so. Logged in, it calls nothing,
+/// and takes the session's one-shot notice (§5.6), changing the session only when there is one.
+async fn begin(
+    s: &AppState,
+    session: &Session,
+    here: &str,
+    notice: Option<Notice>,
+) -> Result<Viewer, Box<Response>> {
     let login = match session.get::<LoggedIn>(LOGIN_KEY).await {
         Ok(l) => l,
         Err(e) => {
             tracing::error!(error = %e, "reading the session failed");
-            return internal();
+            return Err(Box::new(internal()));
         }
     };
-    // `/rules` on every page, so the expired and full-universe pages keep the line too (D3). It's
-    // read beside `/players/me`, not before it, and has its own short bound, so a hung API holds
-    // the page for one call's bound at most (QA's F1).
+    // `/rules` for the logged-out pages too, so they keep the fast-rules line (D3).
     let Some(login) = login else {
-        let fast = fast_rules(&s).await;
-        return page(StatusCode::OK, pages::home_logged_out(None, "/login", fast));
+        let fast = fast_rules(s).await;
+        let next = local_path(here).unwrap_or("/");
+        return Err(Box::new(page(
+            StatusCode::OK,
+            pages::home_logged_out(notice, &login_href(next), fast),
+        )));
     };
     let Some(now) = oidc::unix_now() else {
-        return internal();
+        return Err(Box::new(internal()));
     };
     if now >= login.exp {
         tracing::info!(outcome = "expired", "the login expired");
-        let fast = fast_rules(&s).await;
-        return expired(&session, "/", fast).await;
+        let fast = fast_rules(s).await;
+        return Err(Box::new(expired(s, session, here, fast).await));
     }
-    let (fast, me) = tokio::join!(fast_rules(&s), s.api.me(&login.id_token));
-    let error = match me {
-        Ok(me) => return page(StatusCode::OK, pages::home_logged_in(&login, &me, fast)),
-        Err(e) => e,
+    let renewed = match session.get::<bool>(NOTICE_KEY).await {
+        Ok(n) => n == Some(true),
+        Err(e) => {
+            tracing::error!(error = %e, "reading the session failed");
+            return Err(Box::new(internal()));
+        }
     };
-    let m = messages::for_error(&error, Context::Page, Fill::default());
+    if renewed {
+        let taken = async {
+            session.remove::<bool>(NOTICE_KEY).await?;
+            keep_expiry(session).await
+        };
+        if let Err(e) = taken.await {
+            tracing::error!(error = %e, "taking the notice failed");
+            return Err(Box::new(internal()));
+        }
+    }
+    Ok(Viewer {
+        login,
+        banner: renewed.then_some(pages::RENEWED),
+    })
+}
+
+/// A failed read, as its page (§5.5, §6): the expired notice for a refused login, the full
+/// universe, or the retry page with the API's status. `fill` names the page's planet.
+async fn failed(
+    s: &AppState,
+    session: &Session,
+    frame: Frame<'_>,
+    error: &ApiError,
+    fill: Fill,
+    here: &str,
+) -> Response {
+    let m = messages::for_error(error, Context::Page, fill);
     match m.kind {
         Kind::Login => {
             tracing::info!(outcome = "api_unauthorized", "the API refused the token");
-            expired(&session, "/", fast).await
+            expired(s, session, here, frame.fast).await
         }
-        Kind::UniverseFull => page(StatusCode::OK, pages::universe_full(fast, &m)),
+        Kind::UniverseFull => page(StatusCode::OK, pages::universe_full(frame.fast, &m)),
         Kind::Retry {
             status,
             retry_after,
-        } => retry(
-            status,
-            retry_after,
-            &pages::retry_page(frame(fast, &login), &m, "/"),
-        ),
+        } => retry(status, retry_after, &pages::retry_page(frame, &m, here)),
         // A read the API refused for a reason a page can't act on: the page can't be shown.
         Kind::Banner => retry(
             StatusCode::BAD_GATEWAY.as_u16(),
             None,
-            &pages::retry_page(frame(fast, &login), &m, "/"),
+            &pages::retry_page(frame, &m, here),
         ),
     }
 }
 
-fn frame(fast: bool, login: &LoggedIn) -> Frame<'_> {
+fn frame(fast: bool, viewer: &Viewer, nav: Option<Nav>) -> Frame<'_> {
     Frame {
         fast,
-        login: Some(login),
+        login: Some(&viewer.login),
         me: None,
+        nav,
+        banner: viewer.banner,
     }
+}
+
+/// A planet number as the web takes it: digits only, within u64 (T5).
+fn planet_number(text: &str) -> Option<u64> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+#[tracing::instrument(name = "web.home", skip_all)]
+async fn home(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
+    let notice = (uri.query() == Some("logged_out")).then_some(Notice::LoggedOut);
+    let viewer = match begin(&s, &session, "/", notice).await {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    let (fast, me) = tokio::join!(fast_rules(&s), s.api.me(&viewer.login.id_token));
+    match me {
+        Ok(me) => page(
+            StatusCode::OK,
+            pages::home_logged_in(&viewer.login, &me, fast, viewer.banner),
+        ),
+        Err(e) => {
+            let frame = frame(fast, &viewer, Some(Nav::Home));
+            failed(&s, &session, frame, &e, Fill::default(), "/").await
+        }
+    }
+}
+
+#[tracing::instrument(name = "web.planet", skip_all)]
+async fn planet(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
+    let here = here(&uri);
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    // Checked before any game call (T5); the public `/rules` still keeps the frame whole (R3).
+    let raw = uri.path().strip_prefix("/planets/").unwrap_or("");
+    let Some(id) = planet_number(raw) else {
+        let fast = fast_rules(&s).await;
+        let m = Message {
+            copy: pages::NOT_A_PLANET_NUMBER.to_owned(),
+            code: Some(ErrorCode::InvalidQuery.as_str()),
+            kind: Kind::Banner,
+        };
+        return page(
+            StatusCode::BAD_REQUEST,
+            pages::no_such_planet(frame(fast, &viewer, None), &m),
+        );
+    };
+    let token = &viewer.login.id_token;
+    let (fast, me, planet, fleets) = tokio::join!(
+        fast_rules(&s),
+        s.api.me(token),
+        s.api.planet(token, PlanetId(id)),
+        s.api.my_fleets(token)
+    );
+    let fill = Fill {
+        planet: Some(id),
+        target: None,
+    };
+    let frame = frame(fast, &viewer, None);
+    let me = match me {
+        Ok(me) => me,
+        Err(e) => return failed(&s, &session, frame, &e, fill, &here).await,
+    };
+    let frame = Frame {
+        me: Some(&me),
+        ..frame
+    };
+    let planet = match planet {
+        Ok(p) => p,
+        Err(
+            e @ ApiError::Refused {
+                code: ErrorCode::UnknownPlanet,
+                ..
+            },
+        ) => {
+            let m = messages::for_error(&e, Context::Page, fill);
+            return page(StatusCode::NOT_FOUND, pages::no_such_planet(frame, &m));
+        }
+        Err(e) => return failed(&s, &session, frame, &e, fill, &here).await,
+    };
+    match fleets {
+        Ok(fleets) => page(
+            StatusCode::OK,
+            pages::planet(frame, &here, &me, &planet, &fleets),
+        ),
+        Err(e) => failed(&s, &session, frame, &e, fill, &here).await,
+    }
+}
+
+#[tracing::instrument(name = "web.fleets", skip_all)]
+async fn fleets(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
+    let here = here(&uri);
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    let token = &viewer.login.id_token;
+    let (fast, me, fleets) = tokio::join!(fast_rules(&s), s.api.me(token), s.api.my_fleets(token));
+    let frame = frame(fast, &viewer, Some(Nav::Fleets));
+    let me = match me {
+        Ok(me) => me,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    };
+    let frame = Frame {
+        me: Some(&me),
+        ..frame
+    };
+    match fleets {
+        Ok(fleets) => page(StatusCode::OK, pages::fleets(frame, &here, &me, &fleets)),
+        Err(e) => failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    }
+}
+
+#[tracing::instrument(name = "web.leaderboard", skip_all)]
+async fn leaderboard(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
+    let here = here(&uri);
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    let token = &viewer.login.id_token;
+    let (fast, me, board) = tokio::join!(fast_rules(&s), s.api.me(token), s.api.leaderboard(token));
+    let frame = frame(fast, &viewer, Some(Nav::Leaderboard));
+    let me = match me {
+        Ok(me) => me,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    };
+    let frame = Frame {
+        me: Some(&me),
+        ..frame
+    };
+    match board {
+        Ok(board) => page(
+            StatusCode::OK,
+            pages::leaderboard(frame, &here, &me, &board),
+        ),
+        // Before the board's first build: §6.1's leaderboard line, as the retry page.
+        Err(ApiError::Refused {
+            code: ErrorCode::Unavailable,
+            status,
+            retry_after,
+        }) => {
+            let m = Message {
+                copy: messages::with_wait(pages::LEADERBOARD_NOT_READY.to_owned(), retry_after),
+                code: Some(ErrorCode::Unavailable.as_str()),
+                kind: Kind::Retry {
+                    status,
+                    retry_after,
+                },
+            };
+            retry(status, retry_after, &pages::retry_page(frame, &m, &here))
+        }
+        Err(e) => failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    }
+}
+
+/// Where a Universe search is centred.
+enum Centre {
+    /// The viewer's homeworld, at the default radius (Q5).
+    Home,
+    /// A planet, at the default radius (`?around=`).
+    Around(u64),
+    /// A point and a radius, in distance units (`?x=&y=&z=&radius=`).
+    At(Position, i64),
+}
+
+/// The search a Universe query asks for, and the form as typed; Err when the web can't use it
+/// (§4.4, §6.3). Any of x, y, z or radius makes it an explicit search, which needs all four.
+fn search(query: Option<&str>) -> (Result<Centre, ()>, SearchForm) {
+    let pairs: std::collections::HashMap<String, String> =
+        reqwest::Url::parse(&format!("http://x/?{}", query.unwrap_or("")))
+            .map(|u| u.query_pairs().into_owned().collect())
+            .unwrap_or_default();
+    let field = |k: &str| pairs.get(k).cloned().unwrap_or_default();
+    let typed = SearchForm {
+        x: field("x"),
+        y: field("y"),
+        z: field("z"),
+        radius: field("radius"),
+    };
+    let explicit = ["x", "y", "z", "radius"]
+        .iter()
+        .any(|k| pairs.contains_key(*k));
+    let centre = if explicit {
+        let radius = format::parse_units(&typed.radius).filter(|r| *r >= 0);
+        match (
+            format::parse_units(&typed.x),
+            format::parse_units(&typed.y),
+            format::parse_units(&typed.z),
+            radius,
+        ) {
+            (Some(x), Some(y), Some(z), Some(r)) => Ok(Centre::At(Position { x, y, z }, r)),
+            _ => Err(()),
+        }
+    } else if let Some(around) = pairs.get("around") {
+        planet_number(around).map(Centre::Around).ok_or(())
+    } else {
+        Ok(Centre::Home)
+    };
+    (centre, typed)
+}
+
+#[tracing::instrument(name = "web.universe", skip_all)]
+async fn universe(State(s): State<AppState>, session: Session, uri: Uri) -> Response {
+    let here = here(&uri);
+    let viewer = match begin(&s, &session, &here, None).await {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    let (centre, typed) = search(uri.query());
+    // Checked before any game call (T5); the public `/rules` still keeps the frame whole (R3).
+    let Ok(centre) = centre else {
+        let fast = fast_rules(&s).await;
+        let found = Found::Refused(pages::UNIVERSE_INPUT, None);
+        return page(
+            StatusCode::BAD_REQUEST,
+            pages::universe(
+                frame(fast, &viewer, Some(Nav::Universe)),
+                &here,
+                &typed,
+                found,
+            ),
+        );
+    };
+    let token = &viewer.login.id_token;
+    // The centre's read goes beside `/players/me` when the query names it; the default needs
+    // `/players/me` first, for the homeworld.
+    let around = match centre {
+        Centre::Around(id) => Some(id),
+        Centre::Home | Centre::At(..) => None,
+    };
+    let centre_read = async {
+        match around {
+            Some(id) => Some(s.api.planet(token, PlanetId(id)).await),
+            None => None,
+        }
+    };
+    let (fast, me, around_view) = tokio::join!(fast_rules(&s), s.api.me(token), centre_read);
+    let frame = frame(fast, &viewer, Some(Nav::Universe));
+    let me = match me {
+        Ok(me) => me,
+        Err(e) => return failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    };
+    let frame = Frame {
+        me: Some(&me),
+        ..frame
+    };
+    let centre_view = match (centre, around_view) {
+        (Centre::At(position, radius), _) => Ok((position, radius, None)),
+        (Centre::Around(id), Some(view)) => view.map(|p| (p.position, DEFAULT_RADIUS_DU, Some(id))),
+        (Centre::Home | Centre::Around(_), _) => {
+            let id = me.homeworld_id.0;
+            s.api
+                .planet(token, me.homeworld_id)
+                .await
+                .map(|p| (p.position, DEFAULT_RADIUS_DU, Some(id)))
+        }
+    };
+    let (position, radius, around) = match centre_view {
+        Ok(c) => c,
+        Err(e) => {
+            let fill = Fill {
+                planet: around,
+                target: None,
+            };
+            if let ApiError::Refused {
+                code: ErrorCode::UnknownPlanet,
+                ..
+            } = e
+            {
+                let m = messages::for_error(&e, Context::Page, fill);
+                return page(StatusCode::NOT_FOUND, pages::no_such_planet(frame, &m));
+            }
+            return failed(&s, &session, frame, &e, fill, &here).await;
+        }
+    };
+    let form = SearchForm::filled(&position, radius);
+    let radius_du = u64::try_from(radius).unwrap_or(0);
+    match s.api.planets_near(token, position, radius_du).await {
+        Ok(near) => {
+            let found = Found::Planets {
+                centre: &position,
+                around,
+                radius_du: radius,
+                near: &near,
+                me: &me,
+            };
+            page(StatusCode::OK, pages::universe(frame, &here, &form, found))
+        }
+        // The numbers were checked, so `invalid_query` here means too many planets (§4.4).
+        Err(ApiError::Refused {
+            code: ErrorCode::InvalidQuery,
+            ..
+        }) => {
+            let found = Found::Refused(
+                pages::TOO_MANY_PLANETS,
+                Some(ErrorCode::InvalidQuery.as_str()),
+            );
+            page(
+                StatusCode::BAD_REQUEST,
+                pages::universe(frame, &here, &form, found),
+            )
+        }
+        Err(e) => failed(&s, &session, frame, &e, Fill::default(), &here).await,
+    }
+}
+
+/// §6.2: any other path. It reads nothing, so it has no frame.
+async fn not_found() -> Response {
+    page(StatusCode::NOT_FOUND, pages::not_found())
 }
 
 /// The retry page with the API's status, and its Retry-After passed on (§5.5).
@@ -385,9 +788,13 @@ async fn callback(
         return refusal(&session, StatusCode::BAD_REQUEST, Refusal::Rejected).await;
     };
     // A new session id at login, so an id planted before it is worthless (fixation).
+    // A login renewing an ended session leaves the next page its one-shot notice (§5.6).
     let stored = async {
         session.cycle_id().await?;
         session.remove::<serde_json::Value>(PENDING_KEY).await?;
+        if session.remove::<bool>(RENEWING_KEY).await? == Some(true) {
+            session.insert(NOTICE_KEY, true).await?;
+        }
         session.insert(LOGIN_KEY, LoggedIn::from(identity)).await
     };
     if let Err(e) = stored.await {
@@ -406,7 +813,7 @@ async fn logout(session: Session) -> Response {
         return internal();
     }
     tracing::info!(outcome = "logged_out", "a logout");
-    see_other("/")
+    see_other("/?logged_out")
 }
 
 #[cfg(test)]

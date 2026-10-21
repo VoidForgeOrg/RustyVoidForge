@@ -1,0 +1,68 @@
+---
+source: crates/voidforge-web/tests/pages.rs
+expression: pretty(body)
+---
+<!DOCTYPE html><html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planet #7 – Voidforge</title></head>
+<body>
+<nav>
+<p><strong>Voidforge</strong> <a href="/">Home</a> · <a href="/fleets">Fleets</a> · <a href="/universe">Universe</a> · <a href="/leaderboard">Leaderboard</a> · You: <span title="01890a5d-ac96-774b-bcce-b302099a8057">player 099a8057</span> · score 42</p></nav>
+<p>Logged in as <strong>alice@voidforge.test</strong>.</p>
+<form method="post" action="/logout"><button type="submit">Log out</button></form>
+<hr>
+<h1>Planet #7</h1>
+<p>Owner: you (homeworld) · Position (150.0, −20.5, 999.9) · Slots: 11 of 8 used</p>
+<p><a href="/universe?around=7">Look around this planet</a></p>
+<p>As of 18:04:12 UTC. These values hold until 18:04:15 UTC, unless another player's fleet arrives. <a href="/planets/7">Refresh</a></p>
+<h2>Storage</h2>
+<table>
+<thead>
+<tr><th scope="col">Resource</th><th scope="col">Stored</th><th scope="col">Rate</th></tr></thead>
+<tbody>
+<tr><th scope="row">Iron ore</th><td>1,234.5 t of 10,000.0 t</td><td>+2.0 t/h</td></tr>
+<tr><th scope="row">Iron ingots</th><td>5,000.0 t of 5,000.0 t (full)</td><td>0 t/h</td></tr></tbody>
+</table>
+<h2>Buildings</h2>
+<table>
+<thead>
+<tr><th scope="col">Building</th><th scope="col">State</th></tr></thead>
+<tbody>
+<tr><th scope="row">Shipyard #19</th><td>being demolished; the slot frees at 2026-10-21 06:00:00 UTC (in 11 h 55 min)</td></tr>
+<tr><th scope="row">Drill #2</th><td>running</td></tr>
+<tr><th scope="row">Refinery #3</th><td>slowed: short of ore, or ingot storage is full</td></tr>
+<tr><th scope="row">Drill #4</th><td>halted: ore storage is full</td></tr>
+<tr><th scope="row">Refinery #5</th><td>halted: no ore, or ingot storage is full</td></tr>
+<tr><th scope="row">Shipyard #15</th><td>running</td></tr>
+<tr><th scope="row">Shipyard #16</th><td>idle: no ships building</td></tr>
+<tr><th scope="row">Drill #13</th><td>operational</td></tr>
+<tr><th scope="row">Shipyard #17</th><td>under construction: 42% (504.0 of 1,200.0 t), +100.0 t/h, done at 18:10:00 UTC (in 5 min 48 s); slowed: short of ingots</td></tr>
+<tr><th scope="row">Refinery #18</th><td>under construction: 0% (&lt; 0.1 of 250.0 t), waiting for ingots; halted: no ingots</td></tr>
+<tr><th scope="row">Drill #12</th><td>being demolished; the slot frees at 18:05:00 UTC (in 48 s)</td></tr></tbody>
+</table>
+<h2>Shipyards</h2>
+<h3>Shipyard #19</h3>
+<table>
+<thead>
+<tr><th scope="col">Build</th><th scope="col">Ship</th><th scope="col">State</th></tr></thead>
+<tbody>
+<tr><th scope="row">build #24</th><td>Cargo Vessel</td><td>building: 30% (240.0 of 800.0 t), waiting for ingots; halted: no ingots</td></tr></tbody>
+</table>
+<h3>Shipyard #15</h3>
+<table>
+<thead>
+<tr><th scope="col">Build</th><th scope="col">Ship</th><th scope="col">State</th></tr></thead>
+<tbody>
+<tr><th scope="row">build #20</th><td>Colony Ship</td><td>building: 30% (240.0 of 800.0 t), +80.0 t/h, done at 18:10:00 UTC (in 5 min 48 s)</td></tr>
+<tr><th scope="row">build #21</th><td>Cargo Vessel</td><td>waiting (1st in line)</td></tr>
+<tr><th scope="row">build #22</th><td>Cargo Vessel</td><td>building: 30% (240.0 of 800.0 t), +80.0 t/h, done at 18:10:00 UTC (in 5 min 48 s); slowed: short of ingots</td></tr>
+<tr><th scope="row">build #23</th><td>Colony Ship</td><td>waiting (2nd in line)</td></tr></tbody>
+</table>
+<h3>Shipyard #16</h3>
+<p>No ships building.</p>
+<h2>Your ships here</h2>
+<ul>
+<li>Colony Ship #31</li>
+<li>Cargo Vessel #30</li>
+<li>Cargo Vessel #33</li>
+</ul></body></html>

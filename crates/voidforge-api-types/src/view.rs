@@ -80,7 +80,8 @@ pub enum BuildingView {
         /// What it is.
         #[serde(rename = "type")]
         building_type: BuildingType,
-        /// How its flow is doing; absent when it has none.
+        /// How its flow is doing; absent when it has none. An operational Shipyard with no active
+        /// builds is `halted` (D-025): it's idle, not short of ingots.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<FlowStatus>,
     },

@@ -7,6 +7,7 @@
 
 pub mod api;
 pub mod config;
+pub mod format;
 pub mod messages;
 pub mod oidc;
 pub mod pages;

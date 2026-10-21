@@ -196,7 +196,7 @@
                 "oneOf": [
                   {
                     "$ref": "#/components/schemas/FlowStatus",
-                    "description": "How its flow is doing; absent when it has none."
+                    "description": "How its flow is doing; absent when it has none. An operational Shipyard with no active\nbuilds is `halted` (D-025): it's idle, not short of ingots."
                   },
                   {
                     "type": "null"
