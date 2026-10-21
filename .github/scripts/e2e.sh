@@ -53,6 +53,9 @@ case "$db" in
     *) say "refusing database $db"; exit 2 ;;
 esac
 mkdir -p "$log_dir"
+# A reused E2E_LOG_DIR may hold an earlier run's walk log, whose timing line would satisfy the
+# walk-ran check below without this run walking at all (P4.5 QA's F1).
+rm -f "$log_dir/web-login.log"
 
 # 1. The stack: dex's password grant for the static users, as the bots' public client.
 grant=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
