@@ -586,6 +586,88 @@ async fn past_the_cap_a_new_login_is_refused_and_stored_sessions_keep_working() 
     assert_eq!(w.browser().get("/login").await.status, 303);
 }
 
+/// The Phase 4 gate's R1-G1: a cookie whose id the store doesn't hold (expired, forged) is a
+/// new session. Past the cap it's the busy page, as for a cookieless request, never the layer's
+/// bare 500, and it stores nothing.
+#[tokio::test]
+async fn past_the_cap_a_stale_cookie_is_the_busy_page_not_a_500() {
+    let w = World::start_with(
+        Options {
+            max_sessions: 2,
+            ..Options::default()
+        },
+        |_| {},
+    )
+    .await;
+    for _ in 0..2 {
+        assert_eq!(w.browser().get("/login").await.status, 303);
+    }
+    // Well-formed ids that aren't stored: base64url of 16 bytes, as tower-sessions makes them.
+    for stale in ["AAAAAAAAAAAAAAAAAAAAAA", "q0ZpZ3VyZWQtb3V0LWlkMQ"] {
+        let mut b = w.browser();
+        b.cookie = Some(stale.to_owned());
+        let page = b.get("/login").await;
+        assert_eq!(page.status, 503, "{stale}: {}", page.body);
+        assert!(
+            page.body.contains("Try again in a few minutes"),
+            "{stale}: {}",
+            page.body
+        );
+    }
+    // Below the cap, the same stale cookie starts a login with a new id.
+    let w = World::start().await;
+    let mut b = w.browser();
+    b.cookie = Some("AAAAAAAAAAAAAAAAAAAAAA".to_owned());
+    assert_eq!(b.get("/login").await.status, 303);
+    assert_ne!(b.cookie.as_deref(), Some("AAAAAAAAAAAAAAAAAAAAAA"));
+}
+
+/// R1's first inferred race (Phase 4 gate): the callback's `cycle_id` deletes the old record and
+/// creates the new id at the save; a session that takes the freed place in between leaves the
+/// store full. That login is the busy page, never a bare 500, and the other session keeps its
+/// place. The store's hook takes the place at that exact moment, once.
+#[tokio::test]
+async fn a_place_taken_during_the_callback_s_new_id_is_the_busy_page() {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use tower_sessions::cookie::time::{Duration as Ttl, OffsetDateTime};
+    use tower_sessions::session::{Id, Record};
+
+    let once = Arc::new(AtomicBool::new(false));
+    let taken = once.clone();
+    let store = voidforge_web::store::BoundedStore::new(1).after_delete(move |records| {
+        if !taken.swap(true, Ordering::SeqCst) {
+            let other = Record {
+                id: Id::default(),
+                data: HashMap::new(),
+                expiry_date: OffsetDateTime::now_utc() + Ttl::minutes(10),
+            };
+            records.insert(other.id, other);
+        }
+    });
+    let w = World::start_with(
+        Options {
+            store: Some(store.clone()),
+            ..Options::default()
+        },
+        |_| {},
+    )
+    .await;
+    let page = w.browser().login().await;
+    assert!(
+        once.load(Ordering::SeqCst),
+        "the callback deleted the old record"
+    );
+    assert_eq!(page.status, 503, "{}", page.body);
+    assert!(
+        page.body.contains("Try again in a few minutes"),
+        "{}",
+        page.body
+    );
+    assert_eq!(store.len(), 1, "the other session kept its place");
+}
+
 #[tokio::test]
 async fn a_logged_in_session_keeps_its_lifetime_when_changed() {
     // A save recomputes the expiry from the anonymous default unless the handler sets it again:

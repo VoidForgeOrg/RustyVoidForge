@@ -50,12 +50,26 @@ struct Pressure {
     last_warn: Option<Instant>,
 }
 
+/// What runs inside a delete, after the removal and under the same lock.
+type Hook = Arc<dyn Fn(&mut HashMap<Id, Record>) + Send + Sync>;
+
 /// A bounded in-memory session store. Clones share one map.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BoundedStore {
     inner: Arc<Mutex<Inner>>,
     pressure: Arc<Mutex<Pressure>>,
     max: usize,
+    after_delete: Option<Hook>,
+}
+
+impl std::fmt::Debug for BoundedStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoundedStore")
+            .field("inner", &self.inner)
+            .field("pressure", &self.pressure)
+            .field("max", &self.max)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for BoundedStore {
@@ -76,7 +90,21 @@ impl BoundedStore {
             inner: Arc::new(Mutex::new(Inner::default())),
             pressure: Arc::new(Mutex::new(Pressure::default())),
             max,
+            after_delete: None,
         }
+    }
+
+    /// For tests only: `hook` runs in every delete, after the removal, under the store's lock,
+    /// so a test can take a freed place at that exact moment (the Phase 4 gate's callback race:
+    /// `cycle_id` deletes the old record before it creates the new one). Never set by the app.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn after_delete(
+        mut self,
+        hook: impl Fn(&mut HashMap<Id, Record>) + Send + Sync + 'static,
+    ) -> Self {
+        self.after_delete = Some(Arc::new(hook));
+        self
     }
 
     /// Logs a refused new session: a WARN after a quiet spell or a minute, debug otherwise.
@@ -200,7 +228,11 @@ impl SessionStore for BoundedStore {
     }
 
     async fn delete(&self, id: &Id) -> session_store::Result<()> {
-        self.lock().records.remove(id);
+        let mut inner = self.lock();
+        inner.records.remove(id);
+        if let Some(hook) = &self.after_delete {
+            hook(&mut inner.records);
+        }
         Ok(())
     }
 }

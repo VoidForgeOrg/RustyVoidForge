@@ -54,10 +54,10 @@ Every pick favors widely used, well-documented crates, because agents write most
 | Token checks | jsonwebtoken with a cached copy of dex's signing keys | API side |
 | OIDC client | Our own authorization code flow with PKCE, on jsonwebtoken and aws-lc-rs ([D-057](decision-log.md#d-057-web-login-our-own-code-flow-with-pkce-and-the-session); openidconnect was named first) | Web side: discovery, PKCE and ID token checks |
 | HTML | maud | Markup written and checked in Rust at compile time |
-| Web sessions | tower-sessions with the in-memory store | Sessions reset on restart, which is fine for testing |
+| Web sessions | tower-sessions with our own bounded in-memory store (`BoundedStore`, D-057) | Sessions reset on restart, which is fine for testing |
 | API description | utoipa | OpenAPI built from the types the server already uses |
 | Telemetry | tracing, opentelemetry, opentelemetry-otlp and tracing-opentelemetry | Set up once in `voidforge-telemetry` |
-| Tests | cargo-nextest, proptest and insta | Plus scraper for the web smoke tests |
+| Tests | cargo-nextest, proptest and insta | The web smoke test is the e2e job's Python walk (D-062) |
 | Supply chain | cargo-deny | Licenses, advisories and a dependency allowlist |
 | Task runner | just | One `justfile`: up, test, e2e, replay |
 | Images | Multi-stage Docker builds with cargo-chef | Small runtime images running as a non-root user |
@@ -130,7 +130,7 @@ The frontend exists so people can test and evaluate the game in a browser, nothi
 
 - It is an ordinary API client. It logs the player in through dex, keeps the ID token in its session and calls the public API with it.
 - It never touches the server or the core. Its only workspace dependencies are `voidforge-api-types` and `voidforge-telemetry`, and a CI check fails if its dependency tree ever includes core, host, store or server.
-- Every form posts to `voidforge-web`, which sends one `POST /commands` and redirects back to the page. Each rendered form carries a fresh idempotency key in a hidden field, so a double submit runs once.
+- Every form posts to `voidforge-web`, which sends one `POST /commands` and redirects back to the page. Each rendered page issues one fresh idempotency key, shared by its forms in a hidden field (D-061 T1), so a double submit runs once.
 - Values show as of page load, with their hourly rate and the time they next change. A Refresh link reloads the page.
 - A rejected command shows its reason code at the top of the page.
 

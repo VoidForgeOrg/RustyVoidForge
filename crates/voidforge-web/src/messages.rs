@@ -76,13 +76,13 @@ pub fn for_error(e: &ApiError, ctx: Context, fill: Fill) -> Message {
             status,
             retry_after,
         } => {
-            let kind = match code {
-                ErrorCode::MissingToken | ErrorCode::InvalidToken => Kind::Login,
-                ErrorCode::NoFreeHomeworld if ctx == Context::Page => Kind::UniverseFull,
-                ErrorCode::RateLimited
-                | ErrorCode::Internal
-                | ErrorCode::Busy
-                | ErrorCode::Unavailable => Kind::Retry {
+            // By the code's own status, not a list of codes (the Phase 4 gate's R1-G3): a new
+            // 401 code ends the login, and a new 429, 500 or 503 code is a retry, never a
+            // banner that would give a command a fresh key.
+            let kind = match (code, code.status()) {
+                (ErrorCode::NoFreeHomeworld, _) if ctx == Context::Page => Kind::UniverseFull,
+                (_, 401) => Kind::Login,
+                (_, 429 | 500 | 503) => Kind::Retry {
                     status,
                     retry_after,
                 },
@@ -352,6 +352,38 @@ mod tests {
         assert_eq!(page(&ApiError::Unreachable(Unreachable::Timeout)), gone);
         assert_eq!(page(&ApiError::UnexpectedStatus(302)), gone);
         assert_eq!(page(&ApiError::Undecodable { status: 200 }), gone);
+    }
+
+    /// R1-G3: every code's kind follows its status, in both contexts, so a code added later
+    /// can't land on the wrong one.
+    #[test]
+    fn every_code_s_kind_follows_its_status() {
+        for code in ErrorCode::ALL {
+            let status = code.status();
+            for ctx in [Context::Page, Context::Command] {
+                let e = ApiError::Refused {
+                    code,
+                    status,
+                    retry_after: None,
+                };
+                let want = match status {
+                    _ if code == ErrorCode::NoFreeHomeworld && ctx == Context::Page => {
+                        Kind::UniverseFull
+                    }
+                    401 => Kind::Login,
+                    429 | 500 | 503 => Kind::Retry {
+                        status,
+                        retry_after: None,
+                    },
+                    _ => Kind::Banner,
+                };
+                assert_eq!(
+                    for_error(&e, ctx, Fill::default()).kind,
+                    want,
+                    "{code:?} {ctx:?}"
+                );
+            }
+        }
     }
 
     #[test]

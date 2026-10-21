@@ -205,6 +205,8 @@ pub struct Request {
     pub authorization: Option<String>,
     pub idempotency_key: Option<String>,
     pub body: String,
+    /// When it arrived, before any scripted delay.
+    pub arrived: std::time::Instant,
 }
 
 /// The API stand-in's state.
@@ -415,6 +417,7 @@ async fn api_any(
         authorization: header("authorization"),
         idempotency_key: header("idempotency-key"),
         body,
+        arrived: std::time::Instant::now(),
     });
     if path == "/players/me" {
         let bearer = header("authorization")
@@ -540,6 +543,8 @@ pub struct Options {
     pub api_timeout: std::time::Duration,
     /// Point the web at this API instead of the stand-in (a closed port: unreachable).
     pub api_url: Option<String>,
+    /// The session store, when a test needs its own (a hook); else one of `max_sessions`.
+    pub store: Option<voidforge_web::store::BoundedStore>,
 }
 
 impl Default for Options {
@@ -550,6 +555,7 @@ impl Default for Options {
             key_floor: None,
             api_timeout: voidforge_web::api::API_TIMEOUT,
             api_url: None,
+            store: None,
         }
     }
 }
@@ -583,7 +589,10 @@ impl World {
         let state = AppState {
             provider: Arc::new(provider),
             api: Client::with_timeouts(api_url, options.api_timeout, options.api_timeout).unwrap(),
-            sessions: voidforge_web::store::BoundedStore::new(options.max_sessions),
+            sessions: options
+                .store
+                .clone()
+                .unwrap_or_else(|| voidforge_web::store::BoundedStore::new(options.max_sessions)),
         };
         let app = routes::app(state, config.secure_cookie);
         tokio::spawn(async move { axum::serve(web_l, app).await.unwrap() });

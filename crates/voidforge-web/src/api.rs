@@ -264,7 +264,8 @@ async fn exchange<T: DeserializeOwned>(
 ) -> Result<T, ApiError> {
     let mut response = req.send().await.map_err(unreachable)?;
     let status = response.status();
-    // 200, or a status some code is sent with on this route; anything else, whatever its body.
+    // 200, or a status some code is sent with (by `sends`: there's no per-route table); anything
+    // else, whatever its body.
     let expected = status == StatusCode::OK
         || ErrorCode::ALL
             .iter()

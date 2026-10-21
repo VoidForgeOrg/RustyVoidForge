@@ -39,6 +39,8 @@ jobs:
         run: .github/scripts/check-dex-parity.sh
       - name: dex parity check regression cases
         run: .github/scripts/test-check-dex-parity.sh
+      - name: The web walk starts only its own voidforge-web (regression cases)
+        run: python3 .github/scripts/test-web-login-ready.py
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors
