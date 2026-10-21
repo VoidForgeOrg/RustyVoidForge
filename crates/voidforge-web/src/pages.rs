@@ -35,6 +35,9 @@ pub enum Notice {
 pub const EXPIRED: &str = "Your login has expired. Log in again.";
 /// §5.6's one-shot line after logging in again from an ended session (carried by D-059).
 pub const RENEWED: &str = "Your session had ended; you're logged in again.";
+/// An operational Shipyard that no build names (P4.3 QA's F1): the server calls it `halted`
+/// (D-025: no active builds), which isn't a shortage of ingots.
+pub const IDLE_SHIPYARD: &str = "idle: no ships building";
 /// §4.1's line after a logout.
 pub const LOGGED_OUT: &str = "You're logged out.";
 /// §4.6 (E8): a planet path that isn't a number, shown with `invalid_query`.
@@ -288,9 +291,17 @@ fn receiving(status: Option<FlowStatus>) -> String {
     }
 }
 
-/// A building's State cell (§4.2; §4.6's E1 and E2).
-fn building_state(b: &BuildingView, as_of: &Timestamp) -> String {
+/// A building's State cell (§4.2; §4.6's E1 and E2). An operational Shipyard with no builds is
+/// idle, whatever its status: D-025 reports it `halted`, and §3's "halted: no ingots" would
+/// blame its ingots (P4.3 QA's F1).
+fn building_state(b: &BuildingView, p: &PlanetView) -> String {
+    let as_of = &p.as_of;
     match b {
+        BuildingView::Operational {
+            id,
+            building_type: BuildingType::Shipyard,
+            ..
+        } if !p.ship_builds.iter().any(|s| s.shipyard_id == *id) => IDLE_SHIPYARD.to_owned(),
         BuildingView::Operational {
             building_type,
             status,
@@ -479,7 +490,7 @@ pub fn planet(
                     tbody {
                         @for b in &p.buildings {
                             @let (bid, t) = building_parts(b);
-                            tr { th scope="row" { (format::building(t)) " #" (bid.0) } td { (building_state(b, as_of)) } }
+                            tr { th scope="row" { (format::building(t)) " #" (bid.0) } td { (building_state(b, p)) } }
                         }
                     }
                 }

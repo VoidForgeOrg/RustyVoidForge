@@ -248,7 +248,9 @@ async fn every_building_and_build_state() {
         {"state": "operational", "id": 4, "type": "drill", "status": "halted"},
         {"state": "operational", "id": 5, "type": "refinery", "status": "halted"},
         {"state": "operational", "id": 15, "type": "shipyard", "status": "running"},
-        {"state": "operational", "id": 16, "type": "shipyard"},
+        // Idle: the server sends `halted` for a Shipyard with no builds (D-025; QA's F1).
+        {"state": "operational", "id": 16, "type": "shipyard", "status": "halted"},
+        {"state": "operational", "id": 13, "type": "drill"},
         {"state": "under_construction", "id": 17, "type": "shipyard", "status": "throttled",
          "delivered_g": 504_000_000, "cost_g": 1_200_000_000, "rate_g_per_h": 100_000_000, "eta": eta},
         {"state": "under_construction", "id": 18, "type": "refinery", "status": "halted",
@@ -299,7 +301,7 @@ async fn every_building_and_build_state() {
     let page = b.get("/planets/7").await;
     assert_eq!(page.status, 200, "{}", page.body);
     let body = &page.body;
-    has(body, "Slots: 10 of 8 used");
+    has(body, "Slots: 11 of 8 used");
     for (row, state) in [
         ("Drill #2", "running"),
         (
@@ -309,8 +311,10 @@ async fn every_building_and_build_state() {
         ("Drill #4", "halted: ore storage is full"),
         ("Refinery #5", "halted: no ore, or ingot storage is full"),
         ("Shipyard #15", "running"),
+        // QA's F1: no builds is idle, not short of ingots, whatever the status.
+        ("Shipyard #16", "idle: no ships building"),
         // §4.6 E1: an operational building with no flow.
-        ("Shipyard #16", "operational"),
+        ("Drill #13", "operational"),
         // E2: the status after the progress, only when it isn't running.
         (
             "Shipyard #17",

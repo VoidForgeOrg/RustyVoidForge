@@ -12,7 +12,7 @@ expression: pretty(body)
 <form method="post" action="/logout"><button type="submit">Log out</button></form>
 <hr>
 <h1>Planet #7</h1>
-<p>Owner: you (homeworld) · Position (150.0, −20.5, 999.9) · Slots: 10 of 8 used</p>
+<p>Owner: you (homeworld) · Position (150.0, −20.5, 999.9) · Slots: 11 of 8 used</p>
 <p><a href="/universe?around=7">Look around this planet</a></p>
 <p>As of 18:04:12 UTC. These values hold until 18:04:15 UTC, unless another player's fleet arrives. <a href="/planets/7">Refresh</a></p>
 <h2>Storage</h2>
@@ -34,7 +34,8 @@ expression: pretty(body)
 <tr><th scope="row">Drill #4</th><td>halted: ore storage is full</td></tr>
 <tr><th scope="row">Refinery #5</th><td>halted: no ore, or ingot storage is full</td></tr>
 <tr><th scope="row">Shipyard #15</th><td>running</td></tr>
-<tr><th scope="row">Shipyard #16</th><td>operational</td></tr>
+<tr><th scope="row">Shipyard #16</th><td>idle: no ships building</td></tr>
+<tr><th scope="row">Drill #13</th><td>operational</td></tr>
 <tr><th scope="row">Shipyard #17</th><td>under construction: 42% (504.0 of 1,200.0 t), +100.0 t/h, done at 18:10:00 UTC (in 5 min 48 s); slowed: short of ingots</td></tr>
 <tr><th scope="row">Refinery #18</th><td>under construction: 0% (&lt; 0.1 of 250.0 t), waiting for ingots; halted: no ingots</td></tr>
 <tr><th scope="row">Drill #12</th><td>being demolished; the slot frees at 18:05:00 UTC (in 48 s)</td></tr></tbody>
