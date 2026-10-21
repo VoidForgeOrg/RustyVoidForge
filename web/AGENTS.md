@@ -17,6 +17,7 @@ Every dependency is pinned exactly in `package.json` and locked in `package-lock
 - The dev server and `vite preview` both serve `http://localhost:8081` with a strict port, so dex has one redirect URI and the API one CORS origin.
 - The API is reached only through `src/api/client.ts`: `api` for queries and mutations, `fetchClient` for the rest. Never a hand-rolled `fetch`.
 - `src/api/schema.ts` is generated from `../crates/voidforge-api-types/openapi.json` by `npm run gen:api`, and never edited by hand. Regenerate it whenever that file changes; CI fails on a diff.
+- The app names the fast test rules whenever `/rules` says `v0-fast`.
 - `VITE_API_URL` names the API. `.env` holds the local default; override it in `.env.local` or the environment.
 
 ## Commands

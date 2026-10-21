@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "gen:api": "openapi-typescript ../crates/voidforge-api-types/openapi.json -o src/api/schema.ts"
   },
   "dependencies": {
@@ -24,6 +24,7 @@
     "openapi-fetch": "0.17.0",
     "openapi-react-query": "0.5.4",
     "react": "19.3.1",
+    "react-aria-components": "1.22.1",
     "react-dom": "19.3.1",
     "zustand": "5.0.15"
   },

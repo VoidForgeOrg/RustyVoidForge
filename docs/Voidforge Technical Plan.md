@@ -134,10 +134,10 @@ The frontend exists so people can test and evaluate the game in a browser. It is
 
 - It is an ordinary API client. It logs the player in through dex and calls the public API with the ID token. Every call goes through one client generated from the checked-in `openapi.json`, so the app's types follow the server's.
 - It is not part of the cargo workspace and never touches the server's code; the only contract it sees is `/openapi.json`.
-- Its screens are free to group the data and actions below however serves the MVP loop best, as long as every action stays reachable at phone, tablet and desktop widths and nothing the API offers is left out.
+- The screen layout follows the UI direction the owner picks. It may group the data and actions below however serves the MVP loop best, as long as every action stays reachable at phone, tablet and desktop widths and nothing the API offers is left out.
 - It names the fast test rules visibly when the universe runs them.
 - Values are shown as of the view's `as_of`, with their hourly rate and the time they next change, and stay current without a manual reload.
-- Each opened command form carries one idempotency key, reused if the player retries, and its submit is disabled while the command is pending, so a double submit runs once. The four irreversible actions ask for confirmation first.
+- Each opened command form carries one idempotency key, reused if the player retries, and its submit is disabled while the command is pending, so a double submit runs once. Outcomes show as toasts, and the four irreversible actions ask for confirmation first.
 - A rejected command or a failed read shows the error copy for its code, with the code beside it.
 
 | Data | Actions |
@@ -307,7 +307,7 @@ A person can play the whole MVP loop in a browser. P4.1 to P4.5 built it as the 
 | P4.3 | Pages: home, planet, fleets, universe and leaderboard | Every page renders from live API data |
 | P4.4 | Command forms: one per action, a hidden idempotency key, post then redirect | Every MVP action works from the browser |
 | P4.5 | Smoke tests: an HTTP client with a cookie jar walks the login and one game loop | Passes in CI against the compose stack within minutes, on the fast test rules |
-| P4.6 | Web redesign: a static React app in `web/` with the same pages and actions, a public PKCE login, CORS on the API, a Playwright smoke test, and `voidforge-web` deleted | Every MVP action works from the new app, and the Playwright walk passes in the e2e job |
+| P4.6 | Web redesign: a static React app in `web/` with every MVP action, a public PKCE login, CORS on the API, a Playwright smoke test, and `voidforge-web` deleted | Every MVP action works from the new app, and the Playwright walk passes in the e2e job |
 
 Packages run one at a time, in ID order; P4.1r runs between P4.1 and P4.2.
 

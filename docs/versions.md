@@ -117,6 +117,7 @@ Pinned in [`web/`](../web/AGENTS.md) ([D-063](decision-log.md#d-063-the-web-fron
 | openapi-fetch | 0.17.0 | runtime | The typed API client |
 | openapi-react-query | 0.5.4 | runtime | Binds the client to TanStack Query |
 | react | 19.3.1 | runtime | UI |
+| react-aria-components | 1.22.1 | runtime | RouterProvider, so HeroUI links navigate in-app |
 | react-dom | 19.3.1 | runtime | UI |
 | zustand | 5.0.15 | runtime | Client state |
 | @eslint/js | 10.0.1 | dev | eslint's recommended rules |
