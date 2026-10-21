@@ -172,16 +172,17 @@ impl SessionStore for BoundedStore {
         Ok(())
     }
 
+    /// Updates a stored session, and never recreates one (P4.4, review-r2's HIGH): tower-sessions
+    /// creates every new id through [`SessionStore::create`] (a new session, after `flush`, after
+    /// `cycle_id`), so a save for an id that's gone means the record was deleted (a logout, a
+    /// login's new id) or expired after this request loaded it. Writing it back would log the old
+    /// cookie in again; a logout is final. The request's own response is unaffected.
     async fn save(&self, record: &Record) -> session_store::Result<()> {
-        let now = OffsetDateTime::now_utc();
         let mut inner = self.lock();
-        if !inner.records.contains_key(&record.id) {
-            sweep_if_doubled(&mut inner, now);
-            if !room(&mut inner, self.max, now) {
-                return Err(full());
-            }
+        match inner.records.get_mut(&record.id) {
+            Some(stored) => *stored = record.clone(),
+            None => tracing::debug!("a save for a session that's gone was dropped"),
         }
-        inner.records.insert(record.id, record.clone());
         Ok(())
     }
 
@@ -212,6 +213,11 @@ mod tests {
 
     use super::*;
 
+    /// Stores a record directly, as a session the store already holds.
+    fn put(s: &BoundedStore, r: &Record) {
+        s.lock().records.insert(r.id, r.clone());
+    }
+
     fn record(expires_in: Duration) -> Record {
         Record {
             id: Id::default(),
@@ -224,12 +230,12 @@ mod tests {
     async fn an_expired_record_is_removed_when_loaded() {
         let s = BoundedStore::default();
         let mut r = record(Duration::seconds(-1));
-        s.save(&r).await.expect("save");
+        put(&s, &r);
         assert_eq!(s.len(), 1);
         assert!(s.load(&r.id).await.expect("load").is_none());
         assert_eq!(s.len(), 0);
         r = record(Duration::minutes(10));
-        s.save(&r).await.expect("save");
+        put(&s, &r);
         assert!(s.load(&r.id).await.expect("load").is_some());
     }
 
@@ -238,7 +244,7 @@ mod tests {
         let s = BoundedStore::default();
         // Expired sessions nobody loads again: the anonymous /logins R1-1 found.
         for _ in 0..(2 * SWEEP_FLOOR - 1) {
-            s.save(&record(Duration::seconds(-1))).await.expect("save");
+            put(&s, &record(Duration::seconds(-1)));
         }
         assert_eq!(s.len(), 2 * SWEEP_FLOOR - 1);
         let mut live = record(Duration::minutes(10));
@@ -261,7 +267,9 @@ mod tests {
         assert!(!s.has_room());
         let mut extra = record(Duration::minutes(10));
         assert!(s.create(&mut extra).await.is_err());
-        assert!(s.save(&record(Duration::minutes(10))).await.is_err());
+        // A save never adds a session, so it can't pass the cap either.
+        s.save(&record(Duration::minutes(10))).await.expect("save");
+        assert_eq!(s.len(), 3);
         // A stored session still saves, and nothing was evicted for room.
         s.save(&kept[0]).await.expect("an existing session saves");
         for r in &kept {
@@ -274,11 +282,28 @@ mod tests {
     async fn expired_sessions_make_room_at_the_cap() {
         let s = BoundedStore::new(3);
         for _ in 0..3 {
-            s.save(&record(Duration::seconds(-1))).await.expect("save");
+            put(&s, &record(Duration::seconds(-1)));
         }
         assert!(s.has_room());
         let mut r = record(Duration::minutes(10));
         s.create(&mut r).await.expect("room after the sweep");
         assert_eq!(s.len(), 1);
+    }
+
+    /// Review-r2's HIGH on 05781b6: a request that loaded a session before its logout must not
+    /// write it back after. A save only updates; a deleted id stays deleted.
+    #[tokio::test]
+    async fn a_save_never_recreates_a_deleted_session() {
+        let s = BoundedStore::default();
+        let mut r = record(Duration::minutes(10));
+        s.create(&mut r).await.expect("create");
+        let mut changed = r.clone();
+        changed.data.insert("k".to_owned(), serde_json::json!(1));
+        s.save(&changed).await.expect("save");
+        assert_eq!(s.load(&r.id).await.expect("load"), Some(changed.clone()));
+        s.delete(&r.id).await.expect("delete");
+        s.save(&changed).await.expect("a late save");
+        assert!(s.load(&r.id).await.expect("load").is_none());
+        assert_eq!(s.len(), 0);
     }
 }

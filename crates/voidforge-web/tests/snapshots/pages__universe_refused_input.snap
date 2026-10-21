@@ -14,4 +14,8 @@ expression: pretty(&page.body)
 <h1>Universe</h1>
 <p><strong>Enter numbers like 150 or −20.5; the radius must be 0 or more.</strong></p>
 <form method="get" action="/universe">
-<p>Centre: <label>x <input type="text" name="x" value="&lt;b&gt;" size="10"></label> <label>y <input type="text" name="y" value="1" size="10"></label> <label>z <input type="text" name="z" value="2" size="10"></label> <label>Radius <input type="text" name="radius" value="3" size="8"> u</label> <button type="submit">Search</button></p></form></body></html>
+<p>Centre: <label>x 
+<input type="text" name="x" value="&lt;b&gt;" size="10"></label> <label>y 
+<input type="text" name="y" value="1" size="10"></label> <label>z 
+<input type="text" name="z" value="2" size="10"></label> <label>Radius 
+<input type="text" name="radius" value="3" size="8"> u</label> <button type="submit">Search</button></p></form></body></html>

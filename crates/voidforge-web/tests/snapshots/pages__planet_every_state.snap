@@ -26,43 +26,94 @@ expression: pretty(body)
 <h2>Buildings</h2>
 <table>
 <thead>
-<tr><th scope="col">Building</th><th scope="col">State</th></tr></thead>
+<tr><th scope="col">Building</th><th scope="col">State</th><th scope="col">Action</th></tr></thead>
 <tbody>
-<tr><th scope="row">Shipyard #19</th><td>being demolished; the slot frees at 2026-10-21 06:00:00 UTC (in 11 h 55 min)</td></tr>
-<tr><th scope="row">Drill #2</th><td>running</td></tr>
-<tr><th scope="row">Refinery #3</th><td>slowed: short of ore, or ingot storage is full</td></tr>
-<tr><th scope="row">Drill #4</th><td>halted: ore storage is full</td></tr>
-<tr><th scope="row">Refinery #5</th><td>halted: no ore, or ingot storage is full</td></tr>
-<tr><th scope="row">Shipyard #15</th><td>running</td></tr>
-<tr><th scope="row">Shipyard #16</th><td>idle: no ships building</td></tr>
-<tr><th scope="row">Drill #13</th><td>operational</td></tr>
-<tr><th scope="row">Shipyard #17</th><td>under construction: 42% (504.0 of 1,200.0 t), +100.0 t/h, done at 18:10:00 UTC (in 5 min 48 s); slowed: short of ingots</td></tr>
-<tr><th scope="row">Refinery #18</th><td>under construction: 0% (&lt; 0.1 of 250.0 t), waiting for ingots; halted: no ingots</td></tr>
-<tr><th scope="row">Drill #12</th><td>being demolished; the slot frees at 18:05:00 UTC (in 48 s)</td></tr></tbody>
+<tr><th scope="row">Shipyard #19</th><td>being demolished; the slot frees at 2026-10-21 06:00:00 UTC (in 11 h 55 min)</td><td></td></tr>
+<tr><th scope="row">Drill #2</th><td>running</td><td><a href="/planets/7/demolish/2">Demolish…</a></td></tr>
+<tr><th scope="row">Refinery #3</th><td>slowed: short of ore, or ingot storage is full</td><td><a href="/planets/7/demolish/3">Demolish…</a></td></tr>
+<tr><th scope="row">Drill #4</th><td>halted: ore storage is full</td><td><a href="/planets/7/demolish/4">Demolish…</a></td></tr>
+<tr><th scope="row">Refinery #5</th><td>halted: no ore, or ingot storage is full</td><td><a href="/planets/7/demolish/5">Demolish…</a></td></tr>
+<tr><th scope="row">Shipyard #15</th><td>running</td><td>Cancel its ship builds first</td></tr>
+<tr><th scope="row">Shipyard #16</th><td>idle: no ships building</td><td><a href="/planets/7/demolish/16">Demolish…</a></td></tr>
+<tr><th scope="row">Drill #13</th><td>operational</td><td><a href="/planets/7/demolish/13">Demolish…</a></td></tr>
+<tr><th scope="row">Shipyard #17</th><td>under construction: 42% (504.0 of 1,200.0 t), +100.0 t/h, done at 18:10:00 UTC (in 5 min 48 s); slowed: short of ingots</td><td><a href="/planets/7/cancel-construction/17">Cancel construction…</a></td></tr>
+<tr><th scope="row">Refinery #18</th><td>under construction: 0% (&lt; 0.1 of 250.0 t), waiting for ingots; halted: no ingots</td><td><a href="/planets/7/cancel-construction/18">Cancel construction…</a></td></tr>
+<tr><th scope="row">Drill #12</th><td>being demolished; the slot frees at 18:05:00 UTC (in 48 s)</td><td></td></tr></tbody>
 </table>
+<h3>Build</h3>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="build_building">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/planets/7">
+<input type="hidden" name="planet_id" value="7">
+<p><label>
+<input type="radio" name="building_type" value="drill"> Drill: 150.0 t of ingots over 3 h (50.0 t/h) · mines 10.0 t of ore per hour</label></p>
+<p><label>
+<input type="radio" name="building_type" value="refinery"> Refinery: 250.0 t over 4 h (62.5 t/h) · turns 8.0 t of ore into 16.0 t of ingots per hour</label></p>
+<p><label>
+<input type="radio" name="building_type" value="shipyard"> Shipyard: 1,200.0 t over 12 h (100.0 t/h) · builds up to 3 ships at once</label></p>
+<p>Every slot is taken: demolish or cancel a building to free one.</p>
+<p><button type="submit" disabled>Build</button></p></form>
+<p>Ingots in storage: 5,000.0 t (0 t/h).</p>
+<p>A building takes a slot at once and draws ingots from storage until it's complete.</p>
 <h2>Shipyards</h2>
 <h3>Shipyard #19</h3>
 <table>
 <thead>
-<tr><th scope="col">Build</th><th scope="col">Ship</th><th scope="col">State</th></tr></thead>
+<tr><th scope="col">Build</th><th scope="col">Ship</th><th scope="col">State</th><th scope="col">Action</th></tr></thead>
 <tbody>
-<tr><th scope="row">build #24</th><td>Cargo Vessel</td><td>building: 30% (240.0 of 800.0 t), waiting for ingots; halted: no ingots</td></tr></tbody>
+<tr><th scope="row">build #24</th><td>Cargo Vessel</td><td>building: 30% (240.0 of 800.0 t), waiting for ingots; halted: no ingots</td><td><a href="/planets/7/cancel-build/24">Cancel…</a></td></tr></tbody>
 </table>
 <h3>Shipyard #15</h3>
 <table>
 <thead>
-<tr><th scope="col">Build</th><th scope="col">Ship</th><th scope="col">State</th></tr></thead>
+<tr><th scope="col">Build</th><th scope="col">Ship</th><th scope="col">State</th><th scope="col">Action</th></tr></thead>
 <tbody>
-<tr><th scope="row">build #20</th><td>Colony Ship</td><td>building: 30% (240.0 of 800.0 t), +80.0 t/h, done at 18:10:00 UTC (in 5 min 48 s)</td></tr>
-<tr><th scope="row">build #21</th><td>Cargo Vessel</td><td>waiting (1st in line)</td></tr>
-<tr><th scope="row">build #22</th><td>Cargo Vessel</td><td>building: 30% (240.0 of 800.0 t), +80.0 t/h, done at 18:10:00 UTC (in 5 min 48 s); slowed: short of ingots</td></tr>
-<tr><th scope="row">build #23</th><td>Colony Ship</td><td>waiting (2nd in line)</td></tr></tbody>
+<tr><th scope="row">build #20</th><td>Colony Ship</td><td>building: 30% (240.0 of 800.0 t), +80.0 t/h, done at 18:10:00 UTC (in 5 min 48 s)</td><td><a href="/planets/7/cancel-build/20">Cancel…</a></td></tr>
+<tr><th scope="row">build #21</th><td>Cargo Vessel</td><td>waiting (1st in line)</td><td><a href="/planets/7/cancel-build/21">Cancel…</a></td></tr>
+<tr><th scope="row">build #22</th><td>Cargo Vessel</td><td>building: 30% (240.0 of 800.0 t), +80.0 t/h, done at 18:10:00 UTC (in 5 min 48 s); slowed: short of ingots</td><td><a href="/planets/7/cancel-build/22">Cancel…</a></td></tr>
+<tr><th scope="row">build #23</th><td>Colony Ship</td><td>waiting (2nd in line)</td><td><a href="/planets/7/cancel-build/23">Cancel…</a></td></tr></tbody>
 </table>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="queue_ship">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/planets/7">
+<input type="hidden" name="shipyard_id" value="15">
+<p>Queue a ship:</p>
+<p><label>
+<input type="radio" name="ship_type" value="colony_ship"> Colony Ship: 800.0 t over 10 h · 10.0 u/h · carries nothing</label></p>
+<p><label>
+<input type="radio" name="ship_type" value="cargo_vessel"> Cargo Vessel: 300.0 t over 4 h · 15.0 u/h · carries 500.0 t</label></p>
+<p><button type="submit">Queue</button></p></form>
+<p>Up to 3 ships build at once; the rest wait their turn.</p>
 <h3>Shipyard #16</h3>
 <p>No ships building.</p>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="queue_ship">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/planets/7">
+<input type="hidden" name="shipyard_id" value="16">
+<p>Queue a ship:</p>
+<p><label>
+<input type="radio" name="ship_type" value="colony_ship"> Colony Ship: 800.0 t over 10 h · 10.0 u/h · carries nothing</label></p>
+<p><label>
+<input type="radio" name="ship_type" value="cargo_vessel"> Cargo Vessel: 300.0 t over 4 h · 15.0 u/h · carries 500.0 t</label></p>
+<p><button type="submit">Queue</button></p></form>
+<p>Up to 3 ships build at once; the rest wait their turn.</p>
 <h2>Your ships here</h2>
-<ul>
-<li>Colony Ship #31</li>
-<li>Cargo Vessel #30</li>
-<li>Cargo Vessel #33</li>
-</ul></body></html>
+<form method="post" action="/act">
+<input type="hidden" name="action" value="assemble_fleet">
+<input type="hidden" name="key" value="[key]">
+<input type="hidden" name="return_to" value="/planets/7">
+<input type="hidden" name="planet_id" value="7">
+<p><label>
+<input type="checkbox" name="ship" value="31"> Colony Ship #31 (carries nothing, 10.0 u/h)</label></p>
+<p><label>
+<input type="checkbox" name="ship" value="30"> Cargo Vessel #30 (carries 500.0 t, 15.0 u/h)</label></p>
+<p><label>
+<input type="checkbox" name="ship" value="33"> Cargo Vessel #33 (carries 500.0 t, 15.0 u/h)</label></p>
+<p>A fleet carries the total of its Cargo Vessels and flies at its slowest ship's speed.</p>
+<p>Cargo to load: <label>Iron ore 
+<input type="text" name="ore" size="10"> t</label> (1,234.5 t in storage) <label>Iron ingots 
+<input type="text" name="ingots" size="10"> t</label> (5,000.0 t in storage)</p>
+<p><button type="submit">Assemble fleet</button></p></form></body></html>

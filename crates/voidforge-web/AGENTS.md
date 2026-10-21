@@ -2,7 +2,7 @@
 
 A server-rendered HTML frontend, so people can test and evaluate the game in a browser. It logs players in through dex and calls the public API over HTTP like any other client. It serves on localhost:8081 locally.
 
-A binary over a library (`src/lib.rs`), so tests drive the router directly. P4.1 brought the login (D-057), P4.2 the API client and its messages (D-059), P4.3 the game's pages (D-060); P4.4 brings the forms. The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
+A binary over a library (`src/lib.rs`), so tests drive the router directly. P4.1 brought the login (D-057), P4.2 the API client and its messages (D-059), P4.3 the game's pages (D-060), P4.4 the command forms (D-061). The layering in [Project layering](../../docs/Voidforge%20Technical%20Plan.md#project-layering) is the authority, and the [root AGENTS.md](../../AGENTS.md) covers repository-wide rules.
 
 ## Allowed dependencies
 
@@ -19,18 +19,22 @@ A binary over a library (`src/lib.rs`), so tests drive the router directly. P4.1
 - `src/oidc.rs` is security code: endpoints only from discovery and on the issuer's origin, no redirects followed, CSPRNG state, nonce and verifier, and an ID token check at least as strict as the server's (D-046). Each check has a test that fails without it; keep it that way (D-057).
 - The ID token, the code, state, nonce, the verifier and the client secret never reach a page, a log, a URL the app builds or a `Debug`. The secret comes from `VOIDFORGE_WEB_CLIENT_SECRET` only, never a flag.
 - A login attempt is used once, and the session gets a new id at login. Logout is a POST.
-- The session store is bounded (D-057): an anonymous session lives 10 minutes, and a handler that changes a logged-in session calls `keep_expiry`, or the save cuts it to that default.
+- The session store is bounded (D-057): an anonymous session lives 10 minutes, and a handler that changes a logged-in session calls `keep_expiry`, or the save cuts it to that default. Its `save` only updates a stored session, never recreates one, so a logout is final against any request that loaded the session before it; a login clears the session's data after `cycle_id` and carries over only the one-shot banner (D-061).
+- No banner line may rest on an event being in a command's answer: commands emit none (D-028), and the answer's events are the re-solve's. Success words come from the form's fields, and an unload's from the fleet read after it.
 - Logging in joins the game: the first `/players/me` creates the account (D-047).
 - The API is reached only through `src/api.rs`'s `Api` (D-059): never hand-rolled HTTP. Authenticated methods take the session's token; `rules` takes none. Every call ends in a view or an `ApiError`, and nothing on the path panics.
 - A failed call is shown through `src/messages.rs`: phase4-ux §6.1's copy for every `ErrorCode`, matched with no wildcard arm, and the code beside it; the API's `message` is never shown. 401 ends the session; 429, 500, 503 and an unreachable or unexpected API are the retry page with the API's status (502 for the last two). `tests/fixtures/copy.json` is §6.1 and §6.2 extracted from dev-design's document by `tests/fixtures/extract_copy.py`: when the copy changes there, rerun it.
 - Every page reads the public `/rules` for the fast-rules line, beside its own reads and within its own 2 s bound; a failed read only drops the line. HEAD is 404 on every path, before any handler.
 - Every value a page shows is formatted by `src/format.rs`, on integers only, the one documented way (phase4-ux §3, D-060): never format a number in a page. Times are relative to the view's `as_of`, never the web's clock.
 - Every logged-in page starts through `routes::begin` and makes all its reads at once, with `/rules` and `/players/me`; the first failing read decides the page, through `routes::failed`. A planet number or a search the web can't use is refused before any call.
-- The pages render no form control until P4.4 wires its forms: never a form that posts nowhere, and no placeholder.
 - The frame's one-shot banner comes from the session's notice, taken (and the expiry kept) by the page that shows it; nothing in a URL sets it.
 - Tests that read the log go in `tests/logs.rs` (one global subscriber, one test at a time), so they hold under plain `cargo test` too.
-- Every form carries a fresh idempotency key in a hidden field, and posts to the web app, which sends one `POST /commands` and redirects back. A double submit runs once.
-- A rejected command shows its reason code at the top of the page.
+- Every form posts to `POST /act` with the rendered page's form key, its `return_to` and its `action` ([D-061](../../docs/decision-log.md#d-061-the-command-forms-the-sessions-form-keys-and-the-confirm-pages)). The web issues the keys (one per render, 16 CSPRNG bytes, the last 64 kept in the session) and refuses any key the session didn't issue before any call: that's the CSRF check, with SameSite=Lax. Never put a key in a link or a GET URL.
+- `POST /act` checks the login, then the key, then the web's own inputs (§6.3), then sends exactly one `POST /commands` with the key as `Idempotency-Key`, and redirects back with the outcome in the one-shot banner. The web never retries on its own: a retryable failure is the retry page, whose Try again re-posts the same fields and key; a 401 or an expired login sends nothing and never re-sends after the login.
+- A key is marked answered only for a 200 or a 422 (outcomes the host recorded). An answered key is still sent, and the banner adds "already submitted"; the API's replay (D-037) decides what happened.
+- A rejected command shows its copy and reason code at the top of the page (`Not done: … (code)`).
+- The four irreversible actions (cancel construction, demolish, cancel a ship build, Turn back) are links to their confirm pages, GETs that only read and render the real form with their own key.
+- `return_to` passes `routes::local_path`, or the web uses `/`: never an open redirect.
 
 ## Tests
 

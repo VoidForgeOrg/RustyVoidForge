@@ -433,6 +433,53 @@ pub fn ordinal(n: usize) -> String {
     format!("{n}{suffix}")
 }
 
+/// Grams in a tonne.
+const G_PER_T: i64 = 1_000_000;
+/// Milliseconds in an hour.
+const MS_PER_H: i64 = 3_600_000;
+
+/// Tonnes typed into a cargo field, as grams, exactly: digits and up to six decimals (`250`,
+/// `12.5`, `0.000001`, `.5`), never through a float (§5.3). A blank field reads 0 (P4.4's D3).
+/// None for anything else: a sign, a separator, a seventh decimal, or past i64 (§6.3).
+/// Surrounding spaces are ignored.
+#[must_use]
+pub fn parse_tonnes(text: &str) -> Option<i64> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(0);
+    }
+    let (whole, frac) = text.split_once('.').unwrap_or((text, ""));
+    let all_digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if (whole.is_empty() && frac.is_empty())
+        || (text.contains('.') && frac.is_empty())
+        || frac.len() > 6
+        || !all_digits(whole)
+        || !all_digits(frac)
+    {
+        return None;
+    }
+    let whole: i64 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().ok()?
+    };
+    let frac: i64 = format!("{frac:0<6}").parse().ok()?;
+    whole.checked_mul(G_PER_T)?.checked_add(frac)
+}
+
+/// What a cost spread over a duration draws per hour, unsigned and rounded down to 0.1:
+/// `50.0 t/h` (§5.7: cost ÷ build time, as the Game Design states it). None for a duration that
+/// isn't positive or a negative cost, which valid rules never have.
+#[must_use]
+pub fn per_hour(cost_g: i64, ms: i64) -> Option<String> {
+    if ms <= 0 || cost_g < 0 {
+        return None;
+    }
+    let g_per_h = i128::from(cost_g) * i128::from(MS_PER_H) / i128::from(ms);
+    let t = u64::try_from(g_per_h / i128::from(G_PER_TENTH_T)).ok()?;
+    Some(format!("{} t/h", tenths(t)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -835,5 +882,62 @@ mod tests {
         ] {
             assert_eq!(flow(status, of), s, "{of:?} {status:?}");
         }
+    }
+
+    #[test]
+    fn cargo_tonnes_parse_exactly() {
+        for (text, g) in [
+            ("", 0),
+            ("  ", 0),
+            ("0", 0),
+            ("250", 250_000_000),
+            ("12.5", 12_500_000),
+            ("0.000001", 1),
+            (".5", 500_000),
+            (" 7 ", 7_000_000),
+            ("9223372036854.775807", i64::MAX),
+        ] {
+            assert_eq!(parse_tonnes(text), Some(g), "{text:?}");
+        }
+        for text in [
+            "-1",
+            "\u{2212}1",
+            "+1",
+            "1,500",
+            "12.",
+            ".",
+            "1.0000001",
+            "1e3",
+            "abc",
+            "1 2",
+            "9223372036854.775808",
+        ] {
+            assert_eq!(parse_tonnes(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_cost_over_a_time_is_a_rate_rounded_down() {
+        assert_eq!(
+            per_hour(150_000_000, 10_800_000).as_deref(),
+            Some("50.0 t/h")
+        );
+        assert_eq!(
+            per_hour(250_000_000, 14_400_000).as_deref(),
+            Some("62.5 t/h")
+        );
+        assert_eq!(
+            per_hour(1_200_000_000, 43_200_000).as_deref(),
+            Some("100.0 t/h")
+        );
+        // 1 t over 7 h is 0.142… t/h: down to 0.1.
+        assert_eq!(per_hour(1_000_000, 25_200_000).as_deref(), Some("0.1 t/h"));
+        // v0-fast's Shipyard: 1,200 t over 12 s.
+        assert_eq!(
+            per_hour(1_200_000_000, 12_000).as_deref(),
+            Some("360,000.0 t/h")
+        );
+        assert_eq!(per_hour(1, 0), None);
+        assert_eq!(per_hour(-1, 1), None);
     }
 }
