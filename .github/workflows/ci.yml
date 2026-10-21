@@ -1,6 +1,7 @@
 # CI baseline (Technical Plan P0.3), plus the database job (P2.1, D-034) and the e2e job (P3.6,
-# D-052). Each job is a required check on main once the ruleset names it; database waits on the
-# owner (D-034), and e2e is must-pass by team discipline until the ruleset names it.
+# D-052). All six are required checks on main: the ruleset "main: required CI checks" names lint,
+# supply-chain, test, determinism, database and e2e (read 2026-10-21 for P4.5, D-062). The e2e job
+# includes the smoke test (`just smoke`'s web walk, P4.5).
 # Every command here also runs locally from the repository root; see AGENTS.md, Commands.
 # Action and tool versions are pinned; see docs/versions.md and decision log D-007.
 name: CI

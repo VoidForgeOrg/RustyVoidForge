@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # The end-to-end scenario (Technical Plan P3.6; decision log D-052), run by the CI e2e job and by
 # `just e2e`, against the compose stack's Postgres and dex (the CI dex config: password grant on).
+# With --smoke (`just smoke`, P4.5, D-062) it runs only the web walk in step 5: the smoke test is
+# the same walk CI runs inside the whole scenario, never a second copy.
 #
 #   1. checks dex's password grant, and lists leftover e2e databases;
 #   2. builds voidforge-server, voidforge-bots and voidforge-web;
@@ -19,6 +21,7 @@
 #
 # E2E_ISSUER (default http://localhost:5556/dex) names the dex to use. Logs go to E2E_LOG_DIR (default target/e2e/<run>): serve.log, bots.log, seed.log,
 # device-login.log, web-login.log and web.log.
+# Usage: e2e.sh [--smoke]
 # Exit codes: 0 passed; 1 the scenario failed, or serve didn't stop cleanly; 2 usage;
 # 3 the stack isn't ready (dex without the password grant, Postgres unreachable, serve not ready).
 set -euo pipefail
@@ -37,6 +40,12 @@ log_dir="${E2E_LOG_DIR:-target/e2e/$run}"
 psql=(docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -X -q -v ON_ERROR_STOP=1 -At -d postgres)
 sql() { "${psql[@]}" -c "$1" < /dev/null; }
 say() { echo "e2e: $*" >&2; }
+smoke=0
+case "${1:-}" in
+    --smoke) smoke=1 ;;
+    "") ;;
+    *) say "usage: e2e.sh [--smoke]"; exit 2 ;;
+esac
 drop_hint() { say "  docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -d postgres -c 'DROP DATABASE \"$1\"'"; }
 
 case "$db" in
@@ -44,6 +53,9 @@ case "$db" in
     *) say "refusing database $db"; exit 2 ;;
 esac
 mkdir -p "$log_dir"
+# A reused E2E_LOG_DIR may hold an earlier run's walk log, whose timing line would satisfy the
+# walk-ran check below without this run walking at all (P4.5 QA's F1).
+rm -f "$log_dir/web-login.log"
 
 # 1. The stack: dex's password grant for the static users, as the bots' public client.
 grant=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
@@ -127,15 +139,20 @@ if [ -z "$addr" ] || ! curl -sf -o /dev/null "http://$addr/openapi.json"; then
 fi
 say "serve is ready on $addr (pid $serve_pid)"
 
-# 5. The bots.
+# 5. The bots (skipped by --smoke).
 set +e
-"$bots" e2e --api "http://$addr" --issuer "$issuer" --run "$run" 2>&1 | tee "$log_dir/bots.log"
-bots_code=${PIPESTATUS[0]}
+if [ "$smoke" = 1 ]; then
+    say "smoke: the bots' scenario and the terminal login are skipped; the web walk runs alone"
+    bots_code=0
+else
+    "$bots" e2e --api "http://$addr" --issuer "$issuer" --run "$run" 2>&1 | tee "$log_dir/bots.log"
+    bots_code=${PIPESTATUS[0]}
+fi
 # 5b. The terminal login (P3.7, D-053): bob logs in through dex's device code flow, approved by
 # driving dex's own pages, then plays a little with the saved login. It runs after the scenario,
 # so it can't disturb it.
 device_code=0
-if [ "$bots_code" = 0 ]; then
+if [ "$bots_code" = 0 ] && [ "$smoke" = 0 ]; then
     python3 .github/scripts/device-login.py --bots "$bots" --api "http://$addr" --issuer "$issuer" \
         2>&1 | tee "$log_dir/device-login.log"
     device_code=${PIPESTATUS[0]}
@@ -181,7 +198,19 @@ if [ "$bots_code" = 0 ] && [ "$device_code" != 0 ]; then
     say "FAILED: the scenario passed, but the terminal login check exited $device_code; its log is $log_dir/device-login.log"
     exit 1
 fi
+# The walk must have run to its end: web-login.py prints its timing line only once steps 1 to 9
+# (login, pages, the forms' MVP loop, replay, logout) have all passed (P4.5, D-062), so a run that
+# skipped it, or stopped short with exit 0, can't pass.
+if [ "$bots_code" = 0 ] && [ "$web_code" = 0 ] \
+    && ! grep -q '^ok: the smoke walk took ' "$log_dir/web-login.log" 2> /dev/null; then
+    say "FAILED: the web walk didn't run to its end (no timing line in $log_dir/web-login.log)"
+    exit 1
+fi
 if [ "$bots_code" = 0 ] && [ "$web_code" != 0 ]; then
+    if [ "$smoke" = 1 ]; then
+        say "FAILED (smoke): the web walk exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
+        exit 1
+    fi
     say "FAILED: the scenario passed, but the web login check exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
     exit 1
 fi
@@ -194,4 +223,8 @@ if [ "$serve_code" != 0 ]; then
     tail -n 40 "$log_dir/serve.log" >&2
     exit 1
 fi
-say "PASSED: the scenario, the terminal login and the web login passed, and serve stopped cleanly"
+if [ "$smoke" = 1 ]; then
+    say "PASSED (smoke): the web walk passed, and serve stopped cleanly; $(grep '^ok: the smoke walk took ' "$log_dir/web-login.log")"
+else
+    say "PASSED: the scenario, the terminal login and the web login passed, and serve stopped cleanly"
+fi
