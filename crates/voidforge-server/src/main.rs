@@ -28,6 +28,12 @@ const SEED_EXIT_CODES: &str = "Exit codes: 0 seeded, 2 usage error, 3 refused (t
     not empty, before anything is migrated; the universe is too large; or the epoch is out of \
     range), 4 input or database error, 5 telemetry failed.";
 
+const HEALTH_EXIT_CODES: &str = "Exit codes: 0 healthy (a 200 with a JSON body within 2 s), 1 \
+    not healthy, 2 usage error.";
+
+/// How long `health` waits for the whole answer.
+const HEALTH_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
 const SERVE_EXIT_CODES: &str = "Exit codes: 0 stopped cleanly (the final snapshot is at the log \
     head), 2 usage error (a setting out of range), 3 refused (no universe, no recorded epoch, an \
     epoch out of range, another rules version, or another serve already holds the universe), 4 input or database error (connecting, \
@@ -74,6 +80,16 @@ enum Command {
     /// and on SIGINT or SIGTERM drains and stops with a final snapshot.
     #[command(after_help = SERVE_EXIT_CODES)]
     Serve(ServeArgs),
+    /// For a container's healthcheck (P5.2, D-065): GET `--url` (serve's /openapi.json), bounded
+    /// at 2 s; exit 0 only on a 200 whose body is JSON, otherwise 1 with the reason on stderr. It
+    /// starts no telemetry, so a check every few seconds exports nothing and never waits on a
+    /// collector.
+    #[command(after_help = HEALTH_EXIT_CODES)]
+    Health {
+        /// What to GET, for example http://127.0.0.1:8080/openapi.json.
+        #[arg(long)]
+        url: String,
+    },
     /// For `just trace-check` (D-064): records one `telemetry_check` span, prints `trace_id=<hex>`
     /// on stdout when exporting, and exits; 5 if the span can't be delivered. Reads nothing else.
     #[command(hide = true)]
@@ -113,6 +129,9 @@ struct Seeded {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Command::Health { url } = &cli.command {
+        return health(url);
+    }
     let telemetry = match voidforge_telemetry::init(SERVICE) {
         Ok(telemetry) => telemetry,
         Err(error) => {
@@ -141,6 +160,7 @@ fn main() -> ExitCode {
             let exit = span.in_scope(|| serve::run(&args));
             (span, exit as u8)
         }
+        Command::Health { .. } => unreachable!("health returned before telemetry started"),
         Command::TelemetryCheck => {
             let span = tracing::info_span!("telemetry_check", binary = SERVICE);
             span.in_scope(|| tracing::info!("telemetry check"));
@@ -306,4 +326,37 @@ fn bootstrap(
         })?;
     out.state_hash = Some(state_hash);
     Ok(())
+}
+
+/// `health`: GET `url` once, bounded at [`HEALTH_BOUND`] (P5.2, D-065).
+fn health(url: &str) -> ExitCode {
+    match check_health(url) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(why) => {
+            eprintln!("{SERVICE} health: {url}: {why}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn check_health(url: &str) -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    runtime.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(HEALTH_BOUND)
+            .build()
+            .map_err(|e| e.to_string())?;
+        let response = client.get(url).send().await.map_err(|e| e.to_string())?;
+        let status = response.status();
+        if status != reqwest::StatusCode::OK {
+            return Err(format!("answered {status}"));
+        }
+        let body = response.bytes().await.map_err(|e| e.to_string())?;
+        serde_json::from_slice::<serde::de::IgnoredAny>(&body)
+            .map(|_| ())
+            .map_err(|e| format!("the body isn't JSON: {e}"))
+    })
 }

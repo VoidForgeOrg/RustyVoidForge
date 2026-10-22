@@ -54,11 +54,20 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 | Docker Compose | 5.6.0 verified (needs `up --wait`, Compose 2.17 or later) | Not pinned; installed per machine |
 | just | 1.59.0 verified | Not pinned; installed per machine |
 
+## Images
+
+Pinned in [`dockerfiles/Dockerfile`](../dockerfiles/Dockerfile) by tag and multi-platform digest (an OCI index: amd64 and arm64 both resolve); `.github/scripts/check-images.py --static` refuses a base without a digest, and a builder that isn't the toolchain above ([D-065](decision-log.md#d-065-container-images-serve-as-pid-1-and-the-watched-lock)).
+
+| Item | Version | Pin |
+| --- | --- | --- |
+| Build base | Rust 1.99.1, Debian trixie slim | `rust:1.99.1-slim-trixie@sha256:aab42391a986424e22d6a3ec14f37bc6dd3dacff4d457ca7cccd781e02297cc6` |
+| Runtime base | distroless cc, Debian 13, nonroot (65532:65532) | `gcr.io/distroless/cc-debian13:nonroot@sha256:83b9b50586253821cf63ffcec87d3d94265a093ad30da232039af962dd8f4edf` |
+| cargo-chef | 0.1.78, build stage only | `cargo install cargo-chef --locked --version 0.1.78`; never in a runtime image |
+| Docker | 29.5.2 verified locally (colima; the legacy builder, no buildx); the runner image's Docker in CI | Not pinned; installed per machine |
+
 ## Tools: planned, not introduced
 
-| Tool | Introduced by |
-| --- | --- |
-| cargo-chef | P5.2 |
+None.
 
 ## Crate dependencies
 

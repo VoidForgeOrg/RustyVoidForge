@@ -1,0 +1,76 @@
+# The server and web images under compose (Technical Plan P5.2; decision log D-065), beside the
+# backing services of deploy/compose.yaml, never inside them. This is its own project,
+# `voidforge-images`: compose never sees, recreates or orphans the `voidforge` project's postgres,
+# dex and otel-lgtm containers, and nothing here names them. It has no database, no volumes and no
+# published ports. Every command names the project with -p: an inherited COMPOSE_PROJECT_NAME
+# outranks `name:` (R1-1).
+#
+# Both services use host networking (Architectural Design, Local development): the issuer URL means
+# the same thing in the browser, on the host and in these containers, and they reach Postgres, dex
+# and the collector through their published localhost ports, as a binary run with cargo does.
+#
+# VOIDFORGE_DATABASE_URL is required and has no default: name a scratch database, never `voidforge`
+# (e2e.sh --images creates and drops its own voidforge_e2e_* database). `just images-up` starts both
+# against one; the CI `images` job brings them up healthy and takes them down.
+name: voidforge-images
+
+services:
+  server:
+    # Built only by `just images` (or CI), which labels the build with its commit: compose never
+    # builds, so no image here is "+unknown" (R1-5). Every recipe passes --no-build.
+    image: voidforge-server:local
+    network_mode: host
+    command:
+      - serve
+      - --rules=/etc/voidforge/rules/${VOIDFORGE_RULES_FILE:-v0.toml}
+      - --bind=127.0.0.1:${VOIDFORGE_PORT:-8080}
+    environment:
+      VOIDFORGE_DATABASE_URL: ${VOIDFORGE_DATABASE_URL:?name a scratch database; never voidforge}
+      VOIDFORGE_ISSUER: ${VOIDFORGE_ISSUER:-http://localhost:5556/dex}
+      VOIDFORGE_LEADERBOARD_SECS: ${VOIDFORGE_LEADERBOARD_SECS:-60}
+      # Empty means no export (D-016); `just images-up` names the stack's collector.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    # docker stop sends SIGTERM to serve itself (exec form, PID 1), then SIGKILL after this long:
+    # longer than every bounded step of a clean stop (the drain, at most 60 s by flag but 5 by
+    # default, the 10 s join and the 5 s check), so a clean stop is never cut (D-050).
+    stop_grace_period: 40s
+    healthcheck:
+      # Healthy once serve answers its contract: after recovery, which may take a long time on a
+      # big log, so the start period is long and only failures after it count (P3.4s QA's I2).
+      test:
+        - CMD
+        - /usr/local/bin/voidforge-server
+        - health
+        - --url=http://127.0.0.1:${VOIDFORGE_PORT:-8080}/openapi.json
+      interval: 5s
+      timeout: 4s
+      retries: 3
+      start_period: 300s
+      start_interval: 1s
+
+  web:
+    image: voidforge-web:local
+    network_mode: host
+    environment:
+      VOIDFORGE_WEB_ISSUER: ${VOIDFORGE_ISSUER:-http://localhost:5556/dex}
+      VOIDFORGE_WEB_API_URL: http://127.0.0.1:${VOIDFORGE_PORT:-8080}
+      # dex registers the redirect by exact string: http://localhost:8081/callback.
+      VOIDFORGE_WEB_BIND: 127.0.0.1:8081
+      VOIDFORGE_WEB_CLIENT_SECRET: ${VOIDFORGE_WEB_CLIENT_SECRET:?the web client secret from deploy/dex/config.yaml}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/voidforge-web
+        - --health-check=http://127.0.0.1:8081/
+      interval: 5s
+      timeout: 4s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
+    depends_on:
+      server:
+        condition: service_healthy

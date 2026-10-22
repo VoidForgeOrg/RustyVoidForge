@@ -356,7 +356,27 @@ pub enum LockError {
 /// the connection closes, whether this value is dropped or the process dies.
 #[derive(Debug)]
 pub struct UniverseLock {
-    _connection: sqlx::PgConnection,
+    connection: sqlx::PgConnection,
+}
+
+impl UniverseLock {
+    /// One watch of the lock's connection (P5.2, D-065; the P3.4s QA's I6): a `pg_sleep` of
+    /// `secs` on it, so a terminated backend or a closed socket fails at once rather than at the
+    /// next poll. The caller bounds it, since a silent network never answers. The backend checks
+    /// for a closed client during the sleep ([`lock_universe`] sets the interval), so a dead
+    /// process's lock goes at once.
+    ///
+    /// # Errors
+    /// The connection failed: the lock is gone.
+    pub async fn watch(&mut self, secs: f64) -> Result<(), sqlx::Error> {
+        // No parameters worth a type check and no rows read: the query macro's offline metadata
+        // would add nothing.
+        sqlx::query("SELECT pg_sleep($1)")
+            .bind(secs)
+            .execute(&mut self.connection)
+            .await
+            .map(|_| ())
+    }
 }
 
 /// Takes the universe at `url` for one serving process, without waiting: a second `serve` on the
@@ -365,8 +385,15 @@ pub struct UniverseLock {
 /// # Errors
 /// [`LockError::Held`] if another session holds it; otherwise the connection failure.
 pub async fn lock_universe(url: &str) -> Result<UniverseLock, LockError> {
-    use sqlx::Connection as _;
+    use sqlx::{ConnectOptions as _, Connection as _};
     let options: sqlx::postgres::PgConnectOptions = url.parse().map_err(|_| LockError::Url)?;
+    // The watch keeps a `pg_sleep` in flight, which sqlx would log as a slow statement each time.
+    // While that sleep runs, Postgres would notice a closed client only when it ends, so the lock
+    // would outlive a dead serve by up to the sleep and refuse its restart: the backend checks the
+    // socket every 10 ms instead (Linux servers; the compose and CI Postgres are).
+    let options = options
+        .disable_statement_logging()
+        .options([("client_connection_check_interval", "10ms")]);
     let mut connection = sqlx::PgConnection::connect_with(&options).await?;
     let taken = sqlx::query_scalar!(
         r#"SELECT pg_try_advisory_lock($1) AS "taken!""#,
@@ -377,7 +404,5 @@ pub async fn lock_universe(url: &str) -> Result<UniverseLock, LockError> {
     if !taken {
         return Err(LockError::Held);
     }
-    Ok(UniverseLock {
-        _connection: connection,
-    })
+    Ok(UniverseLock { connection })
 }

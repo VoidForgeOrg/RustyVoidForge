@@ -36,7 +36,11 @@ does.
   12 unreachable:  the web app started against a closed port: a logged-in Home is the retry
                    page at 502 with "Can't reach the game server", never a trace (P4.2)
 
-Usage: web-login.py --web <voidforge-web> --api <url> --issuer <dex issuer> --log <file>
+Usage: web-login.py (--web <voidforge-web> | --web-cmd <command>) --api <url> --issuer <dex issuer> --log <file>
+  --web-cmd runs the web app through a command prefix, split as a shell would, for example the image
+  (P5.2, D-065): --web-cmd 'docker run --rm -i --network host -e VOIDFORGE_WEB_CLIENT_SECRET
+  voidforge-web:local'. Only `docker run` attached relays the stop's SIGTERM and returns the
+  container's own exit code; `docker compose run` and `up` don't.
 Exit codes: 0 every check passed; 1 a check failed; 2 the checks couldn't run.
 """
 import argparse
@@ -45,6 +49,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -194,7 +199,19 @@ def listeners():
     return found
 
 
-def start_web(argv, env, log):
+# After the walk stops its own web, how long start_web waits for the port to be free before its
+# pre-check (P5.2, D-065, T2): on macOS, colima's forward of a stopped container's port lingers for
+# up to ~3 s. The wait only waits; the pre-check after it is unchanged.
+FREE_WAIT_SECONDS = 10
+# With --web-cmd on macOS, the receipt names the bind inside colima's VM, and the Mac's side of the
+# port is colima's forward, which appears ~20-30 ms later (measured, D-065): until then a connect is
+# refused. How long start_web waits, only connecting, for the forward after the receipt. A known
+# limit of colima, recorded in D-065: in that gap the receipt proves the bind in the VM, not on the
+# Mac. Linux (CI, the build machine) has no forward and no gap.
+FORWARD_WAIT_SECONDS = 5
+
+
+def start_web(argv, env, log, after_own_child=False, forwarded=False):
     """Starts voidforge-web on WEB's port and returns it once it says so itself (R2-G1, R1-G2).
 
     It refuses when something already listens there: the walk would log in to and post forms to
@@ -202,8 +219,16 @@ def start_web(argv, env, log):
     stops or replaces it. Then it is ready only on the child's own receipt, the line it prints
     after a successful bind, read from its own stdout while it is alive; no request is sent
     before. A child that lost the port between the check and its bind exits, and is refused
-    with its log's tail. The child's stdout and stderr both go to `log`, as before."""
+    with its log's tail. The child's stdout and stderr both go to `log`, as before.
+
+    `after_own_child` (T2, D-065): the walk has just stopped its own web on this port, so it first
+    waits up to FREE_WAIT_SECONDS for the port to be free, only connecting, never sending. Then the
+    same pre-check runs and still refuses anything listening. The first start never waits."""
     port = urllib.parse.urlsplit(WEB).port
+    if after_own_child:
+        deadline = time.monotonic() + FREE_WAIT_SECONDS
+        while listeners() and time.monotonic() < deadline:
+            time.sleep(0.2)
     taken = listeners()
     if taken:
         raise RuntimeError("something already listens on localhost:%d (%s); the walk won't use another app. "
@@ -231,15 +256,42 @@ def start_web(argv, env, log):
         if line is None:
             break
         if line == receipt and proc.poll() is None:
+            if forwarded and not forward_ready(port, proc):
+                break
             return proc
-    if proc.poll() is None:
-        proc.kill()
-    proc.wait()
+    stop_child(proc)
     log.flush()
     with open(log.name, encoding="utf-8", errors="replace") as f:
         tail = f.read()[-600:]
     raise RuntimeError("voidforge-web didn't say %r within %d s (exit %s); its log %s ends: %s"
                        % (receipt, READY_SECONDS, proc.returncode, log.name, tail))
+
+
+def stop_child(proc):
+    """Stops a child the walk won't use: SIGTERM first, which `docker run` relays to its container
+    (SIGKILL to the CLI would leave the container running, holding the port: P5.2's table found
+    one), then SIGKILL after 15 s."""
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    proc.wait()
+
+
+def forward_ready(port, proc):
+    """After a --web-cmd child's receipt: waits, bounded, until 127.0.0.1:port accepts a connection
+    (colima's forward of the VM's port), only connecting, never sending. False if the child exits or
+    the wait ends first."""
+    deadline = time.monotonic() + FORWARD_WAIT_SECONDS
+    while time.monotonic() < deadline and proc.poll() is None:
+        try:
+            socket.create_connection(("127.0.0.1", port), 1).close()
+            return True
+        except OSError:
+            time.sleep(0.01)
+    return False
 
 
 def start_login(web, dex_origin):
@@ -254,7 +306,8 @@ def run(args):
     origin = re.match(r"https?://[^/]+", issuer).group(0)
     env = dict(os.environ, VOIDFORGE_WEB_CLIENT_SECRET=SECRET)
     log = open(args.log, "w")
-    proc = start_web([args.web, "--issuer", issuer, "--api-url", args.api], env, log)
+    proc = start_web(web_argv(args) + ["--issuer", issuer, "--api-url", args.api], env, log,
+                     forwarded=bool(args.web_cmd))
     secrets_seen = []
     try:
         web, dex = Browser(), Browser()
@@ -638,7 +691,8 @@ def unreachable(args, issuer, origin, env, secrets_seen):
         s.bind(("127.0.0.1", 0))
         closed = "http://127.0.0.1:%d" % s.getsockname()[1]
     log = open(args.log + ".unreachable", "w")
-    proc = start_web([args.web, "--issuer", issuer, "--api-url", closed], env, log)
+    proc = start_web(web_argv(args) + ["--issuer", issuer, "--api-url", closed], env, log,
+                     after_own_child=True, forwarded=bool(args.web_cmd))
     try:
         web, dex = Browser(), Browser()
         location, _ = start_login(web, origin)
@@ -664,9 +718,16 @@ def unreachable(args, issuer, origin, env, secrets_seen):
     return web.pages
 
 
+def web_argv(args):
+    """The web app's command: the binary, or --web-cmd split as a shell would."""
+    return shlex.split(args.web_cmd) if args.web_cmd else [args.web]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--web", required=True)
+    web = parser.add_mutually_exclusive_group(required=True)
+    web.add_argument("--web")
+    web.add_argument("--web-cmd")
     parser.add_argument("--api", required=True)
     parser.add_argument("--issuer", required=True)
     parser.add_argument("--log", required=True)

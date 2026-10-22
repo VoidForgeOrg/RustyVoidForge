@@ -6,7 +6,8 @@
 //! (D-057). Sessions are in memory, so a restart logs everyone out; nothing else is lost.
 //!
 //! Exit codes: 0 after a clean stop; 1 when it can't start (configuration, discovery, the
-//! address) or the drain timed out; 2 for a bad command line (clap's).
+//! address) or the drain timed out; 2 for a bad command line (clap's). `--health-check <url>`
+//! (P5.2, D-065), a container's healthcheck: 0 on a 200 within 2 s, otherwise 1.
 
 use std::future::IntoFuture;
 use std::process::ExitCode;
@@ -24,8 +25,14 @@ const SERVICE: &str = "voidforge-web";
 /// How long in-flight requests may finish after a stop signal.
 const DRAIN: Duration = Duration::from_secs(5);
 
+/// How long `--health-check` waits for the whole answer.
+const HEALTH_BOUND: Duration = Duration::from_secs(2);
+
 fn main() -> ExitCode {
     let args = Args::parse();
+    if let Some(url) = &args.health_check {
+        return health(url);
+    }
     let telemetry = match voidforge_telemetry::init_quieting(SERVICE, voidforge_web::store::QUIET) {
         Ok(telemetry) => telemetry,
         Err(error) => {
@@ -137,4 +144,37 @@ fn run(args: Args) -> ExitCode {
     });
     runtime.shutdown_timeout(Duration::from_secs(1));
     code
+}
+
+/// `--health-check`: GET `url` once, bounded at [`HEALTH_BOUND`] (P5.2, D-065).
+fn health(url: &str) -> ExitCode {
+    let checked = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))
+        .and_then(|runtime| {
+            runtime.block_on(async {
+                let client = reqwest::Client::builder()
+                    .timeout(HEALTH_BOUND)
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                let response = client.get(url).send().await.map_err(|e| e.to_string())?;
+                let status = response.status();
+                // The whole body, within the same bound.
+                response.bytes().await.map_err(|e| e.to_string())?;
+                if status == reqwest::StatusCode::OK {
+                    Ok(())
+                } else {
+                    Err(format!("answered {status}"))
+                }
+            })
+        });
+    match checked {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(why) => {
+            eprintln!("{SERVICE} health: {url}: {why}");
+            ExitCode::FAILURE
+        }
+    }
 }

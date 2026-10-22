@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression cases for web-login.py's start (Phase 4 gate, R2-G1 and R1-G2).
+"""Regression cases for web-login.py's start (Phase 4 gate, R2-G1 and R1-G2; P5.2's wait, D-065).
 
 The walk must only ever talk to the voidforge-web it started. Each case points the walk's WEB at an
 ephemeral port and starts a stand-in child, a small Python server that waits, then binds and prints
@@ -26,18 +26,24 @@ import urllib.request
 CHILD = r'''
 import http.server, signal, socket, sys, time
 bind, delay, receipt = sys.argv[sys.argv.index("--bind") + 1], float(sys.argv[1]), sys.argv[2]
+mode = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else ""
 host, port = bind.rsplit(":", 1)
 time.sleep(delay)  # the issuer's discovery, before the bind
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+
+def get(self):
+    self.send_response(200)
+    self.end_headers()
+    self.wfile.write(b"child")
+
 try:
     server = http.server.HTTPServer((host, int(port)), type("H", (http.server.BaseHTTPRequestHandler,), {
-        "do_GET": lambda self: (self.send_response(200), self.end_headers(), self.wfile.write(b"child")),
-        "log_message": lambda self, *a: None}))
+        "do_GET": get, "log_message": lambda self, *a: None}))
 except OSError as e:
     print("voidforge-web: listening on %s: %s" % (bind, e), file=sys.stderr)
     sys.exit(1)
-signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
 print(receipt.replace("BIND", bind), flush=True)
-if sys.argv[3:4] == ["exit"]:
+if mode == "exit":
     sys.exit(0)  # serving, then gone at once
 server.serve_forever()
 '''
@@ -102,13 +108,13 @@ with open(child, "w") as f:
 RECEIPT = "voidforge-web: serving on http://BIND"
 
 
-def start(walk, port, delay=0.5, receipt=RECEIPT, then=()):
+def start(walk, port, delay=0.5, receipt=RECEIPT, then=(), after_own_child=False, forwarded=False):
     """start_web with the stand-in child; returns (the process or None, the refusal or None)."""
     walk.WEB = "http://localhost:%d" % port
     log = open(os.path.join(work, "web-%d.log" % port), "w")
     try:
         argv = [sys.executable, child, str(delay), receipt, *then]
-        return walk.start_web(argv, dict(os.environ), log), None
+        return walk.start_web(argv, dict(os.environ), log, after_own_child=after_own_child, forwarded=forwarded), None
     except RuntimeError as e:
         return None, str(e)
 
@@ -163,8 +169,10 @@ def main():
     check = walk.listeners
 
     def then_taken():
+        # Once: a mutant that calls the check again must meet the same app, not crash on its port.
         found = check()
-        taken.append(StandIn("127.0.0.1", port=port))
+        if not taken:
+            taken.append(StandIn("127.0.0.1", port=port))
         return found
 
     walk.listeners = then_taken
@@ -206,7 +214,8 @@ def main():
 
         def then_v6():
             found = check()
-            late.append(StandIn("::1", socket.AF_INET6, port=port))
+            if not late:
+                late.append(StandIn("::1", socket.AF_INET6, port=port))
             return found
 
         walk.listeners = then_v6
@@ -240,6 +249,50 @@ def main():
         if proc is not None:
             body = urllib.request.urlopen(walk.WEB + "/", timeout=5).read()
             expect("a free port: the first request reaches the walk's own child", body == b"child", repr(body))
+    finally:
+        stop(proc)
+
+    # 7. T2 (P5.2, D-065): after the walk stopped its own web, the port may still be held for a
+    # moment (colima's forward of a stopped container, up to ~3 s). start_web waits for it to be
+    # free, only connecting, then starts. The lingering listener here goes after 0.6 s.
+    walk.FREE_WAIT_SECONDS = 2
+    lingering = StandIn("127.0.0.1")
+    port = lingering.port
+    threading.Timer(0.6, lingering.shutdown).start()
+    threading.Timer(0.6, lingering.server_close).start()
+    proc, refusal = start(walk, port, after_own_child=True)
+    try:
+        expect("after its own web, a port freed within the wait: the walk's child is ready",
+               proc is not None, repr(refusal))
+        expect("after its own web, a port freed within the wait: the lingering app received zero requests",
+               not lingering.requests_seen, repr(lingering.requests_seen))
+    finally:
+        stop(proc)
+
+    # 8. The wait only waits: a listener still there after it is refused by the same pre-check,
+    # with zero requests, and only after the wait.
+    other = StandIn("127.0.0.1")
+    started = time.monotonic()
+    refused("after its own web, a listener that stays", walk, other.port, other, "already listens on localhost",
+            after_own_child=True)
+    expect("after its own web, a listener that stays: refused after the wait, not before",
+           time.monotonic() - started >= walk.FREE_WAIT_SECONDS, "%.2f s" % (time.monotonic() - started))
+    other.shutdown()
+
+    # 9. The first start never waits: another app there is refused at once.
+    other = StandIn("127.0.0.1")
+    started = time.monotonic()
+    refused("the first start, a listener there", walk, other.port, other, "already listens on localhost")
+    expect("the first start, a listener there: refused at once, without the wait",
+           time.monotonic() - started < 1, "%.2f s" % (time.monotonic() - started))
+    other.shutdown()
+
+    # 10. --web-cmd's path (D-065): after the receipt, the walk waits, only connecting, until the
+    # port accepts (colima's forward on macOS); with its own child there, it's ready.
+    port = free_port()
+    proc, refusal = start(walk, port, forwarded=True)
+    try:
+        expect("--web-cmd's path, the walk's own child: ready after the forward wait", proc is not None, repr(refusal))
     finally:
         stop(proc)
 

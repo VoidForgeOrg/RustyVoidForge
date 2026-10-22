@@ -200,6 +200,39 @@ struct Serve {
 
 /// Starts `serve` and waits (bounded) for its `ready:` line.
 fn serve(url: &str, issuer: &str, extra: &[&str]) -> Serve {
+    wait_ready(spawn_serve(url, issuer, extra, &[]))
+}
+
+/// Waits (bounded) for a spawned `serve`'s `ready:` line, and fills in its address.
+fn wait_ready((mut s, rx): (Serve, mpsc::Receiver<String>)) -> Serve {
+    let ready = loop {
+        match rx.recv_timeout(PATIENCE) {
+            Ok(line) if line.starts_with("ready: ") => break line,
+            Ok(_) => {}
+            Err(_) => {
+                let _ = s.child.kill();
+                let status = s.child.wait().unwrap();
+                panic!("no ready line ({status}); stderr:\n{}", s.stderr());
+            }
+        }
+    };
+    s.addr = ready
+        .strip_prefix("ready: listening on ")
+        .and_then(|r| r.split(',').next())
+        .unwrap()
+        .to_owned();
+    s.ready = ready;
+    s
+}
+
+/// Starts `serve` with `env` added, without waiting: a `Serve` with no address yet, and its stdout
+/// lines.
+fn spawn_serve(
+    url: &str,
+    issuer: &str,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> (Serve, mpsc::Receiver<String>) {
     let mut child = Command::new(BIN)
         .args(["serve", "--database-url", url, "--rules", &rules_path()])
         .args([
@@ -214,6 +247,7 @@ fn serve(url: &str, issuer: &str, extra: &[&str]) -> Serve {
         .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
         .env_remove("DATABASE_URL")
         .env("RUST_LOG", "info")
+        .envs(env.iter().copied())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -241,31 +275,15 @@ fn serve(url: &str, issuer: &str, extra: &[&str]) -> Serve {
             }
         }
     });
-    let ready = loop {
-        match rx.recv_timeout(PATIENCE) {
-            Ok(line) if line.starts_with("ready: ") => break line,
-            Ok(_) => {}
-            Err(_) => {
-                let _ = child.kill();
-                let status = child.wait().unwrap();
-                panic!(
-                    "no ready line ({status}); stderr:\n{}",
-                    stderr.lock().unwrap()
-                );
-            }
-        }
-    };
-    let addr = ready
-        .strip_prefix("ready: listening on ")
-        .and_then(|r| r.split(',').next())
-        .unwrap()
-        .to_owned();
-    Serve {
-        child,
-        addr,
-        ready,
-        stderr,
-    }
+    (
+        Serve {
+            child,
+            addr: String::new(),
+            ready: String::new(),
+            stderr,
+        },
+        rx,
+    )
 }
 
 impl Serve {
@@ -331,6 +349,10 @@ impl Serve {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
     }
 
     fn kill(mut self) {
@@ -1535,5 +1557,247 @@ async fn the_job_rebuilds_on_its_interval_and_no_faster(pool: PgPool) {
         );
     }
     s.signal("INT");
+    assert_eq!(s.exit(PATIENCE).0, 0);
+}
+
+// --- serve as a container's PID 1 (P5.2, D-065; the Phase 3 gate's R1-G4, the P3.4s QA's I6) ---
+
+/// (how many snapshots, the log head): what "nothing was written" compares.
+async fn written(pool: &PgPool) -> (i64, i64) {
+    let snapshots: i64 = sqlx::query_scalar("SELECT count(*) FROM snapshots")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    (snapshots, snapshot_and_head(pool).await.1)
+}
+
+/// Whether some session holds the universe's lock: exactly what a second serve would find. Takes
+/// it for a moment on a connection of its own when it's free, and gives it back.
+async fn universe_taken(pool: &PgPool) -> bool {
+    let mut connection = pool.acquire().await.unwrap();
+    let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(voidforge_store::SERVE_LOCK_KEY)
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap();
+    if got {
+        let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+            .bind(voidforge_store::SERVE_LOCK_KEY)
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+    }
+    !got
+}
+
+/// The backend holding the universe's lock in this database.
+async fn lock_backend(pool: &PgPool) -> i32 {
+    sqlx::query_scalar(
+        "SELECT pid FROM pg_locks
+          WHERE locktype = 'advisory' AND granted AND objsubid = 1
+            AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+            AND ((classid::bigint << 32) | objid::bigint) = $1",
+    )
+    .bind(voidforge_store::SERVE_LOCK_KEY)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// A collector that accepts every connection and never answers: a binary that exports is held at
+/// its exit for seconds (D-064), which keeps the process alive after `serve` itself has returned.
+fn hung_collector() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming().flatten() {
+            held.push(stream);
+        }
+    });
+    endpoint
+}
+
+/// R1-G4: a SIGTERM while `open_universe` waits (its epoch read held behind a lock) stops at once
+/// with exit 0, before serving, and writes nothing.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_signal_while_opening_stops_at_once_and_writes_nothing(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let before = written(&pool).await;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE universe IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let (s, rx) = spawn_serve(&url, &dex.issuer, &[], &[]);
+    waits(&pool, "SELECT epoch_unix_ms", "Lock").await;
+    let started = Instant::now();
+    s.signal("TERM");
+    let (code, stderr) = s.exit(Duration::from_secs(5));
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "at once, while the read still waits"
+    );
+    assert!(
+        stderr.contains("while opening the universe: stopped before serving"),
+        "{stderr}"
+    );
+    assert!(rx.try_iter().all(|line| !line.starts_with("ready:")));
+    lock.rollback().await.unwrap();
+    assert_eq!(written(&pool).await, before, "nothing was written");
+    assert!(
+        !universe_taken(&pool).await,
+        "the lock went with the process"
+    );
+}
+
+/// R1-G4: a SIGTERM while recovery waits (its read of the tail held behind a lock) stops at once
+/// with exit 0, before the host starts, and writes nothing; the next start serves.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn a_signal_while_recovering_stops_at_once_and_writes_nothing(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let before = written(&pool).await;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE log_records IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let (s, rx) = spawn_serve(&url, &dex.issuer, &[], &[]);
+    waits(&pool, "SELECT", "Lock").await;
+    // Recovery, not opening, is what waits: the universe is already taken.
+    assert!(universe_taken(&pool).await);
+    let started = Instant::now();
+    s.signal("TERM");
+    let (code, stderr) = s.exit(Duration::from_secs(5));
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "at once, while the read still waits"
+    );
+    assert!(
+        stderr.contains("while recovering: stopped before serving"),
+        "{stderr}"
+    );
+    assert!(rx.try_iter().all(|line| !line.starts_with("ready:")));
+    lock.rollback().await.unwrap();
+    assert_eq!(written(&pool).await, before, "nothing was written");
+    let s = serve(&url, &dex.issuer, &[]);
+    assert_eq!(s.seq(), before.1);
+    s.signal("TERM");
+    assert_eq!(s.exit(PATIENCE).0, 0);
+}
+
+/// I6: on an unclean stop the host may still be running (here its append waits on a lock), so the
+/// universe stays taken for as long as the process lives, after `serve` has returned 6 and while
+/// the telemetry flush holds the process at a hung collector. Then it goes with the process.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn the_lock_outlives_the_host_on_an_unclean_stop(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    let collector = hung_collector();
+    let mut s = wait_ready(spawn_serve(
+        &url,
+        &dex.issuer,
+        &["--drain-secs", "60"],
+        &[("OTEL_EXPORTER_OTLP_ENDPOINT", &collector)],
+    ));
+    assert_eq!(
+        call("GET", s.url("/players/me"), Some(token.clone()), None).status,
+        200
+    );
+    let (_, head) = written(&pool).await;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE log_records IN EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let in_flight = request("POST", s.url("/commands"), Some(token), Some("held"));
+    append_waits_on_a_lock(&pool).await;
+    s.signal("INT");
+    s.logged("shutting down");
+    s.signal("INT");
+    // `serve` has returned 6; the process is now flushing telemetry into the hung collector.
+    s.logged("second signal");
+    assert!(s.alive(), "the process outlives serve's return");
+    assert!(
+        universe_taken(&pool).await,
+        "the universe stays taken while the host may still append"
+    );
+    assert!(
+        s.alive(),
+        "observed while the process lived, so the check above means something"
+    );
+    let (code, stderr) = s.exit(PATIENCE);
+    assert_eq!(code, 6, "{stderr}");
+    assert!(
+        !universe_taken(&pool).await,
+        "the lock went with the process"
+    );
+    lock.rollback().await.unwrap();
+    let _ = in_flight.join().unwrap();
+    assert_eq!(written(&pool).await.1, head, "the held append never landed");
+}
+
+/// I6: when the lock's connection is lost (its backend terminated), another serve could take the
+/// universe, so serve exits 6 at once: no drain (60 s here), no snapshot, and the append in flight
+/// at that moment never lands. Then a new serve takes the universe and recovers.
+#[sqlx::test(migrations = false)]
+#[ignore = "needs Postgres: just db-test"]
+async fn losing_the_lock_stops_serve_at_once_and_nothing_is_written_after(pool: PgPool) {
+    let (url, dex) = seeded(&pool).await;
+    let token = dex.token(ALICE_SUB);
+    let s = serve(&url, &dex.issuer, &["--drain-secs", "60"]);
+    assert_eq!(
+        call("GET", s.url("/players/me"), Some(token.clone()), None).status,
+        200
+    );
+    let before = written(&pool).await;
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE log_records IN EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let in_flight = request(
+        "POST",
+        s.url("/commands"),
+        Some(token.clone()),
+        Some("lost"),
+    );
+    append_waits_on_a_lock(&pool).await;
+    let pid = lock_backend(&pool).await;
+    let terminated: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+        .bind(pid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(terminated);
+    let started = Instant::now();
+    let (code, stderr) = s.exit(Duration::from_secs(5));
+    assert_eq!(code, 6, "{stderr}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "at once, not after the drain"
+    );
+    assert!(stderr.contains("lock connection failed"), "{stderr}");
+    assert!(
+        !stderr.contains("shutting down"),
+        "not the clean path: {stderr}"
+    );
+    lock.rollback().await.unwrap();
+    let _ = in_flight.join().unwrap();
+    assert_eq!(
+        written(&pool).await,
+        before,
+        "no append and no snapshot after the loss"
+    );
+    let s = serve(&url, &dex.issuer, &[]);
+    assert_eq!(s.seq(), before.1);
+    let retry = call("POST", s.url("/commands"), Some(token), Some("lost"));
+    assert_eq!(retry.status, 422, "applied now, once");
+    s.signal("TERM");
     assert_eq!(s.exit(PATIENCE).0, 0);
 }
