@@ -77,8 +77,10 @@ pub async fn build_now(
 }
 
 /// The job: waits, rebuilds the board, and publishes each success; a failure keeps the previous
-/// board. The first of a run of failures logs at error level, the rest at debug, and the next
-/// success at info with the count. It waits `every` once a board exists, and
+/// board. The first of a run of failures logs at error level; while it keeps failing, a WARN with
+/// the count at most once every [`STILL_FAILING_EVERY`] (P3.5 QA's I3, P5.1), the rest at debug;
+/// and the next success at info with the count. Every failed build also counts on
+/// `voidforge.leaderboard.failures`. It waits `every` once a board exists, and
 /// [`RETRY_UNTIL_FIRST`] until then. Each wait starts after a build ends, so a slow build never
 /// bunches builds up (the effect of `MissedTickBehavior::Delay`). It runs until its task is
 /// dropped: `serve` drops it with its server runtime (D-050).
@@ -89,9 +91,16 @@ pub async fn run(
     every: Duration,
     publish: Publish,
 ) {
-    // Failed builds in a row: the first is logged at error level, the rest at debug, and the
-    // recovery at info, so a host stuck for minutes doesn't flood the log (dev-qa's I2).
+    // Failed builds in a row: the first is logged at error level, a reminder at most once a
+    // minute, the rest at debug, and the recovery at info, so a host stuck for minutes neither
+    // floods the log (dev-qa's I2) nor goes silent (I3).
     let mut failing: u64 = 0;
+    let mut warned: Option<tokio::time::Instant> = None;
+    let failures = voidforge_telemetry::meter("voidforge-server")
+        .u64_counter("voidforge.leaderboard.failures")
+        .with_unit("{build}")
+        .with_description("Leaderboard builds that failed (the previous board stayed)")
+        .build();
     loop {
         // The wait comes first: `serve` builds once itself before `ready:`.
         let wait = if publish.borrow().is_some() {
@@ -111,14 +120,28 @@ pub async fn run(
             }
             Err(error) => {
                 failing = failing.saturating_add(1);
+                failures.add(1, &[]);
+                let now = tokio::time::Instant::now();
                 if failing == 1 {
+                    warned = Some(now);
                     tracing::error!(%error, "the leaderboard build failed; the previous board stays");
+                } else if remind(warned, now) {
+                    warned = Some(now);
+                    tracing::warn!(%error, failing, "the leaderboard build still fails");
                 } else {
                     tracing::debug!(%error, failing, "the leaderboard build failed again");
                 }
             }
         }
     }
+}
+
+/// How often a run of failures is logged again at warn level.
+pub const STILL_FAILING_EVERY: Duration = Duration::from_secs(60);
+
+/// Whether a failing run is due a reminder: [`STILL_FAILING_EVERY`] since the last one.
+fn remind(last: Option<tokio::time::Instant>, now: tokio::time::Instant) -> bool {
+    last.is_none_or(|at| now.duration_since(at) >= STILL_FAILING_EVERY)
 }
 
 /// Why a board couldn't be built. The previous board stays.
@@ -206,6 +229,24 @@ pub fn rank(mut scores: Vec<(i64, PlayerId)>) -> Result<Vec<(u32, PlayerId, i64)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// I3: a build failing every 10 s logs ERROR once, then a WARN every minute, never silent and
+    /// never one per failure.
+    #[test]
+    fn a_run_of_failures_is_reminded_once_a_minute() {
+        let start = tokio::time::Instant::now();
+        let mut warned = Some(start); // the first failure's ERROR
+        let mut reminders = Vec::new();
+        for i in 1..=13u64 {
+            let now = start + Duration::from_secs(10 * i);
+            if remind(warned, now) {
+                warned = Some(now);
+                reminders.push(10 * i);
+            }
+        }
+        assert_eq!(reminders, vec![60, 120]);
+        assert!(remind(None, start), "a run with no reminder yet is due one");
+    }
 
     fn p(n: u128) -> PlayerId {
         PlayerId(n)

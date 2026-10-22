@@ -47,6 +47,8 @@ toml.workspace = true
 tracing-subscriber.workspace = true
 voidforge-core.workspace = true
 voidforge-testkit.workspace = true
+# The request span and its traceparent, captured in memory (P5.1, D-064).
+voidforge-telemetry = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

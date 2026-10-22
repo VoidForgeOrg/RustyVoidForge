@@ -3,21 +3,30 @@
 //!
 //! `init` installs a global `tracing` subscriber that writes INFO and above to stderr. When
 //! `OTEL_EXPORTER_OTLP_ENDPOINT` is set (for the local stack, `http://localhost:4318`), spans are
-//! also exported over OTLP/HTTP to `<endpoint>/v1/traces`. Without it, the binary still runs and
-//! logs locally; nothing waits on a collector.
+//! also exported over OTLP/HTTP to `<endpoint>/v1/traces`, and metrics recorded through [`meter`]
+//! to `<endpoint>/v1/metrics` every 10 s (P5.1, D-064). Without it, the binary still runs and
+//! logs locally, metrics are no-ops, and nothing waits on a collector. Export never blocks the
+//! caller: spans queue in a bounded batch, and both exporters run on their own threads.
+//!
+//! [`traceparent`] and [`set_remote_parent`] carry a trace across HTTP: the web and the bots send
+//! the header, and the API joins the caller's trace from it, reading nothing else.
 //!
 //! Call [`Telemetry::shutdown`] before the process exits: it flushes buffered spans and reports
 //! spans that could not be delivered, instead of dropping them silently.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
+use opentelemetry::propagation::{Extractor, TextMapPropagator as _};
 use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
 use opentelemetry_otlp::WithExportConfig as _;
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::layer::{Layer as _, SubscriberExt as _};
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 /// The standard OpenTelemetry variable naming the OTLP base URL; `/v1/traces` is appended.
@@ -50,7 +59,7 @@ pub enum Error {
     },
 }
 
-/// Keeps the exporter alive; [`Telemetry::shutdown`] flushes it. Dropping it without calling
+/// Keeps the exporters alive; [`Telemetry::shutdown`] flushes them. Dropping it without calling
 /// `shutdown` still flushes, and reports a failure on stderr.
 #[derive(Debug)]
 #[must_use = "call Telemetry::shutdown before exit, or buffered spans may be lost"]
@@ -62,26 +71,40 @@ pub struct Telemetry {
 struct Exporter {
     endpoint: String,
     provider: SdkTracerProvider,
+    meters: SdkMeterProvider,
 }
 
 /// Initializes telemetry for the binary named `service_name`, which becomes the OpenTelemetry
-/// `service.name`. Reads [`ENDPOINT_VAR`] to decide whether spans are exported.
+/// `service.name`. Reads [`ENDPOINT_VAR`] to decide whether spans and metrics are exported.
 pub fn init(service_name: &'static str) -> Result<Telemetry, Error> {
+    init_quieting(service_name, &[])
+}
+
+/// [`init`], dropping the events `quiet` names (P5.1 T4, D-064: a library's error that the binary
+/// already reports in its own words). Every other event, at every level, still passes.
+pub fn init_quieting(
+    service_name: &'static str,
+    quiet: &'static [Quiet],
+) -> Result<Telemetry, Error> {
     let endpoint = std::env::var(ENDPOINT_VAR)
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let (subscriber, telemetry) = build(service_name, endpoint.as_deref())?;
+    let (subscriber, telemetry) = build(service_name, endpoint.as_deref(), quiet)?;
     subscriber.try_init()?;
+    if let Some(exporter) = &telemetry.exporter {
+        opentelemetry::global::set_meter_provider(exporter.meters.clone());
+    }
     Ok(telemetry)
 }
 
 impl Telemetry {
-    /// Whether spans are exported over OTLP (an endpoint was configured).
+    /// Whether spans and metrics are exported over OTLP (an endpoint was configured).
     pub fn exports(&self) -> bool {
         self.exporter.is_some()
     }
 
-    /// Flushes buffered spans and stops the exporter. Fails if spans could not be delivered.
+    /// Flushes buffered spans and metrics and stops the exporters. Fails if they could not be
+    /// delivered.
     pub fn shutdown(mut self) -> Result<(), Error> {
         match self.exporter.take() {
             Some(exporter) => exporter.shutdown(),
@@ -101,18 +124,38 @@ impl Drop for Telemetry {
 }
 
 impl Exporter {
-    /// Flushes, then always shuts the provider down, even when the flush failed: the global
-    /// subscriber still holds the provider, so skipping shutdown would leave the exporter
-    /// running. A flush failure is reported in preference to a shutdown failure.
+    /// Flushes the spans (a flush, unlike a shutdown, reports a rejected export), then always
+    /// shuts the span exporter down, even when the flush failed: the global subscriber still holds
+    /// it, so skipping shutdown would leave it running. Beside that, the metrics' shutdown exports
+    /// what they hold. Side by side, and with a short shutdown after a failed flush, a collector
+    /// that doesn't answer costs about one export timeout, not four (P5.1 M7). A span failure is
+    /// reported first.
     fn shutdown(self) -> Result<(), Error> {
-        let flushed = self.provider.force_flush();
-        let stopped = self.provider.shutdown();
-        flushed.and(stopped).map_err(|source| Error::Delivery {
+        let (spans, metrics) = std::thread::scope(|scope| {
+            let metrics = scope.spawn(|| self.meters.shutdown());
+            let spans = match self.provider.force_flush() {
+                Ok(()) => self.provider.shutdown(),
+                Err(e) => {
+                    let _ = self.provider.shutdown_with_timeout(AFTER_A_FAILED_FLUSH);
+                    Err(e)
+                }
+            };
+            (spans, metrics.join())
+        });
+        let metrics = metrics.unwrap_or_else(|_| {
+            Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
+                "the metrics shutdown panicked".to_owned(),
+            ))
+        });
+        spans.and(metrics).map_err(|source| Error::Delivery {
             endpoint: self.endpoint,
             source,
         })
     }
 }
+
+/// The span exporter's shutdown after its flush already failed: it only has to stop.
+const AFTER_A_FAILED_FLUSH: Duration = Duration::from_secs(1);
 
 /// The OpenTelemetry trace ID of `span`, as 32 hex digits, when spans are exported.
 pub fn trace_id(span: &tracing::Span) -> Option<String> {
@@ -123,26 +166,169 @@ pub fn trace_id(span: &tracing::Span) -> Option<String> {
         .then(|| span_context.trace_id().to_string())
 }
 
+/// The W3C `traceparent` header naming `span`, for an outgoing request (P5.1, D-064), when spans
+/// are exported. Our own requests carry no `tracestate` or baggage.
+pub fn traceparent(span: &tracing::Span) -> Option<String> {
+    let mut headers = HashMap::new();
+    TraceContextPropagator::new().inject_context(&span.context(), &mut headers);
+    headers.remove(TRACEPARENT)
+}
+
+/// Makes the remote span an incoming request's `traceparent` names the parent of `span`, so the
+/// request joins the caller's trace. Only `traceparent` is read: an outside caller can choose
+/// which trace a request joins and nothing else, never `tracestate` or baggage (P5.1 T3). A
+/// missing or malformed header leaves `span` a root.
+pub fn set_remote_parent(span: &tracing::Span, traceparent: Option<&str>) {
+    let Some(value) = traceparent else {
+        return;
+    };
+    let context = TraceContextPropagator::new().extract(&OnlyTraceparent(value));
+    if context.span().span_context().is_valid() {
+        // Fails only when the span isn't exported (no OpenTelemetry layer): nothing to join.
+        let _ = span.set_parent(context);
+    }
+}
+
+/// Links `span` to `to`'s span, when both are exported: the host's turn names the commands it
+/// carried, each in its own trace.
+pub fn link(span: &tracing::Span, to: &tracing::Span) {
+    let target = to.context().span().span_context().clone();
+    if target.is_valid() {
+        span.add_link(target);
+    }
+}
+
+const TRACEPARENT: &str = "traceparent";
+
+/// The one header the API trusts from outside.
+struct OnlyTraceparent<'a>(&'a str);
+
+impl Extractor for OnlyTraceparent<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        (key == TRACEPARENT).then_some(self.0)
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        vec![TRACEPARENT]
+    }
+}
+
+/// An event to drop: from a target starting with `target`, at `level`, with a field whose text
+/// contains `contains`.
+#[derive(Debug)]
+pub struct Quiet {
+    /// The event's target prefix, for example `tower_sessions_core`.
+    pub target: &'static str,
+    /// The event's level.
+    pub level: tracing::Level,
+    /// Text one of the event's fields contains.
+    pub contains: &'static str,
+}
+
+/// INFO and above, minus the events [`Quiet`] names: the filter [`init_quieting`] puts on every
+/// layer, public so a test can put it on its own.
+#[derive(Debug, Clone, Copy)]
+pub struct Quieting(&'static [Quiet]);
+
+impl Quieting {
+    /// The filter for `quiet`.
+    #[must_use]
+    pub fn new(quiet: &'static [Quiet]) -> Self {
+        Self(quiet)
+    }
+}
+
+impl<S> tracing_subscriber::layer::Filter<S> for Quieting {
+    fn enabled(
+        &self,
+        meta: &tracing::Metadata<'_>,
+        _: &tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        *meta.level() <= tracing::Level::INFO
+    }
+
+    fn event_enabled(
+        &self,
+        event: &tracing::Event<'_>,
+        _: &tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        let meta = event.metadata();
+        let named = |q: &&Quiet| *meta.level() == q.level && meta.target().starts_with(q.target);
+        if !self.0.iter().any(|q| named(&q)) {
+            return true;
+        }
+        let mut text = FieldText(String::new());
+        event.record(&mut text);
+        !self
+            .0
+            .iter()
+            .any(|q| named(&q) && text.0.contains(q.contains))
+    }
+
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        Some(LevelFilter::INFO)
+    }
+}
+
+/// Every field of an event, as text.
+struct FieldText(String);
+
+impl tracing::field::Visit for FieldText {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{}={value:?} ", field.name());
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.push_str(field.name());
+        self.0.push('=');
+        self.0.push_str(value);
+        self.0.push(' ');
+    }
+}
+
 /// Builds the subscriber without installing it, so tests can scope it to one thread.
 fn build(
     service_name: &'static str,
     endpoint: Option<&str>,
+    quiet: &'static [Quiet],
 ) -> Result<(impl tracing::Subscriber + Send + Sync, Telemetry), Error> {
     let exporter = endpoint
         .map(|base| exporter(service_name, base))
         .transpose()?;
     let otel_layer = exporter.as_ref().map(|exporter| {
-        tracing_opentelemetry::layer().with_tracer(exporter.provider.tracer(service_name))
+        span_layer(exporter.provider.tracer(service_name)).with_filter(Quieting(quiet))
     });
     let subscriber = tracing_subscriber::registry()
-        .with(LevelFilter::INFO)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_filter(Quieting(quiet)),
+        )
         .with(otel_layer);
     Ok((subscriber, Telemetry { exporter }))
 }
 
+/// The OpenTelemetry layer every exporting subscriber uses, the tests' capture included. It
+/// records no `code.*` location attributes: a dependency's span would carry the build host's
+/// absolute path, the user's home directory in it (QA's N1 on P5.1).
+fn span_layer<S>(
+    tracer: opentelemetry_sdk::trace::SdkTracer,
+) -> tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::SdkTracer>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    tracing_opentelemetry::layer()
+        .with_tracer(tracer)
+        .with_location(false)
+}
+
+/// How often metrics are sent while the process runs.
+const METRICS_EVERY: Duration = Duration::from_secs(10);
+
 fn exporter(service_name: &'static str, base: &str) -> Result<Exporter, Error> {
-    let endpoint = format!("{}/v1/traces", base.trim_end_matches('/'));
+    let base = base.trim_end_matches('/');
+    let endpoint = format!("{base}/v1/traces");
     let span_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
         .with_endpoint(endpoint.clone())
@@ -152,12 +338,47 @@ fn exporter(service_name: &'static str, base: &str) -> Result<Exporter, Error> {
             endpoint: endpoint.clone(),
             source,
         })?;
+    let metrics_endpoint = format!("{base}/v1/metrics");
+    let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_endpoint(metrics_endpoint.clone())
+        .with_timeout(EXPORT_TIMEOUT)
+        .build()
+        .map_err(|source| Error::Exporter {
+            endpoint: metrics_endpoint,
+            source,
+        })?;
+    let resource = Resource::builder().with_service_name(service_name).build();
     let provider = SdkTracerProvider::builder()
-        .with_resource(Resource::builder().with_service_name(service_name).build())
+        .with_resource(resource.clone())
         .with_batch_exporter(span_exporter)
         .build();
-    Ok(Exporter { endpoint, provider })
+    let meters = SdkMeterProvider::builder()
+        .with_resource(resource)
+        .with_reader(
+            PeriodicReader::builder(metric_exporter)
+                .with_interval(METRICS_EVERY)
+                .build(),
+        )
+        .build();
+    Ok(Exporter {
+        endpoint,
+        provider,
+        meters,
+    })
 }
+
+/// The instruments' types, for the crates that record metrics.
+pub use opentelemetry::KeyValue;
+pub use opentelemetry::metrics;
+
+/// The meter a crate records its metrics with; a no-op when nothing is exported.
+pub fn meter(name: &'static str) -> metrics::Meter {
+    opentelemetry::global::meter(name)
+}
+
+#[cfg(feature = "testing")]
+pub mod testing;
 
 #[cfg(test)]
 mod tests {
@@ -252,10 +473,165 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_delivers_metrics_to_the_configured_endpoint() {
+        use opentelemetry::metrics::MeterProvider as _;
+        let (base, requests) = collector("200 OK");
+        let (_subscriber, telemetry) = build("telemetry-test", Some(&base), &[]).expect("build");
+        let meters = telemetry.exporter.as_ref().expect("exports").meters.clone();
+        meters
+            .meter("test")
+            .u64_counter("probe_counter")
+            .build()
+            .add(3, &[]);
+        telemetry.shutdown().expect("the metrics are delivered");
+        let metrics = std::iter::from_fn(|| requests.recv_timeout(Duration::from_secs(10)).ok())
+            .find(|r| r.line == "POST /v1/metrics HTTP/1.1")
+            .expect("a metrics request arrives");
+        assert!(
+            contains(&metrics.body, "probe_counter"),
+            "the metric is in the payload"
+        );
+        assert!(
+            contains(&metrics.body, "telemetry-test"),
+            "service.name is in the payload"
+        );
+    }
+
+    /// M7: a collector that accepts and never answers doesn't slow what records spans: the batch
+    /// queue is bounded and drops when full, and export runs on its own thread. Shutdown waits at
+    /// most its timeouts, then reports the loss.
+    #[test]
+    fn a_hung_collector_never_slows_recording_and_bounds_shutdown() {
+        use opentelemetry::metrics::MeterProvider as _;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let base = format!("http://{}", listener.local_addr().expect("local address"));
+        let held = thread::spawn(move || {
+            let streams: Vec<_> = listener.incoming().take(8).filter_map(Result::ok).collect();
+            thread::sleep(Duration::from_secs(60));
+            drop(streams);
+        });
+        let (subscriber, telemetry) = build("telemetry-test", Some(&base), &[]).expect("build");
+        let meters = telemetry.exporter.as_ref().expect("exports").meters.clone();
+        let counter = meters.meter("test").u64_counter("hung_counter").build();
+        let started = Instant::now();
+        tracing::subscriber::with_default(subscriber, || {
+            for i in 0..10_000u64 {
+                tracing::info_span!("hung_probe", i).in_scope(|| counter.add(1, &[]));
+            }
+        });
+        let recording = started.elapsed();
+        assert!(
+            recording < Duration::from_secs(2),
+            "10,000 spans took {recording:?}"
+        );
+        let stopping = Instant::now();
+        assert!(
+            telemetry.shutdown().is_err(),
+            "undelivered telemetry is reported"
+        );
+        let shutdown = stopping.elapsed();
+        eprintln!("recording {recording:?}, shutdown {shutdown:?}");
+        assert!(
+            shutdown < Duration::from_secs(8),
+            "one export timeout, not four: {shutdown:?}"
+        );
+        drop(held);
+    }
+
+    #[test]
+    fn a_traceparent_round_trips_and_nothing_else_is_read() {
+        let (base, _requests) = collector("200 OK");
+        let (subscriber, telemetry) = build("telemetry-test", Some(&base), &[]).expect("build");
+        tracing::subscriber::with_default(subscriber, || {
+            let caller = tracing::info_span!("caller");
+            let header = traceparent(&caller).expect("an exported span has a traceparent");
+            let trace = trace_id(&caller).unwrap();
+            assert!(header.starts_with(&format!("00-{trace}-")), "{header}");
+            let callee = tracing::info_span!(parent: None, "callee");
+            set_remote_parent(&callee, Some(&header));
+            assert_eq!(
+                trace_id(&callee).as_deref(),
+                Some(trace.as_str()),
+                "joined the trace"
+            );
+            // OnlyTraceparent answers nothing but traceparent, so tracestate never arrives.
+            let extractor = OnlyTraceparent(&header);
+            assert_eq!(extractor.get("tracestate"), None);
+            assert_eq!(extractor.get("baggage"), None);
+            assert_eq!(extractor.keys(), vec!["traceparent"]);
+            for bad in [None, Some(""), Some("00-zz-yy-01")] {
+                let root = tracing::info_span!(parent: None, "root");
+                set_remote_parent(&root, bad);
+                assert_ne!(trace_id(&root).as_deref(), Some(trace.as_str()), "{bad:?}");
+            }
+        });
+        drop(telemetry);
+    }
+
+    #[test]
+    fn quieting_drops_only_the_named_event() {
+        use std::sync::{Arc, Mutex};
+        static QUIET: &[Quiet] = &[Quiet {
+            target: "tower_sessions_core",
+            level: tracing::Level::ERROR,
+            contains: "store is full",
+        }];
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = seen.clone();
+        let writer = move || {
+            struct W(Arc<Mutex<Vec<String>>>);
+            impl std::io::Write for W {
+                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                    self.0
+                        .lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(buf).into_owned());
+                    Ok(buf.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            W(sink.clone())
+        };
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false)
+                .with_filter(Quieting::new(QUIET)),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error!(target: "tower_sessions_core::session", error = "the session store is full");
+            tracing::error!(target: "tower_sessions_core::session", error = "the database is gone");
+            tracing::warn!(target: "tower_sessions_core::session", error = "the session store is full");
+            tracing::error!(target: "voidforge_web::store", "the session store is full");
+            tracing::debug!(target: "voidforge_web::store", "below INFO");
+        });
+        let seen = seen.lock().unwrap().join("");
+        assert!(
+            !seen.contains("ERROR tower_sessions_core::session: error=the session store is full"),
+            "{seen}"
+        );
+        assert!(
+            seen.contains("the database is gone"),
+            "another error of that target still logs"
+        );
+        assert!(
+            seen.contains("WARN tower_sessions_core::session"),
+            "the same text at another level logs"
+        );
+        assert!(
+            seen.contains("ERROR voidforge_web::store"),
+            "the same text from another target logs"
+        );
+        assert!(!seen.contains("below INFO"));
+    }
+
+    #[test]
     fn shutdown_delivers_a_span_to_the_configured_endpoint() {
         let (base, requests) = collector("200 OK");
-        let (subscriber, telemetry) =
-            build("telemetry-test", Some(&format!("{base}/"))).expect("build with an endpoint");
+        let (subscriber, telemetry) = build("telemetry-test", Some(&format!("{base}/")), &[])
+            .expect("build with an endpoint");
         assert!(telemetry.exports());
         let trace_id = tracing::subscriber::with_default(subscriber, || {
             let span = tracing::info_span!("bootstrap_probe");
@@ -288,7 +664,7 @@ mod tests {
     #[test]
     fn shutdown_reports_spans_it_could_not_deliver() {
         let base = closed_port_base();
-        let (subscriber, telemetry) = build("telemetry-test", Some(&base)).expect("build");
+        let (subscriber, telemetry) = build("telemetry-test", Some(&base), &[]).expect("build");
         tracing::subscriber::with_default(subscriber, || {
             tracing::info_span!("undeliverable").in_scope(|| tracing::info!("nobody listens"));
         });
@@ -310,7 +686,7 @@ mod tests {
         // Regression (P0.6 review): a failed flush used to skip shutdown, leaving the exporter
         // alive in the subscriber, so spans recorded after shutdown were still exported.
         let (base, requests) = collector("400 Bad Request");
-        let (subscriber, telemetry) = build("telemetry-test", Some(&base)).expect("build");
+        let (subscriber, telemetry) = build("telemetry-test", Some(&base), &[]).expect("build");
         let result = tracing::subscriber::with_default(subscriber, || {
             tracing::info_span!("before_shutdown")
                 .in_scope(|| tracing::info!("rejected by the collector"));
@@ -340,7 +716,7 @@ mod tests {
     #[test]
     fn without_an_endpoint_it_logs_locally_and_exports_nothing() {
         let (subscriber, telemetry) =
-            build("telemetry-test", None).expect("build without endpoint");
+            build("telemetry-test", None, &[]).expect("build without endpoint");
         assert!(!telemetry.exports());
         let trace_id = tracing::subscriber::with_default(subscriber, || {
             let span = tracing::info_span!("offline");

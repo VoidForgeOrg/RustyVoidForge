@@ -27,6 +27,7 @@ Library. P2.3 added the loop: `spawn`, `HostHandle`, `HostTask`, `ReadModel`, `H
 - Recovery loads the newest snapshot with a matching build, replays later records, checks their recorded events, then advances to now.
 - Instrumentation lives here and in the other shell crates, never in the core.
 - The host re-exports the command vocabulary its own API already exposes in `Receipt` and `ReadModel`: `Command`, `Action`, `Rejection`, `DomainEvent`, `PlayerId` and `World`. The read vocabulary is re-exported too (D-049): `voidforge_core::view` (`Query`, `View`, `ViewError` and the view types) and the read-only state enums a mapping names. `Rules` too (D-050): `serve` parses the rules file on one runtime and passes it to `recover` and `spawn` on another. These are names only: nothing that mutates. The server names these types through the host and never depends on core. The read model's World is shared behind an `Arc`, so a reader cannot change the live World ([D-047](../../docs/decision-log.md#d-047-accounts-principal-to-player-and-join-game-exactly-once)).
+- Telemetry (P5.1, [D-064](../../docs/decision-log.md#d-064-telemetry-a-commands-trace-the-hosts-metrics-and-trace-context-across-http)): a submitted command carries its caller's span, so `host.inbox`, `host.command`, `host.step` and `host.append` are in the caller's trace; no idempotency key is ever an attribute. The five metrics (inbox depth, event lag, step and append latency, snapshot age) are measured in `src/instruments.rs`, here in the shell, never in the core.
 
 ## Tests
 

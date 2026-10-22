@@ -17,6 +17,24 @@ use voidforge_web::api::Api;
 use voidforge_web::config::Secret;
 
 static SINK: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+/// The same events through the web binary's own filter (`store::QUIET`, P5.1 T4).
+static QUIET_SINK: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+struct QuietWriter;
+
+impl std::io::Write for QuietWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        QUIET_SINK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 static TURN: Mutex<()> = Mutex::new(());
 
 struct Writer;
@@ -47,12 +65,24 @@ fn capture() -> MutexGuard<'static, ()> {
                     .with_ansi(false)
                     .with_filter(tracing_subscriber::filter::LevelFilter::TRACE),
             )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(|| QuietWriter)
+                    .with_ansi(false)
+                    .with_filter(voidforge_telemetry::Quieting::new(
+                        voidforge_web::store::QUIET,
+                    )),
+            )
             .init();
     });
     let turn = TURN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     SINK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    QUIET_SINK
+        .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clear();
     turn
@@ -220,4 +250,90 @@ async fn no_failure_logs_or_shows_the_token() {
     assert!(!log.contains("the-id-token-itself"), "{log}");
     let shown = format!("{errors:?} {api:?} {:?}", token());
     assert!(!shown.contains("the-id-token-itself"), "{shown}");
+}
+
+/// QA's N3 (Phase 4 gate), settled by effect (P5.1 T4): a stale cookie at the cap logs no
+/// error; a save we make ourselves and handle (the callback's, when its slot was taken) makes
+/// tower-sessions log "store is full" at ERROR, which the web's filter drops, keeping our own
+/// WARN.
+#[tokio::test]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "the turn orders whole tests; no task inside a test takes it"
+)]
+async fn a_refused_save_at_the_cap_is_our_warn_not_tower_sessions_error() {
+    let _turn = capture();
+    let error = |log: &str| {
+        log.lines().any(|l| {
+            l.contains("ERROR")
+                && l.contains("tower_sessions_core")
+                && l.contains("the session store is full")
+        })
+    };
+    let warn = |log: &str| {
+        log.lines().any(|l| {
+            l.contains("WARN")
+                && l.contains("voidforge_web::store")
+                && l.contains("refusing new logins")
+        })
+    };
+    let w = World::start_with(
+        Options {
+            max_sessions: 1,
+            ..Options::default()
+        },
+        |_| {},
+    )
+    .await;
+    assert_eq!(w.browser().get("/login").await.status, 303);
+    let mut stale = w.browser();
+    stale.cookie = Some("AAAAAAAAAAAAAAAAAAAAAA".to_owned());
+    assert_eq!(stale.get("/login").await.status, 503);
+    let log = captured();
+    assert!(
+        !error(&log) && warn(&log),
+        "a stale cookie at the cap: {log}"
+    );
+
+    let once = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let taken = once.clone();
+    let store = voidforge_web::store::BoundedStore::new(1).after_delete(move |records| {
+        if !taken.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let other = tower_sessions::session::Record {
+                id: tower_sessions::session::Id::default(),
+                data: std::collections::HashMap::new(),
+                expiry_date: tower_sessions::cookie::time::OffsetDateTime::now_utc()
+                    + tower_sessions::cookie::time::Duration::minutes(10),
+            };
+            records.insert(other.id, other);
+        }
+    });
+    SINK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    QUIET_SINK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    let w = World::start_with(
+        Options {
+            store: Some(store),
+            ..Options::default()
+        },
+        |_| {},
+    )
+    .await;
+    assert_eq!(w.browser().login().await.status, 503);
+    let raw = captured();
+    let quiet = String::from_utf8_lossy(
+        &QUIET_SINK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+    .into_owned();
+    assert!(error(&raw), "the event happens: {raw}");
+    assert!(
+        !error(&quiet) && warn(&quiet),
+        "the web's log drops it and keeps ours: {quiet}"
+    );
 }

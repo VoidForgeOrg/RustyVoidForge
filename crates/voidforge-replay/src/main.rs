@@ -41,6 +41,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// For `just trace-check` (D-064): records one `telemetry_check` span, prints `trace_id=<hex>`
+    /// on stdout when exporting, and exits; the telemetry code if it can't be delivered.
+    #[command(hide = true)]
+    TelemetryCheck,
     /// Verifies golden logs: each golden directory, or each golden in a directory of them.
     Golden {
         /// Golden directories, or directories of goldens (for example tests/golden).
@@ -282,29 +286,43 @@ fn main() -> ExitCode {
             return ExitCode::from(Exit::Telemetry as u8);
         }
     };
-    let span = tracing::info_span!("replay", binary = SERVICE);
+    let check = matches!(cli.command, Command::TelemetryCheck);
+    let span = if check {
+        tracing::info_span!("telemetry_check", binary = SERVICE)
+    } else {
+        tracing::info_span!("replay", binary = SERVICE)
+    };
     let exit = span.in_scope(|| run(cli));
     if let Some(trace_id) = voidforge_telemetry::trace_id(&span) {
-        eprintln!("trace_id={trace_id}");
+        if check {
+            println!("trace_id={trace_id}");
+        } else {
+            eprintln!("trace_id={trace_id}");
+        }
     }
     drop(span);
     match telemetry.shutdown() {
         Ok(()) => ExitCode::from(exit as u8),
-        Err(error) => {
+        // Delivery is telemetry-check's whole job: there it fails.
+        Err(error) if check => {
             eprintln!("{SERVICE}: {error}");
-            // A failed shutdown is never a success (D-016); a failing verification keeps its code.
-            let code = if exit == Exit::Verified {
-                Exit::Telemetry
-            } else {
-                exit
-            };
-            ExitCode::from(code as u8)
+            ExitCode::from(Exit::Telemetry as u8)
+        }
+        // Otherwise the exit code reports the verification; undelivered telemetry is loud, never
+        // a failed one (D-064 T6, amending D-016).
+        Err(error) => {
+            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the command (D-064)");
+            ExitCode::from(exit as u8)
         }
     }
 }
 
 fn run(cli: Cli) -> Exit {
     match cli.command {
+        Command::TelemetryCheck => {
+            tracing::info!("telemetry check");
+            Exit::Verified
+        }
         Command::Golden { paths, rules, json } => {
             let sources = goldens(&paths)
                 .into_iter()

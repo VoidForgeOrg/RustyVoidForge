@@ -23,6 +23,8 @@ voidforge-telemetry.workspace = true
 [dev-dependencies]
 # Paused time for the wait tests.
 tokio = { workspace = true, features = ["test-util"] }
+# The bot's trace carried to the API, captured in memory (P5.1, D-064).
+voidforge-telemetry = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

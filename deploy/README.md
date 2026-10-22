@@ -40,10 +40,28 @@ The password grant for the static users is enabled only in `dex/config.ci.yaml`.
 
 ## Telemetry
 
-Binaries export traces when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and only log locally without it ([D-016](../docs/decision-log.md#d-016-telemetry-bootstrap)). Grafana at `http://localhost:3000` shows them under Explore > Tempo.
+Binaries export traces and metrics when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and only log locally without it ([D-016](../docs/decision-log.md#d-016-telemetry-bootstrap), [D-064](../docs/decision-log.md#d-064-telemetry-a-commands-trace-the-hosts-metrics-and-trace-context-across-http)). Grafana at `http://localhost:3000` shows them in **Explore**, with no dashboard to set up. Undelivered telemetry is an ERROR on stderr and never changes an exit code (only `telemetry-check` fails on it).
+
+- **A command's trace** (Explore > Tempo, query type TraceQL):
+  - `{ name = "web.act" } && { name = "host.append" }` finds a browser form's trace;
+  - `{ name = "host.command" && span.outcome != "accepted" }` finds rejected commands.
+  - A trace runs `web.act` (voidforge-web) → `api.request` (voidforge-server; `http.route`, the status) → `host.inbox` (the wait) and `host.command` (`command.type`, `player_id` as the API's UUID, `seq`, `outcome`) → `host.step` and `host.append` (`batch.size`). The bots' commands start under their `e2e` span.
+- **The host's metrics** (Explore > Prometheus):
+
+  | Metric | Query |
+  |---|---|
+  | Inbox depth (commands waiting) | `voidforge_host_inbox_depth` |
+  | Event lag (game-time ms; 0 unless a due event waits) | `voidforge_host_event_lag_milliseconds` |
+  | Step latency, p99 by kind | `histogram_quantile(0.99, sum by (le, kind) (rate(voidforge_host_step_duration_seconds_bucket[5m])))` |
+  | Append latency, p99 | `histogram_quantile(0.99, sum by (le) (rate(voidforge_host_append_duration_seconds_bucket[5m])))` |
+  | Snapshot age (game-time s) | `voidforge_host_snapshot_age_seconds` |
+  | Leaderboard builds failing | `rate(voidforge_leaderboard_failures_total[5m])` (exported once a build fails; the name follows the collector's counter rule, not yet seen live) |
+
+  Event lag and snapshot age are game time, which is wall time while the game clock never pauses.
+- `just trace-check` runs each binary's hidden `telemetry-check` and finds its span in Tempo.
 
 ```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run -p voidforge-server   # prints trace_id=<hex>
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run -p voidforge-server -- telemetry-check   # prints trace_id=<hex>
 just trace-check   # every binary: export, then find its span through Grafana's Tempo datasource
 ```
 

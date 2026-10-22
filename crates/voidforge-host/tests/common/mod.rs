@@ -43,6 +43,9 @@ pub struct GatedLog {
     pub inner: MemoryLog,
     gate: Arc<Semaphore>,
     entered: Arc<watch::Sender<u64>>,
+    /// How long each snapshot write takes: a turn that snapshots stays open this long after its
+    /// replies.
+    snapshot_delay: Duration,
 }
 
 impl GatedLog {
@@ -52,7 +55,14 @@ impl GatedLog {
             inner,
             gate: Arc::new(Semaphore::new(0)),
             entered: Arc::new(watch::Sender::new(0)),
+            snapshot_delay: Duration::ZERO,
         }
+    }
+
+    /// Each snapshot write takes `delay`.
+    pub fn slow_snapshots(mut self, delay: Duration) -> Self {
+        self.snapshot_delay = delay;
+        self
     }
 
     /// Lets `n` appends through.
@@ -104,6 +114,7 @@ impl LogStore for GatedLog {
     }
 
     async fn write_snapshot(&mut self, row: &SnapshotRow) -> Result<(), LogError> {
+        tokio::time::sleep(self.snapshot_delay).await;
         self.inner.write_snapshot(row).await
     }
 

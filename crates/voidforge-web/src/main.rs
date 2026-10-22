@@ -25,19 +25,37 @@ const SERVICE: &str = "voidforge-web";
 const DRAIN: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
-    let telemetry = match voidforge_telemetry::init(SERVICE) {
+    let args = Args::parse();
+    let telemetry = match voidforge_telemetry::init_quieting(SERVICE, voidforge_web::store::QUIET) {
         Ok(telemetry) => telemetry,
         Err(error) => {
             eprintln!("{SERVICE}: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let code = run();
+    if args.telemetry_check {
+        let span = tracing::info_span!("telemetry_check", binary = SERVICE);
+        span.in_scope(|| tracing::info!("telemetry check"));
+        if let Some(trace_id) = voidforge_telemetry::trace_id(&span) {
+            println!("trace_id={trace_id}");
+        }
+        drop(span);
+        return match telemetry.shutdown() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{SERVICE}: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let code = run(args);
     match telemetry.shutdown() {
         Ok(()) => code,
+        // The exit code reports the web's own stop; telemetry that couldn't be delivered is
+        // loud, never a failed stop (D-064, T2).
         Err(error) => {
-            eprintln!("{SERVICE}: {error}");
-            ExitCode::FAILURE
+            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the stop (D-064)");
+            code
         }
     }
 }
@@ -48,8 +66,7 @@ fn fail(message: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn run() -> ExitCode {
-    let args = Args::parse();
+fn run(args: Args) -> ExitCode {
     let config = match args.into_config(std::env::var(SECRET_ENV).ok()) {
         Ok(c) => c,
         Err(e) => return fail(&format!("bad configuration: {e}")),

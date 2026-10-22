@@ -26,6 +26,16 @@ use tower_sessions::cookie::time::OffsetDateTime;
 use tower_sessions::session::{Id, Record};
 use tower_sessions::session_store::{self, SessionStore};
 
+/// What the web's log drops (P5.1 T4, QA's N3 at the Phase 4 gate): tower-sessions' own ERROR
+/// when a save we make ourselves is refused at the cap (`Session::save` logs every `Err` at error
+/// level, even one the caller handles). [`BoundedStore::refused`] already reports it as a WARN,
+/// rate-limited, and the request gets the busy page; every other tower-sessions error still logs.
+pub const QUIET: &[voidforge_telemetry::Quiet] = &[voidforge_telemetry::Quiet {
+    target: "tower_sessions_core",
+    level: tracing::Level::ERROR,
+    contains: FULL,
+}];
+
 /// The most live sessions kept: about 1 KB each, so about 50 MB.
 pub const MAX_SESSIONS: usize = 50_000;
 /// The smallest map a doubling sweep waits for.
@@ -180,8 +190,11 @@ fn room(inner: &mut Inner, max: usize, now: OffsetDateTime) -> bool {
     inner.records.len() < max
 }
 
+/// The store's one error.
+const FULL: &str = "the session store is full";
+
 fn full() -> session_store::Error {
-    session_store::Error::Backend("the session store is full".to_owned())
+    session_store::Error::Backend(FULL.to_owned())
 }
 
 #[async_trait]
