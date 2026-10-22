@@ -1,6 +1,7 @@
 import { Link, Outlet } from "@tanstack/react-router";
-import { duration } from "../format";
+import { duration, rate, stock } from "../format";
 import { homeworldFirst, next } from "../game/empire";
+import { grown } from "../game/live";
 import { useFleets, useMe, usePlanet } from "../game/queries";
 import { dueIn } from "../game/refresh";
 import { useNow } from "../game/useNow";
@@ -52,8 +53,14 @@ function Summary({
   const running = [
     constructing > 0 && `${constructing.toString()} constructing`,
     demolishing > 0 && `${demolishing.toString()} demolishing`,
-    view.ship_builds.length > 0 && `${view.ship_builds.length.toString()} ship builds`,
+    view.ship_builds.length > 0 &&
+      `${view.ship_builds.length.toString()} ship build${view.ship_builds.length === 1 ? "" : "s"}`,
   ].filter((part) => part !== false);
+  const stocks = (["iron_ore", "iron_ingot"] as const).map((r) => {
+    const s = view.stocks[r];
+    const amount = grown(s.amount_g, s.rate_g_per_h, ran, s.cap_g);
+    return `${r === "iron_ore" ? "Iron Ore" : "Iron Ingots"} ${stock(amount, s.cap_g)}, ${rate(s.rate_g_per_h)}`;
+  });
   const soonest = next([{ view, receivedAt }], null);
   const fleets = useFleets();
   const arriving = (fleets.data?.fleets ?? []).flatMap((f) =>
@@ -72,7 +79,7 @@ function Summary({
     <Link
       to="/planets/$planetId"
       params={{ planetId: view.planet_id }}
-      aria-label={[name, slots, ...running, finishing, ...arriving.map((a) => a.text)]
+      aria-label={[name, slots, ...stocks, ...running, finishing, ...arriving.map((a) => a.text)]
         .filter(Boolean)
         .join(", ")}
       className="block"

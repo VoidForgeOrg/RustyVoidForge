@@ -158,11 +158,62 @@ test("a card opens its planet's panel, a tile switches it to the building, and B
   const panel = await screen.findByRole("dialog", { name: "#1 Home" });
   fireEvent.click(await within(panel).findByRole("link", { name: "Drill, constructing 0%" }));
   expect(await screen.findByRole("dialog", { name: "#1 Home · Drill" })).toBe(panel);
-  fireEvent.click(within(panel).getByRole("link", { name: "Back to #1 Home" }));
+  fireEvent.click(within(panel).getByRole("button", { name: "Back to #1 Home" }));
   expect(await within(panel).findByRole("list", { name: "Building slots" })).toBeInTheDocument();
   fireEvent.click(within(panel).getByRole("button", { name: /close/i }));
   await waitFor(() => {
     expect(screen.queryByRole("list", { name: "Building slots" })).not.toBeInTheDocument();
   });
   expect(screen.getByRole("article", { name: "#1 Home" })).toBeInTheDocument();
+});
+
+test("Back steps out without adding history: it pops the planet entry, or replaces after a deep link", async () => {
+  answer();
+  const router = renderAt("/planets");
+  const card = await screen.findByRole("article", { name: "#1 Home" });
+  fireEvent.click(await within(card).findByRole("link", { name: /^#1 Home, / }));
+  const panel = await screen.findByRole("dialog", { name: "#1 Home" });
+  fireEvent.click(await within(panel).findByRole("link", { name: "Drill, constructing 0%" }));
+  await screen.findByRole("dialog", { name: "#1 Home · Drill" });
+  fireEvent.click(within(panel).getByRole("button", { name: "Back to #1 Home" }));
+  const tile = await within(panel).findByRole("link", { name: "Drill, constructing 0%" });
+  expect(router.state.location.pathname).toBe("/planets/1");
+  await waitFor(() => {
+    expect(tile).toHaveFocus();
+  });
+  // Browser Back now leaves the panel, rather than reopening the building.
+  router.history.back();
+  await waitFor(() => {
+    expect(router.state.location.pathname).toBe("/planets");
+  });
+  cleanup();
+
+  const deep = renderAt("/planets/1/buildings/8");
+  const drill = await screen.findByRole("dialog", { name: "#1 Home · Drill" });
+  fireEvent.click(within(drill).getByRole("button", { name: "Back to #1 Home" }));
+  await waitFor(() => {
+    expect(deep.state.location.pathname).toBe("/planets/1");
+  });
+  expect(deep.history.length).toBe(1);
+});
+
+test("a card's label reads its stocks and counts, singular for one", async () => {
+  const build = {
+    id: 20,
+    shipyard_id: 15,
+    ship_type: "colony_ship",
+    state: "waiting",
+    cost_g: 800_000_000,
+    delivered_g: 0,
+    rate_g_per_h: 0,
+    eta: null,
+    status: null,
+  };
+  answer({ "/planets/1": Response.json({ ...home, ship_builds: [build] }) });
+  renderAt("/planets");
+  const card = await screen.findByRole("article", { name: "#1 Home" });
+  const link = await within(card).findByRole("link", { name: /^#1 Home, / });
+  expect(link.getAttribute("aria-label")).toMatch(
+    /^#1 Home, 3\/8 slots, Iron Ore 2,000\.0 t of 10,000\.0 t, \+2\.0 t\/h, Iron Ingots 1,500\.0 t of 5,000\.0 t, −34\.0 t\/h, 1 constructing, 1 ship build, /,
+  );
 });

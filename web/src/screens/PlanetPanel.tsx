@@ -1,6 +1,6 @@
-import { buttonVariants, Drawer } from "@heroui/react";
-import { Link, useMatch, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { Button, buttonVariants, Drawer } from "@heroui/react";
+import { Link, useMatch, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
+import { type ReactNode, useEffect, useRef } from "react";
 import type { components } from "../api/schema";
 import { copy } from "../copy/messages";
 import { empties, failures } from "../copy/voices";
@@ -68,6 +68,30 @@ export function PlanetPanel() {
   const what = buildingId !== undefined ? (type ? building(type) : "Building") : atBuild ? "Free slot" : null;
   const title = what ? `${name} · ${what}` : name;
   const toPlanet = () => void navigate({ to: "/planets/$planetId", params: { planetId } });
+
+  // Back never adds a history entry: it pops the planet entry this panel stepped in from, and after
+  // a deep link, where there is none, it replaces the current one.
+  const router = useRouter();
+  const inner = what !== null;
+  const steppedIn = useRef(false);
+  const wasInner = useRef(inner);
+  const lastBuilding = useRef<number | null>(null);
+  useEffect(() => {
+    if (inner && !wasInner.current) steppedIn.current = true;
+    if (!inner) {
+      steppedIn.current = false;
+      if (lastBuilding.current !== null) {
+        document.querySelector<HTMLElement>(`[data-building="${lastBuilding.current.toString()}"]`)?.focus();
+      }
+    }
+    lastBuilding.current = buildingId ?? null;
+    wasInner.current = inner;
+  }, [inner, buildingId]);
+  const back = () => {
+    if (steppedIn.current) router.history.back();
+    else void navigate({ to: "/planets/$planetId", params: { planetId }, replace: true });
+  };
+
   // One dialog at a time: the stepper stands in for the panel, and closing it brings the panel back.
   if (mission) return <MissionModal planet={planetId} onClose={toPlanet} />;
   return (
@@ -81,14 +105,9 @@ export function PlanetPanel() {
         <Drawer.Dialog aria-label={title} className={layout === "phone" ? "h-dvh" : ""}>
           <Drawer.Header>
             {what && (
-              <Link
-                to="/planets/$planetId"
-                params={{ planetId }}
-                className="text-sm text-accent"
-                aria-label={`Back to ${name}`}
-              >
+              <Button variant="ghost" size="sm" aria-label={`Back to ${name}`} onPress={back}>
                 ← Back
-              </Link>
+              </Button>
             )}
             <Drawer.Heading className="display text-lg">{title}</Drawer.Heading>
             <Drawer.CloseTrigger />
@@ -368,6 +387,7 @@ function Slots({ view, ran, mine }: { view: PlanetView; ran: number; mine: boole
             <Link
               to="/planets/$planetId/buildings/$buildingId"
               params={{ planetId: view.planet_id, buildingId: b.id }}
+              data-building={b.id}
               aria-label={`${building(b.type)}, ${status}${done}`}
               className={`${tile} border-border hover:border-accent`}
             >

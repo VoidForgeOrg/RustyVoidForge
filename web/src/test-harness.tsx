@@ -28,6 +28,7 @@ export function renderAt(path: string) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 export function logIn() {
