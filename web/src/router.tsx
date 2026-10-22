@@ -75,6 +75,13 @@ const game = createRoute({
   notFoundComponent: Uncharted,
 });
 
+// Any path no route names: the Uncharted notice inside the console.
+const uncharted = createRoute({
+  getParentRoute: () => game,
+  path: "$",
+  component: Uncharted,
+});
+
 const home = createRoute({
   getParentRoute: () => game,
   path: "/",
@@ -150,6 +157,7 @@ export const routeTree = root.addChildren([
     fleets,
     universe,
     leaderboard,
+    uncharted,
   ]),
 ]);
 

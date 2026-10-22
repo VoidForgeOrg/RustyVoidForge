@@ -58,13 +58,16 @@ const movesFleets = new Set<Order["type"]>([
   "trigger_unload",
 ]);
 
-/** Refetches every view the order and its events changed, and waits for them. */
-async function refresh(client: QueryClient, order: Order, accepted: S["CommandAccepted"]) {
+/**
+ * Refetches every view the order and its events changed, and waits for them. A refusal refetches
+ * the same views, since it often means they're stale: the fleet or building is already gone.
+ */
+async function refresh(client: QueryClient, order: Order, events: S["Event"][]) {
   const planets = new Set<number>();
   const own = planetOf(order);
   if (own !== null) planets.add(own);
   let me = false;
-  for (const e of accepted.events) {
+  for (const e of events) {
     if ("planet_id" in e) planets.add(e.planet_id);
     if (e.type === "planet_colonized") me = true;
   }
@@ -72,7 +75,7 @@ async function refresh(client: QueryClient, order: Order, accepted: S["CommandAc
     ...[...planets].map((id) =>
       client.invalidateQueries({ queryKey: ["get", "/planets/{id}", { params: { path: { id } } }] }),
     ),
-    movesFleets.has(order.type) || accepted.events.length > 0
+    movesFleets.has(order.type) || events.length > 0
       ? client.invalidateQueries({ queryKey: fleetsKey })
       : null,
     me ? client.invalidateQueries({ queryKey: ["get", "/players/me"] }) : null,
@@ -118,11 +121,14 @@ export function useOrder() {
         body: { type: order.type, payload: order.payload } as Command,
       });
     } catch (error) {
-      if (failure(error, "command").kind !== "retry") setKey(newKey());
+      if (failure(error, "command").kind !== "retry") {
+        setKey(newKey());
+        await refresh(client, order, []);
+      }
       return null;
     }
     setKey(newKey());
-    await refresh(client, order, accepted);
+    await refresh(client, order, accepted.events);
     const lines = [doneLine(order, aboard(client, order)), ...accepted.events.map(eventLine)];
     toast.success(orders.done, {
       description: (

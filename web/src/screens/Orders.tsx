@@ -60,12 +60,14 @@ export function Confirm({
   question,
   consequence,
   keep = "Keep it",
+  onDone,
 }: {
   order: Order;
   label: string;
   question: string;
   consequence: string;
   keep?: string;
+  onDone?: () => void;
 }) {
   const { send, pending, error, reset } = useOrder();
   return (
@@ -78,7 +80,10 @@ export function Confirm({
           <AlertDialog.Dialog>
             {({ close }) => {
               const go = async () => {
-                if (await send(order)) close();
+                if (await send(order)) {
+                  close();
+                  onDone?.();
+                }
               };
               return (
                 <>

@@ -37,6 +37,11 @@ test("text meets WCAG AA on every surface", () => {
   expect(contrast("field-placeholder", "field-background")).toBeGreaterThanOrEqual(4.5);
 });
 
+test("an unticked checkbox's edge meets 3:1 in a dialog", () => {
+  expect(css).toMatch(/\.checkbox__control \{\s*border: 1px solid var\(--field-border\);/);
+  expect(contrast("field-border", "overlay")).toBeGreaterThanOrEqual(3);
+});
+
 test("control edges and the focus ring meet 3:1 where controls sit", () => {
   for (const edge of ["border", "field-border", "focus"]) {
     for (const surface of ["background", "surface", "overlay", "field-background"]) {

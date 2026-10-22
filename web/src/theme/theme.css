@@ -105,3 +105,14 @@ h3,
     scroll-behavior: auto !important;
   }
 }
+
+/* A checkbox's box sits beside its label and is found by its edge, as every field is. */
+.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checkbox__control {
+  border: 1px solid var(--field-border);
+}

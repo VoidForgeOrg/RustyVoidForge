@@ -156,7 +156,7 @@ function Holding({
         </p>
       )}
       <Arrivals planetId={view.planet_id} />
-      {open && <Slots view={view} ran={ran} />}
+      {open && <Slots view={view} ran={ran} mine={mine} />}
       {open && mine && <Roster view={view} me={me} />}
     </Panel>
   );
@@ -181,8 +181,11 @@ function Arrivals({ planetId }: { planetId: number }) {
 
 const tile = "relative grid h-19 w-19 place-items-center border bg-field text-2xl";
 
-/** The buildings in id order, then one "+" per free slot: slots are interchangeable. */
-function Slots({ view, ran }: { view: PlanetView; ran: number }) {
+/**
+ * The buildings in id order, then one "+" per free slot: slots are interchangeable. Only the
+ * player's own free slots open the build picker.
+ */
+function Slots({ view, ran, mine }: { view: PlanetView; ran: number; mine: boolean }) {
   const { buildingId: selected } = useParams({ strict: false });
   const buildings = [...view.buildings].sort((a, b) => a.id - b.id);
   const free = Math.max(0, view.slots - buildings.length);
@@ -214,14 +217,24 @@ function Slots({ view, ran }: { view: PlanetView; ran: number }) {
       })}
       {Array.from({ length: free }, (_, i) => (
         <li key={`free-${i.toString()}`}>
-          <Link
-            to="/planets/$planetId/build"
-            params={{ planetId: view.planet_id }}
-            aria-label="Free slot"
-            className={`${tile} border-dashed border-border text-muted hover:border-accent`}
-          >
-            <EmptySlotIcon />
-          </Link>
+          {mine ? (
+            <Link
+              to="/planets/$planetId/build"
+              params={{ planetId: view.planet_id }}
+              aria-label="Free slot"
+              className={`${tile} border-dashed border-border text-muted hover:border-accent`}
+            >
+              <EmptySlotIcon />
+            </Link>
+          ) : (
+            <span
+              role="img"
+              aria-label="Free slot"
+              className={`${tile} border-dashed border-separator text-muted`}
+            >
+              <EmptySlotIcon />
+            </span>
+          )}
         </li>
       ))}
     </ul>

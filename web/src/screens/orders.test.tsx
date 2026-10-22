@@ -269,3 +269,27 @@ test("the mission stepper checks its ships and cargo, assembles, and retries onl
   expect(sent[2]?.body.payload).toEqual({ fleet_id: 40, target_planet_id: 7, mission: "colonize" });
   expect(sent[2]?.key).toBe(sent[1]?.key);
 });
+
+test("a refusal refetches the views it names, so a fleet gone elsewhere stops offering orders", async () => {
+  const fleet = {
+    state: "stationed",
+    fleet_id: 40,
+    at_planet_id: 1,
+    ships: [{ ship_id: 31, ship_type: "cargo_vessel" }],
+    cargo: { iron_ore_g: 0, iron_ingot_g: 0 },
+    capacity_g: 500_000_000,
+    speed_du_per_h: 15_000,
+  };
+  answer({
+    "/players/me/fleets": Response.json({ as_of: home.as_of, valid_until: null, fleets: [fleet] }),
+    "/commands": orders(() => refused(404, "unknown_fleet")),
+  });
+  renderAt("/fleets");
+  const disband = await screen.findByRole("button", { name: "Disband" });
+  const before = gets("/players/me/fleets");
+  fireEvent.click(disband);
+  expect(await screen.findByText(/That fleet no longer exists/)).toBeInTheDocument();
+  await waitFor(() => {
+    expect(gets("/players/me/fleets")).toBeGreaterThan(before);
+  });
+});

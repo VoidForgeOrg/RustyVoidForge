@@ -26,7 +26,7 @@ export const failures = {
   order: "Order refused",
   login: "Access denied",
   uncharted: "Uncharted coordinates",
-  unchartedCopy: "No such planet or slot is on record. Check the number and try again.",
+  unchartedCopy: "No such planet or building is on record. Check the number and try again.",
 };
 
 export const orders = {

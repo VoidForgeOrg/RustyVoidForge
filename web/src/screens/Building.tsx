@@ -131,13 +131,25 @@ function BuildingBody({ view, receivedAt, b }: { view: PlanetView; receivedAt: n
           planet={mine ? view.planet_id : null}
         />
       )}
-      {mine && <BuildingOrders planet={view.planet_id} b={b} hasBuilds={builds.length > 0} />}
+      {mine && <BuildingOrders planet={view.planet_id} b={b} hasBuilds={builds.length > 0} ran={live.ran} />}
     </>
   );
 }
 
 /** Cancel construction or Demolish, each behind its confirm. */
-function BuildingOrders({ planet, b, hasBuilds }: { planet: number; b: BuildingView; hasBuilds: boolean }) {
+function BuildingOrders({
+  planet,
+  b,
+  hasBuilds,
+  ran,
+}: {
+  planet: number;
+  b: BuildingView;
+  hasBuilds: boolean;
+  ran: number;
+}) {
+  const navigate = useNavigate();
+  const back = () => void navigate({ to: "/planets/$planetId", params: { planetId: planet } });
   const rules = useRules().data;
   const name = `${building(b.type)} #${b.id.toString()}`;
   const ref = { building_id: b.id };
@@ -148,7 +160,8 @@ function BuildingOrders({ planet, b, hasBuilds }: { planet: number; b: BuildingV
           order={{ type: "cancel_construction", payload: ref, planet, building: b.type }}
           label={`Cancel construction of ${name}`}
           question={`Cancel construction of ${name}?`}
-          consequence={`Planet #${planet.toString()}. The ${mass(b.delivered_g)} of ingots delivered so far are lost, and the slot frees now.`}
+          consequence={`Planet #${planet.toString()}. The ${mass(grown(b.delivered_g, b.rate_g_per_h, ran, b.cost_g))} of ingots delivered so far are lost, and the slot frees now.`}
+          onDone={back}
         />
       </Actions>
     );
@@ -171,6 +184,7 @@ function BuildingOrders({ planet, b, hasBuilds }: { planet: number; b: BuildingV
         label={`Demolish ${name}`}
         question={`Demolish ${name}?`}
         consequence={`Planet #${planet.toString()}. It stops working now, and nothing is refunded. ${frees}`}
+        onDone={back}
       />
     </Actions>
   );
@@ -199,7 +213,7 @@ function ShipBuilds({
         order={{ type: "cancel_ship_build", payload: { ship_build_id: s.id }, planet }}
         label={`Cancel build #${s.id.toString()}`}
         question={`Cancel build #${s.id.toString()} (${ship(s.ship_type)}) at Shipyard #${s.shipyard_id.toString()}?`}
-        consequence={`Planet #${planet.toString()}. The ${mass(s.delivered_g)} of ingots delivered so far are lost.`}
+        consequence={`Planet #${planet.toString()}. The ${mass(grown(s.delivered_g, s.rate_g_per_h, ran, s.cost_g))} of ingots delivered so far are lost.`}
       />
     );
   return (

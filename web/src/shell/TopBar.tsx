@@ -1,6 +1,6 @@
 import { Button, Chip, Drawer, Popover } from "@heroui/react";
 import { Link } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import type { components } from "../api/schema";
 import { failure } from "../copy/messages";
 import { duration, mass, rate, thousands } from "../format";
@@ -183,8 +183,10 @@ function ResourceItem({
   now: number;
 }) {
   const t = total(planets, resource, now);
+  // Controlled, so following one of its links closes it rather than leaving it over the planet.
+  const [open, setOpen] = useState(false);
   return (
-    <Popover>
+    <Popover isOpen={open} onOpenChange={setOpen}>
       <Button
         variant="ghost"
         className={item}
@@ -203,7 +205,14 @@ function ResourceItem({
           <ul className="flex flex-col gap-1">
             {t.planets.map(({ planetId, stock }) => (
               <li key={planetId}>
-                <Link to="/planets/$planetId" params={{ planetId }} className={item}>
+                <Link
+                  to="/planets/$planetId"
+                  params={{ planetId }}
+                  className={item}
+                  onClick={() => {
+                    setOpen(false);
+                  }}
+                >
                   #{planetId} {mass(stock.amount_g)}{" "}
                   <span className="text-muted">
                     of {mass(stock.cap_g)}, {rate(stock.rate_g_per_h)}
@@ -213,7 +222,14 @@ function ResourceItem({
             ))}
             {missing.map(({ id, error }) => (
               <li key={id}>
-                <Link to="/planets/$planetId" params={{ planetId: id }} className={item}>
+                <Link
+                  to="/planets/$planetId"
+                  params={{ planetId: id }}
+                  className={item}
+                  onClick={() => {
+                    setOpen(false);
+                  }}
+                >
                   #{id} <span className="text-warning">{failure(error, "page", { planet: id }).copy}</span>
                 </Link>
               </li>
