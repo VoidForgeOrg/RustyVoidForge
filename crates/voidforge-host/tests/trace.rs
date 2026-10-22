@@ -69,7 +69,12 @@ async fn in_time<T>(f: impl Future<Output = T>) -> T {
 async fn a_command_s_trace_runs_from_its_caller_through_the_step_and_the_append() {
     let captured = capture();
     let (world, home, _) = world();
-    let log = MemoryLog::new();
+    // A snapshot after every record, slow: the turn stays open 300 ms after its reply, so a
+    // command span that closed only with the turn would be missing when the caller hears.
+    let log = GatedLog::closed(MemoryLog::new()).slow_snapshots(Duration::from_millis(300));
+    log.release(16);
+    let mut config = config();
+    config.snapshot_every_records = 1;
     let (handle, task) = voidforge_host::spawn(
         world,
         v0_rules(),
@@ -78,7 +83,7 @@ async fn a_command_s_trace_runs_from_its_caller_through_the_step_and_the_append(
             move || log
         },
         clock_at(MS_PER_HOUR),
-        config(),
+        config,
     )
     .unwrap();
     let request = tracing::info_span!("test.request");
@@ -128,17 +133,24 @@ async fn a_command_s_trace_runs_from_its_caller_through_the_step_and_the_append(
             );
         }
     }
-    // The turn is a root of its own, linked to the command it carried.
-    let turns: Vec<SpanData> = captured
-        .spans()
-        .into_iter()
-        .filter(|s| {
-            s.name == "host.turn"
-                && s.links
-                    .iter()
-                    .any(|l| l.span_context.trace_id().to_string() == trace)
-        })
-        .collect();
+    // The turn is a root of its own, linked to the command it carried. It ends after the reply
+    // (its snapshot), so wait for it.
+    let linked = |s: &SpanData| {
+        s.name == "host.turn"
+            && s.links
+                .iter()
+                .any(|l| l.span_context.trace_id().to_string() == trace)
+    };
+    let turns: Vec<SpanData> = in_time(async {
+        loop {
+            let turns: Vec<SpanData> = captured.spans().into_iter().filter(linked).collect();
+            if !turns.is_empty() {
+                break turns;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
     assert_eq!(turns.len(), 1, "one turn linked to this trace");
     assert_eq!(turns[0].parent_span_id, SpanId::INVALID);
     drop(handle);

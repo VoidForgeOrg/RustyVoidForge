@@ -86,6 +86,14 @@ async fn the_five_metrics_move_with_the_game() {
         .unwrap();
     assert!(count("voidforge.host.step.duration", "kind=command") >= 1.0);
     assert!(count("voidforge.host.append.duration", "") >= 1.0);
+    // The snapshot is written after the reply (between turns), so wait for it.
+    let snapshotted = tokio::time::timeout(PATIENCE, async {
+        while handle.stats().snapshots() < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(snapshotted.is_ok(), "a snapshot after each record");
     assert_eq!(value("voidforge.host.snapshot.age"), Some(0.0));
     let due = handle
         .read()
