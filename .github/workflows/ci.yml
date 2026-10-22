@@ -244,8 +244,17 @@ jobs:
               --build-arg VOIDFORGE_GIT_SHA="${GITHUB_SHA::12}" -t "voidforge-$target:local" .
           done
           echo "both images built in $(( $(date +%s) - started )) s"
-      - name: The built images' checks (user, size, nothing but the binary)
+      - name: The built images' checks (user, size, nothing but what each serves with)
         run: python3 .github/scripts/check-images.py --built
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: The walk's packages and Playwright's Chromium (the smoke test drives the web image)
+        run: |
+          npm ci --prefix web
+          npx --prefix web playwright install --with-deps chromium
       - name: Postgres and dex (CI config), healthy
         run: docker compose -f deploy/compose.yaml up --build --detach --wait --wait-timeout 300 postgres dex
       - name: Both images under compose, healthy, stopped cleanly

@@ -10,22 +10,29 @@
             COMPOSE_PROJECT_NAME outranks `name:` (R1-1).
   --built   (the images job, after `just images`) voidforge-server:local and voidforge-web:local
             run as 65532:65532, are at most MAX_MB each, and hold no shell, no cargo and no
-            sources; prints each one's size and user.
+            sources; the web image holds exactly the built app, static-web-server, its config and
+            the health client (D-066); prints each one's size and user.
 
 Usage: check-images.py --static | --built   (run from the repository root)
 Exit codes: 0 every check passed; 1 a check failed; 2 the checks couldn't run.
 """
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
 
 DOCKERFILE = "dockerfiles/Dockerfile"
 COMPOSE = "deploy/compose.images.yaml"
 PROJECT = "voidforge-images"
 OWNER_SERVICES = {"postgres", "dex", "otel-lgtm"}
-IMAGES = {"voidforge-server:local": "/usr/local/bin/voidforge-server", "voidforge-web:local": "/usr/local/bin/voidforge-web"}
+IMAGES = {"voidforge-server:local": "/usr/local/bin/voidforge-server", "voidforge-web:local": "/static-web-server"}
+# Every file the web image may hold (D-066): the server, its config, the health client and the
+# built app under /public; and the files docker itself adds to any container.
+WEB_FILES = {"static-web-server", "etc/static-web-server.toml", "usr/local/bin/httpcheck", "public/index.html"}
+DOCKER_FILES = {".dockerenv", "dev/console", "etc/hostname", "etc/hosts", "etc/mtab", "etc/resolv.conf"}
 USER = "65532:65532"
 MAX_MB = 64
 # Paths a runtime layer must not hold: a shell, the toolchain, the sources.
@@ -60,8 +67,7 @@ def static(dockerfile=DOCKERFILE, compose=COMPOSE, toolchain="rust-toolchain.tom
           "the builder (%s) is the toolchain rust-toolchain.toml names (%s)" % (builder.split("@")[0], channel))
     check("RUSTUP_TOOLCHAIN=%s" % channel in text, "RUSTUP_TOOLCHAIN names the same toolchain (%s)" % channel)
 
-    env = dict(os.environ, VOIDFORGE_DATABASE_URL="postgres://x@localhost/voidforge_e2e_0_0",
-               VOIDFORGE_WEB_CLIENT_SECRET="x")
+    env = dict(os.environ, VOIDFORGE_DATABASE_URL="postgres://x@localhost/voidforge_e2e_0_0")
     # The file's own name is what's checked here, whatever this shell inherits.
     env.pop("COMPOSE_PROJECT_NAME", None)
     out = subprocess.run(["docker", "compose", "-f", compose, "config", "--format", "json"],
@@ -129,8 +135,25 @@ def built():
             check(docker("cp", "%s:%s" % (container, binary), "-").returncode == 0, "%s holds %s" % (image, binary))
             for path in ABSENT:
                 check(docker("cp", "%s:%s" % (container, path), "-").returncode != 0, "%s holds no %s" % (image, path))
+            if image == "voidforge-web:local":
+                web_files(container)
         finally:
             docker("rm", container)
+
+
+def web_files(container):
+    out = subprocess.run(["docker", "export", container], capture_output=True)
+    if out.returncode != 0:
+        check(False, "docker export of the web image: %s" % out.stderr.decode("utf-8", "replace").strip())
+        return
+    with tarfile.open(fileobj=io.BytesIO(out.stdout)) as tar:
+        files = {m.name.removeprefix("./") for m in tar.getmembers() if not m.isdir()}
+    files -= DOCKER_FILES
+    missing = WEB_FILES - files
+    extra = {f for f in files - WEB_FILES if not f.startswith("public/")}
+    check(not missing, "the web image holds the server, its config, the health client and the app (missing %s)"
+          % (", ".join(sorted(missing)) or "none"))
+    check(not extra, "the web image holds nothing else (extra %s)" % (", ".join(sorted(extra)) or "none"))
 
 
 def main():

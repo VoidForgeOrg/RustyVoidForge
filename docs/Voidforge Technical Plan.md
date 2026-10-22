@@ -61,7 +61,7 @@ Every pick favors widely used, well-documented crates, because agents write most
 | Tests | cargo-nextest, proptest and insta; Vitest with Testing Library and Playwright for the web app | Playwright drives the browser in the smoke test |
 | Supply chain | cargo-deny; npm audit | Licenses, advisories and a dependency allowlist; advisories for the web app's lockfile |
 | Task runner | just | One `justfile`: up, test, e2e, replay |
-| Images | Multi-stage Docker builds with cargo-chef | Small runtime images running as a non-root user |
+| Images | Multi-stage Docker builds with cargo-chef for the server; the web app built in a Node stage and served by static-web-server | Small runtime images running as a non-root user, with no shell |
 | Rate limits | Our own GCRA limiter in the server ([D-054](decision-log.md#d-054-rate-limits-per-principal-gcra-read-and-write-budgets); tower\_governor was named first) | Per-player request limits on the API |
 
 ## Project layering
@@ -322,7 +322,7 @@ Telemetry, container images built in CI and nightly checks. An image registry, C
 | ID | Package | Area | Done when |
 | --- | --- | --- | --- |
 | P5.1 | Telemetry: spans from the API through the engine step and log append; metrics for inbox depth, event lag, step and append latency, snapshot age. The web app sends a `traceparent` on each order, one trace per order form and its retries (D-066) | server, host, web | Grafana shows a command's full trace and every metric |
-| P5.2 | Container image for the server: multi-stage build, non-root runtime, built in CI and pushed nowhere | `dockerfiles/`, `.github/workflows` | The image runs under compose and passes the smoke test |
+| P5.2 | Container images for the server and the static web app: multi-stage builds, non-root runtimes, built in CI and pushed nowhere | `dockerfiles/`, `.github/workflows` | Both images run under compose and pass the smoke test |
 | P5.3 | Nightly runs: a long bot simulation on the fast test rules, crash-and-retry and the full golden replay set | CI | Results are posted, and a failure opens an issue |
 | P5.4 | Backup and restore drill: restore Postgres into a fresh stack and check the state hash | ops runbook | The restored hash matches the source |
 

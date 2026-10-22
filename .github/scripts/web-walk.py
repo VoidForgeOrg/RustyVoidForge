@@ -4,14 +4,17 @@
 
   1. refuse (exit 2) when anything accepts on localhost:PORT, on any address `localhost` resolves to,
      before starting anything: that app would otherwise get alice's login;
-  2. start `vite preview` bound to 127.0.0.1:PORT with a strict port, as this script's own child;
-  3. be ready only on the child's own "Local: http://127.0.0.1:PORT/" line, read from its pipe while
-     it lives;
+  2. start `vite preview` bound to 127.0.0.1:PORT with a strict port, as this script's own child,
+     or with --image the web image (D-065, D-066) as `docker run --rm -i`, which relays its stop's
+     SIGTERM and returns the container's exit code;
+  3. be ready only on the child's own line naming http://127.0.0.1:PORT, read from its pipe while it
+     lives (vite's "Local: ...", static-web-server's "listening on ..."); for the image, then wait,
+     only connecting, until the port accepts here (colima forwards host networking on macOS);
   4. run the walk (web/e2e), whose Chromium maps `localhost` to 127.0.0.1, so every request reaches
      the child while the URL, dex's redirect and the origin stay `localhost`;
   5. stop the child, and exit with the walk's code.
 
-Usage: web-walk.py --dist DIR --api URL --issuer URL --output DIR --log FILE
+Usage: web-walk.py (--dist DIR | --image ID --name NAME) --api URL --issuer URL --output DIR --log FILE
 Exit codes: the walk's; 2 the app couldn't be served (the port is taken, or no receipt).
 """
 import argparse
@@ -26,7 +29,11 @@ import time
 
 PORT = 8081
 READY_SECONDS = 30
+FORWARD_SECONDS = 10
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# The line each server prints once it listens; PORT is filled in.
+VITE = r"Local:\s+http://127\.0\.0\.1:PORT/\s*$"
+STATIC_WEB_SERVER = r"listening on http://127\.0\.0\.1:PORT\s*$"
 
 
 def listeners(port=None):
@@ -42,15 +49,18 @@ def listeners(port=None):
     return sorted(set(found))
 
 
-def start_web(argv, cwd, log, port=None):
+def start_web(argv, cwd, log, port=None, receipt=VITE, forwarded=False):
     """Starts the child once the port is free, and returns it once it says it serves on
-    127.0.0.1:PORT; raises RuntimeError otherwise, with the child stopped."""
+    127.0.0.1:PORT (and, forwarded, once the port accepts here); raises RuntimeError otherwise, with
+    the child stopped."""
     port = PORT if port is None else port
     taken = listeners(port)
     if taken:
         raise RuntimeError("something already listens on localhost:%d (%s); stop it, then run the walk"
                            % (port, ", ".join(taken)))
-    child = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=log, universal_newlines=True)
+    # Both streams: static-web-server logs its receipt on stderr, vite on stdout.
+    child = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             universal_newlines=True)
     lines = queue.Queue()
 
     def pump():
@@ -61,7 +71,7 @@ def start_web(argv, cwd, log, port=None):
         lines.put(None)
 
     threading.Thread(target=pump, daemon=True).start()
-    receipt = re.compile(r"Local:\s+http://127\.0\.0\.1:%d/\s*$" % port)
+    said = re.compile(receipt.replace("PORT", str(port)))
     until = time.monotonic() + READY_SECONDS
     while time.monotonic() < until:
         try:
@@ -70,11 +80,25 @@ def start_web(argv, cwd, log, port=None):
             break
         if line is None:
             break
-        if receipt.search(ANSI.sub("", line)) and child.poll() is None:
-            return child
+        if said.search(ANSI.sub("", line)) and child.poll() is None:
+            if not forwarded or accepts(port, child):
+                return child
+            break
     stop(child)
     raise RuntimeError("the web app didn't say it serves on http://127.0.0.1:%d/ (exit %s); see %s"
                        % (port, child.returncode, log.name))
+
+
+def accepts(port, child):
+    """Waits, connecting only, until 127.0.0.1:PORT accepts here while the child lives."""
+    until = time.monotonic() + FORWARD_SECONDS
+    while time.monotonic() < until and child.poll() is None:
+        with socket.socket() as s:
+            s.settimeout(0.5)
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                return True
+        time.sleep(0.2)
+    return False
 
 
 def stop(child):
@@ -89,18 +113,26 @@ def stop(child):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--dist", required=True)
+    where = p.add_mutually_exclusive_group(required=True)
+    where.add_argument("--dist")
+    where.add_argument("--image")
+    p.add_argument("--name", help="the walk's web container's name, with --image")
     p.add_argument("--api", required=True)
     p.add_argument("--issuer", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--log", required=True)
     args = p.parse_args()
     web = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "web")
-    preview = ["node_modules/.bin/vite", "preview", "--host", "127.0.0.1", "--port", str(PORT), "--strictPort",
-               "--outDir", os.path.abspath(args.dist)]
+    if args.image:
+        argv = ["docker", "run", "--rm", "-i", "--network", "host", "--name", args.name, args.image]
+        start = dict(receipt=STATIC_WEB_SERVER, forwarded=True)
+    else:
+        argv = ["node_modules/.bin/vite", "preview", "--host", "127.0.0.1", "--port", str(PORT), "--strictPort",
+                "--outDir", os.path.abspath(args.dist)]
+        start = {}
     with open(args.log, "w") as log:
         try:
-            child = start_web(preview, web, log)
+            child = start_web(argv, web, log, **start)
         except RuntimeError as e:
             print("web-walk: " + str(e), file=sys.stderr)
             return 2

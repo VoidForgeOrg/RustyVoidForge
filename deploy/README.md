@@ -71,19 +71,20 @@ The issuer is `http://localhost:5556/dex` everywhere. A container that needs it 
 
 ## The images (P5.2)
 
-`dockerfiles/Dockerfile` builds `voidforge-server:local` and `voidforge-web:local`: distroless, no shell, running as 65532:65532. Nothing is pushed. They run under `deploy/compose.images.yaml`, a project of its own (`voidforge-images`) beside this stack, never inside it, so compose never recreates the stack's containers (D-065).
+`dockerfiles/Dockerfile` builds `voidforge-server:local`, distroless, and `voidforge-web:local`, the built web app served by static-web-server with microcheck's `httpcheck` as its health client (D-066). Neither has a shell; both run as 65532:65532. Nothing is pushed. The web app calls the API at `http://localhost:8080`, baked in at build time: `VOIDFORGE_PORT=<port> just images` builds it for another port, and serve must then run there. They run under `deploy/compose.images.yaml`, a project of its own (`voidforge-images`) beside this stack, never inside it, so compose never recreates the stack's containers (D-065).
 
 ```sh
 just images                                        # build both, then check user, size and contents (`just images 1` for one build job)
 E2E_ISSUER=http://localhost:5563/dex just images-compose   # both up healthy on a scratch database, stopped cleanly, taken down
-E2E_ISSUER=http://localhost:5563/dex just smoke-images     # the smoke test against the images
+E2E_ISSUER=http://localhost:5563/dex just smoke-images     # the smoke test against the images, serve on VOIDFORGE_PORT (8080)
 VOIDFORGE_DATABASE_URL=postgres://…/<scratch> just images-up   # leave both running; `just images-down` stops them
 ```
 
 - `VOIDFORGE_DATABASE_URL` is required and has no default: name a seeded scratch database, never `voidforge`.
 - `docker compose stop` sends SIGTERM to serve itself (PID 1); it drains and stops with its final snapshot, exit 0. SIGKILL comes only after 40 s.
-- Health: serve's is `voidforge-server health` on `/openapi.json`, the web's `voidforge-web --health-check` on `/`. Serve's start period is 300 s, so a long recovery reads "starting", never "unhealthy".
-- On colima, "host" is the VM's network; colima forwards each listening port to the Mac with an ssh listener that outlives a stopped container by up to ~3 s. The web walk waits for its own previous web's port to come free, and after its web's receipt waits for the forward (20-30 ms). A known colima limit (D-065): in that gap the receipt proves the bind in the VM, not on the Mac; Linux has no forward and no gap.
+- Health: serve's is `voidforge-server health` on `/openapi.json`, the web's `httpcheck` on static-web-server's `/health`. Serve's start period is 300 s, so a long recovery reads "starting", never "unhealthy".
+- The web image sends the app's CSP with `frame-ancestors 'none'`, `nosniff` and `no-cache` on every page, and caches the hashed assets for a year. Every path it doesn't hold, a missing asset included, gets `index.html` with 200, since the app routes in the browser.
+- On colima, "host" is the VM's network; colima forwards each listening port to the Mac with an ssh listener that outlives a stopped container by up to ~3 s. The web walk refuses to start while anything listens on `localhost:8081`, and after its web's receipt waits for the forward (20-30 ms). A known colima limit (D-065): in that gap the receipt proves the bind in the VM, not on the Mac; Linux has no forward and no gap.
 
 ## Troubleshooting
 

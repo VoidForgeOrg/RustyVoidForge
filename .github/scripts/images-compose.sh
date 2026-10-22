@@ -6,8 +6,8 @@
 #   1. creates its own database, voidforge_e2e_<time>_<pid>, and seeds it from the server image;
 #   2. brings up deploy/compose.images.yaml as its own project, voidforge-images, with
 #      `--wait`: compose returns only once both healthchecks pass (serve's GET /openapi.json, the
-#      web's GET /), and the script checks each container's health is "healthy" and that it runs
-#      the image ID it was given;
+#      web's GET /health through httpcheck), and the script checks each container's health is
+#      "healthy" and that it runs the image ID it was given;
 #   3. `docker compose stop`: SIGTERM to each PID 1, then each must exit 0 (serve with its final
 #      snapshot at the log head, D-050);
 #   4. takes the project down and drops its database, on every exit.
@@ -48,7 +48,7 @@ curl -sf -o /dev/null "$issuer/.well-known/openid-configuration" || { say "no de
 
 port=$(python3 .github/scripts/free-port.py)
 export VOIDFORGE_DATABASE_URL="$url_base/$db" VOIDFORGE_PORT="$port" VOIDFORGE_ISSUER="$issuer" \
-    VOIDFORGE_RULES_FILE=v0-fast.toml VOIDFORGE_WEB_CLIENT_SECRET=voidforge-web-local-test-secret
+    VOIDFORGE_RULES_FILE=v0-fast.toml
 up=0
 cleanup() {
     local code=$?

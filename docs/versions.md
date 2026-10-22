@@ -62,9 +62,12 @@ Pinned in [`dockerfiles/Dockerfile`](../dockerfiles/Dockerfile) by tag and multi
 | Item | Version | Pin |
 | --- | --- | --- |
 | Build base | Rust 1.99.1, Debian trixie slim | `rust:1.99.1-slim-trixie@sha256:aab42391a986424e22d6a3ec14f37bc6dd3dacff4d457ca7cccd781e02297cc6` |
-| Runtime base | distroless cc, Debian 13, nonroot (65532:65532) | `gcr.io/distroless/cc-debian13:nonroot@sha256:83b9b50586253821cf63ffcec87d3d94265a093ad30da232039af962dd8f4edf` |
+| Runtime base | distroless cc, Debian 13, nonroot (65532:65532); the server image | `gcr.io/distroless/cc-debian13:nonroot@sha256:83b9b50586253821cf63ffcec87d3d94265a093ad30da232039af962dd8f4edf` |
+| Web app build | Node 26.12.0, Debian trixie slim, build stage only (D-066) | `node:26.12.0-trixie-slim@sha256:e556a144463cc8dc53afe8de6d2fa0db5c132fd39ffa232c17641bd40df2bf11` |
+| Web server | static-web-server 2.44.1 (MIT or Apache-2.0), one static binary on scratch, no shell; the web image's base (D-066) | `joseluisq/static-web-server:2.44.1@sha256:94618e3d17802265a21926217e6f9e7832b311b6fbf5933684001739fafed06a` |
+| Web health client | microcheck 1.4.0's `httpcheck` (MIT), one static binary, no shell; only `httpcheck` is copied (D-066) | `ghcr.io/tarampampam/microcheck:1.4.0@sha256:c9f79cd408626de7c10f2d487d67339f49adf0ba61dde96ede65343269db1f85` |
 | cargo-chef | 0.1.78, build stage only | `cargo install cargo-chef --locked --version 0.1.78`; never in a runtime image |
-| Docker | 29.5.2 verified locally (colima; the legacy builder, no buildx); the runner image's Docker in CI | Not pinned; installed per machine |
+| Docker | 29.5.2 verified locally (colima; buildx 0.38.1, so BuildKit skips the stages a target doesn't use); the runner image's Docker in CI | Not pinned; installed per machine |
 
 ## Tools: planned, not introduced
 

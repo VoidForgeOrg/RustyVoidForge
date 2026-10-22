@@ -7,8 +7,14 @@ target/
 .github/
 deploy/
 dockerfiles/
+!dockerfiles/static-web-server.toml
 docs/
 tests/
+# The web app is built inside the image, from its lock file.
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
 # Local agent and editor state: never in a build layer (R1-3).
 .mcp.json
 .claude/

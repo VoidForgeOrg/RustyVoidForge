@@ -62,7 +62,6 @@ for arg in "$@"; do
 done
 # The images' compose project for this run: never the owner's `voidforge` (D-065).
 images_compose=(docker compose -f deploy/compose.images.yaml -p "voidforge-images-e2e-$$")
-web_secret=voidforge-web-local-test-secret  # TEST-ONLY, from deploy/dex/config*.yaml
 drop_hint() { say "  docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -d postgres -c 'DROP DATABASE \"$1\"'"; }
 
 case "$db" in
@@ -123,6 +122,15 @@ if [ "$images" = 1 ]; then
     server_image=$(docker image inspect -f '{{.Id}}' voidforge-server:local)
     web_image=$(docker image inspect -f '{{.Id}}' voidforge-web:local)
     say "images: voidforge-server:local $server_image, voidforge-web:local $web_image"
+    # The web image calls the API it was built for (D-066), so serve runs there: VOIDFORGE_PORT,
+    # 8080 by default, as `just images` built it.
+    port="${VOIDFORGE_PORT:-8080}"
+    built_for=$(docker image inspect -f '{{index .Config.Labels "org.voidforge.api-url"}}' voidforge-web:local)
+    if [ "$built_for" != "http://localhost:$port" ]; then
+        say "voidforge-web:local calls $built_for, not http://localhost:$port; rebuild it with"
+        say "  VOIDFORGE_PORT=$port just images"
+        exit 3
+    fi
     [ "$smoke" = 1 ] || SQLX_OFFLINE=true cargo build -q --locked -p voidforge-bots
 else
     SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots
@@ -188,10 +196,9 @@ serve_alive() {
     fi
 }
 if [ "$images" = 1 ]; then
-    port=$(python3 .github/scripts/free-port.py)
     # Exported, since compose reads every variable of the file on each command, cleanup's too.
     export VOIDFORGE_DATABASE_URL="$url_base/$db" VOIDFORGE_PORT="$port" VOIDFORGE_ISSUER="$issuer" \
-        VOIDFORGE_RULES_FILE="${rules#rules/}" VOIDFORGE_LEADERBOARD_SECS=1 VOIDFORGE_WEB_CLIENT_SECRET="$web_secret"
+        VOIDFORGE_RULES_FILE="${rules#rules/}" VOIDFORGE_LEADERBOARD_SECS=1
     images_up=1
     "${images_compose[@]}" up --detach --no-build server > "$log_dir/compose-up.log" 2>&1 \
         || { say "compose couldn't start serve:"; cat "$log_dir/compose-up.log" >&2; exit 3; }
@@ -260,16 +267,22 @@ fi
 # build in web/dist can't swap it out), then web-walk.py serves it as its own child on
 # 127.0.0.1:8081, only after checking nothing else listens on localhost:8081 (D-063's R2-G1), and
 # runs Playwright's walk: alice logs in through dex's pages, every screen renders and the MVP loop
-# plays, each step checked against the API's JSON.
+# plays, each step checked against the API's JSON. With --images, web-walk.py starts the web image
+# instead, as its own `docker run --rm -i` child, with the same check, receipt and pin.
 web_code=0
 if [ "$bots_code" = 0 ]; then
     run_dir="$(cd "$log_dir" && pwd)"
-    {
-        VITE_API_URL="http://$addr" VITE_OIDC_ISSUER="$issuer" \
-            npm --prefix web run build -- --outDir "$run_dir/dist" --emptyOutDir \
-            && python3 .github/scripts/web-walk.py --dist "$run_dir/dist" --api "http://$addr" \
-                --issuer "$issuer" --output "$run_dir/walk" --log "$log_dir/web.log"
-    } > "$log_dir/web-walk.log" 2>&1
+    walk=(--api "http://$addr" --issuer "$issuer" --output "$run_dir/walk" --log "$log_dir/web.log")
+    if [ "$images" = 1 ]; then
+        python3 .github/scripts/web-walk.py --image "$web_image" --name "voidforge-walk-web-$$" "${walk[@]}" \
+            > "$log_dir/web-walk.log" 2>&1
+    else
+        {
+            VITE_API_URL="http://$addr" VITE_OIDC_ISSUER="$issuer" \
+                npm --prefix web run build -- --outDir "$run_dir/dist" --emptyOutDir \
+                && python3 .github/scripts/web-walk.py --dist "$run_dir/dist" "${walk[@]}"
+        } > "$log_dir/web-walk.log" 2>&1
+    fi
     web_code=$?
     tail -n 30 "$log_dir/web-walk.log"
 fi

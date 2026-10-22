@@ -28,6 +28,8 @@ services:
       VOIDFORGE_DATABASE_URL: ${VOIDFORGE_DATABASE_URL:?name a scratch database; never voidforge}
       VOIDFORGE_ISSUER: ${VOIDFORGE_ISSUER:-http://localhost:5556/dex}
       VOIDFORGE_LEADERBOARD_SECS: ${VOIDFORGE_LEADERBOARD_SECS:-60}
+      # The web image's origin (D-066): the browser app calls the API from it.
+      VOIDFORGE_CORS_ORIGINS: http://localhost:8081
       # Empty means no export (D-016); `just images-up` names the stack's collector.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       RUST_LOG: ${RUST_LOG:-info}
@@ -49,23 +51,17 @@ services:
       start_period: 300s
       start_interval: 1s
 
+  # The static app (D-066): built with its API's URL and the issuer baked in (`just images`), served
+  # on 127.0.0.1:8081, where dex registers the redirect by exact string. It needs no settings here.
   web:
     image: voidforge-web:local
     network_mode: host
-    environment:
-      VOIDFORGE_WEB_ISSUER: ${VOIDFORGE_ISSUER:-http://localhost:5556/dex}
-      VOIDFORGE_WEB_API_URL: http://127.0.0.1:${VOIDFORGE_PORT:-8080}
-      # dex registers the redirect by exact string: http://localhost:8081/callback.
-      VOIDFORGE_WEB_BIND: 127.0.0.1:8081
-      VOIDFORGE_WEB_CLIENT_SECRET: ${VOIDFORGE_WEB_CLIENT_SECRET:?the web client secret from deploy/dex/config.yaml}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      RUST_LOG: ${RUST_LOG:-info}
     stop_grace_period: 15s
     healthcheck:
       test:
         - CMD
-        - /usr/local/bin/voidforge-web
-        - --health-check=http://127.0.0.1:8081/
+        - /usr/local/bin/httpcheck
+        - http://127.0.0.1:8081/health
       interval: 5s
       timeout: 4s
       retries: 3
