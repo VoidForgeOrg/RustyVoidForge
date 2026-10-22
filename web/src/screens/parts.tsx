@@ -1,3 +1,4 @@
+import { Label, NumberField } from "@heroui/react";
 import type { ReactNode } from "react";
 import type { components } from "../api/schema";
 import { flow, type Flow, mass, rate, stock as stockText } from "../format";
@@ -13,6 +14,35 @@ export type BuildingView = S["BuildingView"];
 export function useLive(view: { as_of: string; valid_until?: string | null }, receivedAt: number) {
   const now = useNow();
   return { ran: ratedFor(view, receivedAt, now), gameNow: viewNow(view, receivedAt, now) };
+}
+
+/** Distance units in a world unit (D-021). */
+export const DU_PER_U = 1_000;
+/** The default search radius, in world units. */
+export const DEFAULT_RADIUS_U = 50;
+
+/** A search radius in whole world units, for the star charts and the mission's targets. */
+export function RadiusField({ value, onChange }: { value: number; onChange: (radiusU: number) => void }) {
+  return (
+    <NumberField
+      className="w-40"
+      value={value}
+      minValue={0}
+      maxValue={1_000_000}
+      step={10}
+      formatOptions={{ maximumFractionDigits: 0 }}
+      onChange={(next) => {
+        if (Number.isSafeInteger(next)) onChange(next);
+      }}
+    >
+      <Label>Radius (u)</Label>
+      <NumberField.Group>
+        <NumberField.DecrementButton />
+        <NumberField.Input />
+        <NumberField.IncrementButton />
+      </NumberField.Group>
+    </NumberField>
+  );
 }
 
 export const planetName = (id: number, homeworld?: number) =>

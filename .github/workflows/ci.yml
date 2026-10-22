@@ -46,9 +46,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: No floats in core, rules and worldgen (type-aware, from MIR)
         run: python3 tests/guardrails/check_no_floats.py
-      - name: Web dependency isolation
-        run: python3 tests/guardrails/check_web_deps.py
-      - name: Guardrail fixtures (determinism bans and web isolation)
+      - name: Bots dependency isolation
+        run: python3 tests/guardrails/check_bots_deps.py
+      - name: Guardrail fixtures (determinism bans and bots isolation)
         run: python3 tests/guardrails/run_fixtures.py
 
   supply-chain:
@@ -172,7 +172,8 @@ jobs:
   # The end-to-end scenario (Technical Plan P3.6, the Phase 3 gate; decision log D-052): compose's
   # Postgres and dex with the CI dex config (the password grant on), then .github/scripts/e2e.sh,
   # which seeds a fresh universe on the fast rules, runs the serve binary on the host and the
-  # bots against it. Then the token checks against the real dex (D-046). `just e2e` and
+  # bots against it, then the web walk in Chromium (D-063). Then the token checks against the
+  # real dex (D-046). `just e2e` and
   # `just dex-test` run the same against the local stack.
   e2e:
     name: e2e
@@ -189,6 +190,15 @@ jobs:
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: cargo-nextest@0.9.148
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: The web app's locked dependencies, and Playwright's Chromium for the web walk
+        run: |
+          npm ci --prefix web
+          npx --prefix web playwright install --with-deps chromium
       - name: Postgres and dex (CI config), healthy
         run: docker compose -f deploy/compose.yaml up --build --detach --wait --wait-timeout 300 postgres dex
       - name: Build the server and the bots
@@ -197,10 +207,10 @@ jobs:
         run: .github/scripts/e2e.sh
       - name: Token checks against the real dex
         run: SQLX_OFFLINE=true cargo nextest run -p voidforge-server --test dex --locked --run-ignored only --no-capture
-      - name: On failure, the logs (serve, the bots, the terminal login, seed, dex, Postgres)
+      - name: On failure, the logs (serve, the bots, the terminal login, the web walk, seed, dex, Postgres)
         if: failure()
         run: |
-          for f in serve bots device-login web-login web seed; do
+          for f in serve bots device-login web-walk web seed; do
             echo "::group::$f.log"
             cat "$E2E_LOG_DIR/$f.log" 2>/dev/null || echo "(no $f.log)"
             echo "::endgroup::"

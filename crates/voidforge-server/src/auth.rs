@@ -60,7 +60,6 @@ pub struct AuthArgs {
         env = "VOIDFORGE_AUDIENCES",
         value_delimiter = ',',
         default_values_t = [
-            String::from("voidforge-web"),
             String::from("voidforge-spa"),
             String::from("voidforge-cli"),
         ]

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import doc from "../../../crates/voidforge-web/tests/fixtures/copy.json";
+import doc from "../fixtures/copy.json";
 import { ApiError } from "../api/client";
 import { copy, type ErrorCode, failure } from "./messages";
 

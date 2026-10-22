@@ -43,7 +43,7 @@ lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     python3 tests/guardrails/check_no_floats.py
-    python3 tests/guardrails/check_web_deps.py
+    python3 tests/guardrails/check_bots_deps.py
     python3 tests/guardrails/run_fixtures.py
 
 # The CI supply-chain job.
@@ -119,10 +119,10 @@ e2e:
     .github/scripts/e2e.sh
 
 # The smoke test (Technical Plan P4.5, D-062): the e2e job's web walk alone, on the fast rules
-# against the compose stack: alice logs in through dex with a cookie jar and plays the MVP loop
-# through voidforge-web's forms (build, queue ships, assemble, colonize, transport), each step
-# checked against the API's JSON. About two minutes. The same needs and owner safety as `e2e`,
-# whose CI run includes this walk.
+# against the compose stack: Playwright logs alice in through dex and plays the MVP loop through
+# the web app in Chromium (build, queue ships, assemble, colonize, transport), each step checked
+# against the API's JSON. The same needs and owner safety as `e2e`, whose CI run includes this
+# walk, plus web/'s packages and Playwright's Chromium (D-063).
 smoke:
     .github/scripts/e2e.sh --smoke
 

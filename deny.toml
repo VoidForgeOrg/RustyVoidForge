@@ -48,7 +48,6 @@ allow = [
     { crate = "voidforge-store" },
     { crate = "voidforge-telemetry" },
     { crate = "voidforge-testkit" },
-    { crate = "voidforge-web" },
     { crate = "voidforge-worldgen" },
     # voidforge-telemetry (P0.6, decision log D-017): its direct dependencies
     { crate = "opentelemetry" },
@@ -315,24 +314,6 @@ allow = [
     { crate = "unicode-general-category" },
     { crate = "uuid-simd" },
     { crate = "vsimd" },
-    # voidforge-web's login (P4.1, decision log D-057): tower-sessions (with our own bounded
-    # store, not its memory-store), its cookie layer (tower-cookies, cookie) and the time crates
-    # cookie expiry uses; maud and its macros for the pages; futures under tower-sessions. All MIT
-    # or MIT/Apache-2.0.
-    { crate = "cookie" },
-    { crate = "deranged" },
-    { crate = "futures" },
-    { crate = "maud" },
-    { crate = "maud_macros" },
-    { crate = "num-conv" },
-    { crate = "powerfmt" },
-    { crate = "proc-macro2-diagnostics" },
-    { crate = "time" },
-    { crate = "time-core" },
-    { crate = "time-macros" },
-    { crate = "tower-cookies" },
-    { crate = "tower-sessions" },
-    { crate = "tower-sessions-core" },
     # tokio's signal feature, for serve's SIGINT and SIGTERM (P3.4s, decision log D-050):
     # signal-hook-registry, with errno and libc already in the graph.
     { crate = "signal-hook-registry" },

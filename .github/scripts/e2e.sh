@@ -5,12 +5,14 @@
 # the same walk CI runs inside the whole scenario, never a second copy.
 #
 #   1. checks dex's password grant, and lists leftover e2e databases;
-#   2. builds voidforge-server, voidforge-bots and voidforge-web;
+#   2. builds voidforge-server and voidforge-bots;
 #   3. creates this run's own database, voidforge_e2e_<time>_<pid>, and seeds it on the fast rules;
 #   4. starts the serve binary as a host process (never through just or cargo run: D-050 I5) on a
-#      free port, and waits for its ready line and GET /openapi.json;
+#      free port, with the web app's origin allowed, and waits for its ready line and GET
+#      /openapi.json;
 #   5. runs `voidforge-bots e2e`, then the terminal login check (.github/scripts/device-login.py),
-#      then the web login check (.github/scripts/web-login.py; it needs localhost:8081 free);
+#      then the web walk: it builds web/ against this serve, serves it with `vite preview` on
+#      localhost:8081 (which must be free), and runs Playwright's walk (web/e2e) in Chromium;
 #   6. stops serve with one SIGTERM and requires exit 0 (the final snapshot at the log head);
 #   7. drops this run's database, on every exit.
 #
@@ -19,8 +21,10 @@
 # leftover from a killed run is dropped only when the pid in its name is dead; otherwise it's
 # listed with the command that drops it.
 #
-# E2E_ISSUER (default http://localhost:5556/dex) names the dex to use. Logs go to E2E_LOG_DIR (default target/e2e/<run>): serve.log, bots.log, seed.log,
-# device-login.log, web-login.log and web.log.
+# E2E_ISSUER (default http://localhost:5556/dex) names the dex to use. The web walk needs web/'s
+# packages and Playwright's Chromium (`npm ci --prefix web`, then `npx --prefix web playwright
+# install chromium`). Logs go to E2E_LOG_DIR (default target/e2e/<run>): serve.log, bots.log,
+# seed.log, device-login.log, web-walk.log and web.log.
 # Usage: e2e.sh [--smoke]
 # Exit codes: 0 passed; 1 the scenario failed, or serve didn't stop cleanly; 2 usage;
 # 3 the stack isn't ready (dex without the password grant, Postgres unreachable, serve not ready).
@@ -53,9 +57,6 @@ case "$db" in
     *) say "refusing database $db"; exit 2 ;;
 esac
 mkdir -p "$log_dir"
-# A reused E2E_LOG_DIR may hold an earlier run's walk log, whose timing line would satisfy the
-# walk-ran check below without this run walking at all (P4.5 QA's F1).
-rm -f "$log_dir/web-login.log"
 
 # 1. The stack: dex's password grant for the static users, as the bots' public client.
 grant=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
@@ -89,15 +90,21 @@ for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\
 done
 
 # 2. The binaries, checked against .sqlx/ (D-034), never against a database.
-SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots -p voidforge-web
+SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots
 target_dir=$(cargo metadata -q --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 server="$target_dir/debug/voidforge-server"
 bots="$target_dir/debug/voidforge-bots"
-web="$target_dir/debug/voidforge-web"
+# The web app's one origin: dex's redirect URI and the API's CORS origin (D-063).
+web_origin=http://localhost:8081
 
 serve_pid=
+web_pid=
 cleanup() {
     local code=$?
+    if [ -n "$web_pid" ] && kill -0 "$web_pid" 2> /dev/null; then
+        kill -TERM "$web_pid" 2> /dev/null || true
+        wait "$web_pid" 2> /dev/null || true
+    fi
     if [ -n "$serve_pid" ] && kill -0 "$serve_pid" 2> /dev/null; then
         kill -KILL "$serve_pid" 2> /dev/null || true
         wait "$serve_pid" 2> /dev/null || true
@@ -123,7 +130,7 @@ VOIDFORGE_DATABASE_URL="$url_base/$db" "$server" seed --seed "$seed" --players "
 
 # 4. serve, on a free port, with the board rebuilt every second.
 VOIDFORGE_DATABASE_URL="$url_base/$db" "$server" serve --rules "$rules" --bind 127.0.0.1:0 \
-    --leaderboard-secs 1 --issuer "$issuer" > "$log_dir/serve.log" 2>&1 &
+    --leaderboard-secs 1 --issuer "$issuer" --cors-origin "$web_origin" > "$log_dir/serve.log" 2>&1 &
 serve_pid=$!
 addr=
 for _ in $(seq 1 300); do
@@ -157,15 +164,27 @@ if [ "$bots_code" = 0 ] && [ "$smoke" = 0 ]; then
         2>&1 | tee "$log_dir/device-login.log"
     device_code=${PIPESTATUS[0]}
 fi
-# 5c. The web login (P4.1, D-057): alice logs in and out of voidforge-web through dex's
-# authorization code flow, driven over HTTP with cookie jars; Home's score proves the API took
-# the web app's token, and the page walk (P4.3, D-060) reads every page from the live game. It
-# starts and stops voidforge-web itself, on localhost:8081.
+# 5c. The web walk (D-063): the app built against this serve and served on its one origin, then
+# Playwright logs alice in through dex's pages, renders every screen and plays the MVP loop,
+# each step checked against the API's JSON.
 web_code=0
 if [ "$bots_code" = 0 ]; then
-    python3 .github/scripts/web-login.py --web "$web" --api "http://$addr" --issuer "$issuer" \
-        --log "$log_dir/web.log" 2>&1 | tee "$log_dir/web-login.log"
-    web_code=${PIPESTATUS[0]}
+    {
+        VITE_API_URL="http://$addr" VITE_OIDC_ISSUER="$issuer" npm --prefix web run build \
+            && { (cd web && exec node_modules/.bin/vite preview) > "$log_dir/web.log" 2>&1 & web_pid=$!; } \
+            && for _ in $(seq 1 100); do
+                curl -sf -o /dev/null "$web_origin/" && break
+                kill -0 "$web_pid" 2> /dev/null || break
+                sleep 0.2
+            done \
+            && curl -sf -o /dev/null "$web_origin/" \
+            && WALK_API="http://$addr" WALK_ISSUER="$issuer" npm --prefix web run walk -- --output "$(cd "$log_dir" && pwd)/walk"
+    } > "$log_dir/web-walk.log" 2>&1
+    web_code=$?
+    tail -n 30 "$log_dir/web-walk.log"
+    kill -TERM "$web_pid" 2> /dev/null || true
+    wait "$web_pid" 2> /dev/null || true
+    web_pid=
 fi
 set -e
 
@@ -198,20 +217,12 @@ if [ "$bots_code" = 0 ] && [ "$device_code" != 0 ]; then
     say "FAILED: the scenario passed, but the terminal login check exited $device_code; its log is $log_dir/device-login.log"
     exit 1
 fi
-# The walk must have run to its end: web-login.py prints its timing line only once steps 1 to 9
-# (login, pages, the forms' MVP loop, replay, logout) have all passed (P4.5, D-062), so a run that
-# skipped it, or stopped short with exit 0, can't pass.
-if [ "$bots_code" = 0 ] && [ "$web_code" = 0 ] \
-    && ! grep -q '^ok: the smoke walk took ' "$log_dir/web-login.log" 2> /dev/null; then
-    say "FAILED: the web walk didn't run to its end (no timing line in $log_dir/web-login.log)"
-    exit 1
-fi
 if [ "$bots_code" = 0 ] && [ "$web_code" != 0 ]; then
     if [ "$smoke" = 1 ]; then
-        say "FAILED (smoke): the web walk exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
+        say "FAILED (smoke): the web walk exited $web_code; its log is $log_dir/web-walk.log, the web app's $log_dir/web.log"
         exit 1
     fi
-    say "FAILED: the scenario passed, but the web login check exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
+    say "FAILED: the scenario passed, but the web walk exited $web_code; its log is $log_dir/web-walk.log, the web app's $log_dir/web.log"
     exit 1
 fi
 if [ "$bots_code" != 0 ]; then
@@ -224,7 +235,7 @@ if [ "$serve_code" != 0 ]; then
     exit 1
 fi
 if [ "$smoke" = 1 ]; then
-    say "PASSED (smoke): the web walk passed, and serve stopped cleanly; $(grep '^ok: the smoke walk took ' "$log_dir/web-login.log")"
+    say "PASSED (smoke): the web walk passed, and serve stopped cleanly"
 else
-    say "PASSED: the scenario, the terminal login and the web login passed, and serve stopped cleanly"
+    say "PASSED: the scenario, the terminal login and the web walk passed, and serve stopped cleanly"
 fi

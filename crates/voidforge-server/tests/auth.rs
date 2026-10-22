@@ -54,7 +54,7 @@ impl Harness {
         *dex.issuer.lock().unwrap() = issuer.clone();
         let config = AuthConfig {
             issuer: issuer.clone(),
-            audiences: vec!["voidforge-web".to_owned(), "voidforge-cli".to_owned()],
+            audiences: vec!["voidforge-spa".to_owned(), "voidforge-cli".to_owned()],
             leeway: Duration::from_secs(30),
             refresh: Duration::from_secs(900),
             min_refresh,
@@ -196,7 +196,7 @@ async fn a_valid_token_gives_the_principal() {
     assert_eq!(reply.body["issuer"], json!(h.issuer));
     // The scheme is case-insensitive; an audience list of allowed clients is fine.
     let mut c = claims(&h.issuer);
-    c["aud"] = json!(["voidforge-cli", "voidforge-web"]);
+    c["aud"] = json!(["voidforge-cli", "voidforge-spa"]);
     let reply = h.call(&[&format!("bearer {}", key.sign(&c))]).await;
     reply.accepted();
 }
@@ -255,11 +255,11 @@ async fn every_claim_is_checked_with_its_edges() {
         ),
         (set("aud", json!("someone-else")), "a foreign audience"),
         (
-            set("aud", json!("VOIDFORGE-WEB")),
+            set("aud", json!("VOIDFORGE-SPA")),
             "an audience in another case",
         ),
         (
-            set("aud", json!("voidforge-web ")),
+            set("aud", json!("voidforge-spa ")),
             "an audience with a trailing space",
         ),
         (
@@ -594,10 +594,7 @@ fn config(args: &[&str]) -> Result<AuthConfig, String> {
 fn the_defaults_match_the_local_stack_and_absurd_settings_are_refused() {
     let c = config(&[]).unwrap();
     assert_eq!(c.issuer, "http://localhost:5556/dex");
-    assert_eq!(
-        c.audiences,
-        ["voidforge-web", "voidforge-spa", "voidforge-cli"]
-    );
+    assert_eq!(c.audiences, ["voidforge-spa", "voidforge-cli"]);
     assert_eq!(
         (c.leeway, c.refresh, c.min_refresh, c.max_stale),
         (

@@ -3,7 +3,7 @@
 stub span travels through the local OTLP collector into Tempo and is found through Grafana.
 `just trace-check` runs this after `just up`.
 
-For each of voidforge-server, voidforge-web, voidforge-bots and voidforge-replay:
+For each of voidforge-server, voidforge-bots and voidforge-replay:
   export   run it with OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318; it must exit 0 and
            print trace_id=<32 hex digits>
   find     fetch that trace through Grafana's Tempo datasource; it must hold a stub_startup span
@@ -26,7 +26,7 @@ import time
 import urllib.error
 import urllib.request
 
-BINARIES = ["voidforge-server", "voidforge-web", "voidforge-bots", "voidforge-replay"]
+BINARIES = ["voidforge-server", "voidforge-bots", "voidforge-replay"]
 ENDPOINT = "http://localhost:4318"
 GRAFANA_TRACE = "http://localhost:3000/api/datasources/proxy/uid/tempo/api/v2/traces/"
 FIND_TIMEOUT_S = 30

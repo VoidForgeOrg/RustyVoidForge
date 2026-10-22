@@ -1,4 +1,4 @@
-import { Label, ListBox, NumberField, Select, Spinner, Table } from "@heroui/react";
+import { Label, ListBox, Select, Spinner, Table } from "@heroui/react";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { empties } from "../copy/voices";
@@ -6,12 +6,7 @@ import { distance, owner, position } from "../format";
 import { homeworldFirst } from "../game/empire";
 import { useChart, useMe } from "../game/queries";
 import { Failure } from "../shell/Failure";
-import { planetName } from "./parts";
-
-/** Distance units in a world unit (D-021). */
-export const DU_PER_U = 1_000;
-/** The default search radius, in world units. */
-export const DEFAULT_RADIUS_U = 50;
+import { DEFAULT_RADIUS_U, DU_PER_U, planetName, RadiusField } from "./parts";
 
 /** Star charts: planets near one of the player's own, nearest first. */
 export function Universe() {
@@ -46,24 +41,7 @@ export function Universe() {
             </ListBox>
           </Select.Popover>
         </Select>
-        <NumberField
-          className="w-40"
-          value={radius}
-          minValue={0}
-          maxValue={1_000_000}
-          step={10}
-          formatOptions={{ maximumFractionDigits: 0 }}
-          onChange={(value) => {
-            if (Number.isSafeInteger(value)) setRadius(value);
-          }}
-        >
-          <Label>Radius (u)</Label>
-          <NumberField.Group>
-            <NumberField.DecrementButton />
-            <NumberField.Input />
-            <NumberField.IncrementButton />
-          </NumberField.Group>
-        </NumberField>
+        <RadiusField value={radius} onChange={setRadius} />
       </div>
       <Near center={from} radiusDu={radius * DU_PER_U} me={me.player_id} />
     </>

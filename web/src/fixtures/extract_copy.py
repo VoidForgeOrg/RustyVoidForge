@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extracts phase4-ux.md's §6.1 and §6.2 copy into copy.json, for tests/copy.rs (P4.2, D-059).
+"""Extracts phase4-ux.md's §6.1 and §6.2 copy into copy.json, for src/copy/messages.test.ts (P4.2, D-059).
 
 dev-design owns the copy; this keeps the test's expected strings the document's own rather than
 restated by hand. Rerun it whenever §6.1 or §6.2 changes, then run the web tests.

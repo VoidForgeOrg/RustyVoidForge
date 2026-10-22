@@ -40,7 +40,7 @@ cargo build
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 tests/guardrails/check_no_floats.py
-python3 tests/guardrails/check_web_deps.py
+python3 tests/guardrails/check_bots_deps.py
 python3 tests/guardrails/run_fixtures.py   # guardrail fixtures; needs network on first run
 cargo deny check                    # needs cargo-deny
 cargo nextest run --workspace --locked

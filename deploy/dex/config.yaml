@@ -37,12 +37,6 @@ staticPasswords:
     hash: "$2y$10$4oJw.MHtDYGkf1atOwyhqeUQEy.SiU2398nVfIh7QtzbIIC4CfC2."
 
 staticClients:
-  # Web frontend: confidential client, authorization code with PKCE.
-  - id: voidforge-web
-    name: Voidforge web
-    secret: voidforge-web-local-test-secret
-    redirectURIs:
-      - http://localhost:8081/callback
   # The browser web app: public client, authorization code with PKCE run in the browser.
   - id: voidforge-spa
     name: Voidforge

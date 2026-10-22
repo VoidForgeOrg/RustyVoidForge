@@ -2,20 +2,20 @@
 """Fail if a crate crosses the Technical Plan's layering among workspace crates.
 
 Technical Plan, Project layering, checked mechanically (D-055, review-r1's R1-G8):
-  isolated   voidforge-web and voidforge-bots depend on no workspace crate but voidforge-api-types
-             and voidforge-telemetry, through any dependency kind, transitively. The web client
-             never links core, host, store or server; the bots reach the server over HTTP alone.
+  isolated   voidforge-bots depends on no workspace crate but voidforge-api-types and
+             voidforge-telemetry, through any dependency kind, transitively: the bots reach the
+             server over HTTP alone.
   direct     voidforge-server never depends on voidforge-core itself, as a normal dependency: it
              consumes the host's re-exports (D-047). Its tests may (api_codes checks the codes).
 
 For an isolated crate, two passes, over every dependency kind (normal, dev, build):
-  resolved  the graph cargo resolves from voidforge-web, walked transitively;
-  declared  the manifest declarations of voidforge-web and of every workspace crate it reaches,
+  resolved  the graph cargo resolves from it, walked transitively;
+  declared  the manifest declarations of it and of every workspace crate it reaches,
             by name, by path or renamed. This catches declarations cargo drops from the graph,
             such as a path dependency on a binary-only crate. For those it enforces the
             declaration; cargo links no library from a binary-only crate.
 
-Usage: check_web_deps.py [workspace-dir]
+Usage: check_bots_deps.py [workspace-dir]
 Exit codes: 0 every rule holds, 1 violation found, 2 could not check (cargo or metadata error).
 """
 import json
@@ -24,7 +24,7 @@ import subprocess
 import sys
 
 ALLOWED = {"voidforge-api-types", "voidforge-telemetry"}
-ISOLATED = ["voidforge-web", "voidforge-bots"]
+ISOLATED = ["voidforge-bots"]
 # (crate, banned workspace crate, dependency kinds): never declared or resolved directly.
 DIRECT = [("voidforge-server", "voidforge-core", {"normal"})]
 
@@ -103,7 +103,7 @@ def main():
         for f in failed:
             print("error: " + f + " (Technical Plan, Project layering)", file=sys.stderr)
         return 1
-    print("ok: " + " and ".join(ISOLATED) + " depend on no workspace crate besides "
+    print("ok: " + " and ".join(ISOLATED) + " depends on no workspace crate besides "
           + ", ".join(sorted(ALLOWED)) + "; "
           + "; ".join(c + " never depends on " + b + " directly" for c, b, _ in DIRECT))
     return 0

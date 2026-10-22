@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import fleets from "../../../crates/voidforge-web/tests/fixtures/fleets_bob.json";
-import home from "../../../crates/voidforge-web/tests/fixtures/planet_view_alice_home.json";
+import fleets from "../fixtures/fleets_bob.json";
+import home from "../fixtures/planet_view_alice_home.json";
 import type { components } from "../api/schema";
 import { next, total } from "./empire";
 

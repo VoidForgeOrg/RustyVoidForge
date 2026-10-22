@@ -40,7 +40,7 @@ Used only by `tests/guardrails/run_fixtures.py`, inside a temporary copy of the 
 | getrandom | 0.4.3 (feature sys_rng) | Proves the system-randomness bans |
 | rand_chacha | 0.9.0 (default features off) | Control: seeded generation stays allowed; the same pin worldgen uses (D-031) |
 | toml | 1.1.8 | Proves the float check sees a float read from a dependency |
-| Python | 3, standard library only; CI uses the runner image's `python3`, and the scripts also run on Python 3.9 | Runs the fixture harness and the web check |
+| Python | 3, standard library only; CI uses the runner image's `python3`, and the scripts also run on Python 3.9 | Runs the fixture harness and the bots' dependency check |
 
 ## Local stack
 
@@ -68,7 +68,7 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
 | tracing | =0.1.44 | telemetry, all four binaries | P0.6 | D-017 |
-| tracing-subscriber | =0.3.23 (std, fmt, registry) | telemetry; server, dev-dependency only (the privacy test's capture, D-047); web, dev-dependency only: the login's leak test (D-057) | P0.6 | D-017 |
+| tracing-subscriber | =0.3.23 (std, fmt, registry) | telemetry; server, dev-dependency only (the privacy test's capture, D-047) | P0.6 | D-017 |
 | opentelemetry | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
 | opentelemetry_sdk | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
 | opentelemetry-otlp | =0.33.1 (http-proto, reqwest-blocking-client, trace) | telemetry | P0.6 | D-017 |
@@ -82,22 +82,18 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | serde_json | =1.0.154 (std) | core and testkit, dev-dependency only; store from P2.3, the log's JSON columns; api-types from P3.1; bots from P3.6, a reply decoded after reading its text | P1.3 | D-022, D-036, D-045, D-052 |
 | sqlx | =0.9.0 (postgres, runtime-tokio, macros, migrate; default features off) | store | P2.1 | D-034 |
 | toml | =1.1.8 (std, parse, serde) | rules | P1.2 | D-020 |
-| tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest. The server adds net, rt-multi-thread and signal for `serve` (P3.4s, D-050); signal brings one crate, signal-hook-registry 1.4.8 (MIT OR Apache-2.0). The bots use it from P3.6 (D-052), with test-util for paused time in their tests (no new crate). The web app from P4.1, with net, rt-multi-thread and signal as serve has (D-057) | P2.3 | D-036, D-050, D-052 |
-| clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line; the server's from P2.9; the bots' from P3.6; the web app's from P4.1 (D-057) | P2.7 | D-041, D-052 |
+| tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest. The server adds net, rt-multi-thread and signal for `serve` (P3.4s, D-050); signal brings one crate, signal-hook-registry 1.4.8 (MIT OR Apache-2.0). The bots use it from P3.6 (D-052), with test-util for paused time in their tests (no new crate) | P2.3 | D-036, D-050, D-052 |
+| clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line; the server's from P2.9; the bots' from P3.6 | P2.7 | D-041, D-052 |
 | utoipa | =6.0.0 (macros; default features off) | api-types, the OpenAPI document | P3.1 | D-045 |
-| axum | =0.8.9 (http1, tokio, json, query; default features off) | server: the token extractor, the routes (query since P3.4, D-049); the tests' local servers; web, its routes from P4.1 (D-057) | P3.2 | D-046, D-049 |
-| jsonwebtoken | =11.1.0 (aws_lc_rs; default features off, so no PEM) | server, token signatures (RS256); web, the ID token check from P4.1 (D-057) | P3.2 | D-046 |
-| reqwest | =0.13.5 (json; default features off, no TLS until P5) | server, dex's discovery document and keys; already in the tree through telemetry's OTLP exporter. The bots' HTTP client from P3.6: dex's token endpoint and the API. The web app's, with `form` for the token POST, from P4.1 (D-057) | P3.2 | D-046, D-052 |
-| aws-lc-rs | =1.18.2 | server, dev-dependency only: generates the token tests' RSA keys (also jsonwebtoken's backend). A normal dependency of the web app from P4.1: its CSPRNG and SHA-256 (D-057) | P3.2 | D-046 |
+| axum | =0.8.9 (http1, tokio, json, query; default features off) | server: the token extractor, the routes (query since P3.4, D-049); the tests' local servers | P3.2 | D-046, D-049 |
+| jsonwebtoken | =11.1.0 (aws_lc_rs; default features off, so no PEM) | server, token signatures (RS256) | P3.2 | D-046 |
+| reqwest | =0.13.5 (json; default features off, no TLS until P5) | server, dex's discovery document and keys; already in the tree through telemetry's OTLP exporter. The bots' HTTP client from P3.6: dex's token endpoint and the API | P3.2 | D-046, D-052 |
+| aws-lc-rs | =1.18.2 | server, dev-dependency only: generates the token tests' RSA keys (also jsonwebtoken's backend) | P3.2 | D-046 |
 | jsonschema | =0.59.0 (default features off: no HTTP or TLS) | api-types, dev-dependency only: validates examples against the OpenAPI schemas (draft 2020-12), with exact integer bounds | P3.1 | D-045 |
 | uuid | =1.28.0 (std, v7; default features off) | server: draws each new player's UUIDv7 | P3.3 | D-047 |
-| insta | =1.46.1 (json; default features off) | server and web, dev-dependency only: the routes' contract snapshots, and the web pages' HTML snapshots (P4.3, D-060) | P3.4 | D-049, D-060 |
+| insta | =1.46.1 (json; default features off) | server, dev-dependency only: the routes' contract snapshots | P3.4 | D-049, D-060 |
 | log | =0.4.34 (std; default features off) | server, dev-dependency only: the privacy test captures sqlx's `log` events | P3.3 | D-047 |
-| tower-sessions | =0.15.0 (axum-core; default features off: our own bounded store replaces its memory-store) | web, the session and its cookie; brings tower-cookies, cookie and the time crates | P4.1 | D-057 |
-| async-trait | =0.1.92 | web, the bounded session store implements tower-sessions' `SessionStore`; already in the tree, so no new crate | P4.1 | D-057 |
 | tower-http | =0.6.11 (cors; default features off) | server, CORS for the web app's origin; already in the tree through reqwest, so no new version | P4.6 | D-063 |
-| maud | =0.27.0 (axum; default features off) | web, the pages | P4.1 | D-057 |
-| base64 | =0.23.1 (std; default features off) | web, state, nonce, the verifier and the challenge; already in the tree under reqwest, so no new version | P4.1 | D-057 |
 
 ## Web app
 
@@ -124,9 +120,11 @@ Pinned in [`web/`](../web/AGENTS.md) ([D-063](decision-log.md#d-063-the-web-fron
 | react-dom | 19.3.1 | runtime | UI |
 | zustand | 5.0.15 | runtime | Client state |
 | @eslint/js | 10.0.1 | dev | eslint's recommended rules |
+| @playwright/test | 1.64.0 | dev | The web walk in Chromium (`web/e2e`), run by `e2e.sh` |
 | @tailwindcss/vite | 4.3.3 | dev | Tailwind's Vite plugin |
 | @testing-library/jest-dom | 7.0.1 | dev | DOM matchers |
 | @testing-library/react | 16.3.3 | dev | Component tests |
+| @types/node | 26.6.5 | dev | Node's types, for the web walk's environment |
 | @types/react | 19.3.0 | dev | React's types |
 | @types/react-dom | 19.3.0 | dev | React DOM's types |
 | @vitejs/plugin-react | 6.1.2 | dev | React in Vite |

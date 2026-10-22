@@ -101,7 +101,7 @@ voidforge/
   rules/                versioned rules files (TOML)
   docs/                 game design and architectural design, as Markdown
   tests/golden/         recorded logs and their expected hashes
-  tests/guardrails/     fixtures proving the determinism bans
+  tests/guardrails/     fixtures proving the determinism bans and bots isolation
   web/                  the browser frontend: React, Vite and its own AGENTS.md
   deploy/               compose file and dex config
   dockerfiles/          server image
@@ -172,7 +172,7 @@ GitHub Actions runs the same commands as the `justfile`, so any red check reprod
 
 | Stage | What runs | When | Blocks merge |
 | --- | --- | --- | --- |
-| Lint | `cargo fmt --check`; clippy with warnings as errors plus the banned APIs for core, rules and worldgen | Every PR | Yes |
+| Lint | `cargo fmt --check`; clippy with warnings as errors plus the banned APIs for core, rules and worldgen; the dependency check that keeps `voidforge-bots` away from the server and the core | Every PR | Yes |
 | Supply chain | cargo-deny: licenses, advisories and the dependency allowlist; npm audit on the web app's lockfile | Every PR | Yes |
 | Web | The web app: a clean install from the lockfile, the generated API client checked against `openapi.json`, typecheck, eslint, Vitest and the production build | Every PR | Yes, once the ruleset names it |
 | Unit and property tests | cargo nextest across the workspace | Every PR | Yes |
@@ -309,7 +309,7 @@ A person can play the whole MVP loop in a browser. P4.1 to P4.5 built it as the 
 | P4.3 | Pages: home, planet, fleets, universe and leaderboard | Every page renders from live API data |
 | P4.4 | Command forms: one per action, a hidden idempotency key, post then redirect | Every MVP action works from the browser |
 | P4.5 | Smoke tests: an HTTP client with a cookie jar walks the login and one game loop | Passes in CI against the compose stack within minutes, on the fast test rules |
-| P4.6 | Web redesign: a static React app in `web/` with every MVP action, a public PKCE login, CORS on the API, a Playwright smoke test, and `voidforge-web` deleted | Every MVP action works from the new app, and the Playwright walk passes in the e2e job |
+| P4.6 | Web redesign: a static React app in `web/` with every MVP action, a public PKCE login, CORS on the API, a Playwright smoke test, and `voidforge-web` deleted | Every MVP action works from the new app, and the Playwright walk passes in the e2e job and `just smoke` |
 
 Packages run one at a time, in ID order; P4.1r runs between P4.1 and P4.2.
 

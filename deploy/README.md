@@ -33,7 +33,6 @@ These values exist only for local runs and CI. They are not secrets, and they mu
 | Postgres user / password / database | `voidforge` / `voidforge-local-test-password` / `voidforge` |
 | dex user | `alice@voidforge.test` / `alice-local-test-password` |
 | dex user | `bob@voidforge.test` / `bob-local-test-password` |
-| Web client (confidential, authorization code with PKCE) | `voidforge-web` / `voidforge-web-local-test-secret`, redirect `http://localhost:8081/callback` |
 | Web app client (public, authorization code with PKCE in the browser; dex allows its origin) | `voidforge-spa`, redirect `http://localhost:8081/callback` |
 | CLI client (public, device code) | `voidforge-cli`, device callback `/dex/device/callback` (the issuer's path plus `/device/callback`: dex builds it that way, so a bare `/device/callback` refuses every approval, D-053) |
 

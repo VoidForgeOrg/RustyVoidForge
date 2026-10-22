@@ -8,6 +8,7 @@ The browser frontend, so people can test and evaluate the game. A static TypeScr
 - TanStack Router with code routes (`src/router.tsx`), TanStack Query for every server read, Zustand for client state.
 - HeroUI with Tailwind, and Perseus (`@kedar42/perseus`, the owner's HeroUI components, from its GitHub release tarball).
 - Vitest with Testing Library; eslint with typescript-eslint's strict type-checked rules.
+- Playwright for the web walk in `e2e/`, with its own `tsconfig.json` for Node's types.
 
 Every dependency is pinned exactly in `package.json` and locked in `package-lock.json`. A new one needs a [decision log](../docs/decision-log.md) entry and a row in the [version table](../docs/versions.md).
 
@@ -18,7 +19,7 @@ Every dependency is pinned exactly in `package.json` and locked in `package-lock
 - The API is reached only through `src/api/client.ts`: `api` for queries and mutations, `fetchClient` for the rest. Never a hand-rolled `fetch`.
 - `src/api/schema.ts` is generated from `../crates/voidforge-api-types/openapi.json` by `npm run gen:api`, and never edited by hand. Regenerate it whenever that file changes; CI fails on a diff.
 - The app names the fast test rules whenever `/rules` says `v0-fast`.
-- Every failed call rejects with `ApiError` from `src/api/client.ts`, and a screen shows it through `src/copy/messages.ts`: §6.1's copy for every `ErrorCode` in a switch whose default takes `never`, with the code beside it. The API's `message` and oidc-client-ts's messages never reach a page. `messages.test.ts` checks the copy against `crates/voidforge-web/tests/fixtures/copy.json`.
+- Every failed call rejects with `ApiError` from `src/api/client.ts`, and a screen shows it through `src/copy/messages.ts`: §6.1's copy for every `ErrorCode` in a switch whose default takes `never`, with the code beside it. The API's `message` and oidc-client-ts's messages never reach a page. `messages.test.ts` checks the copy against `src/fixtures/copy.json`.
 - In-universe words (titles, headings, empty states) live in `src/copy/voices.ts`; verbs, numbers and §6.1's copy stay plain (D-063).
 - Every value a screen shows is formatted by `src/format.ts`, on integers only (BigInt inside); a value outside JavaScript's safe integers shows as `—`. Never format a number in a component.
 - Values between reads come from `src/game/live.ts`: a view's `as_of` plus the time since it arrived, at its rates, held at `valid_until`. Never the browser's clock alone.
@@ -44,4 +45,5 @@ npm run lint
 npm test
 npm run build
 npm run preview      # serves dist/ on http://localhost:8081
+npm run walk         # the Playwright walk; .github/scripts/e2e.sh runs it with the API, dex and preview up
 ```

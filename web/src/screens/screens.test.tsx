@@ -1,7 +1,7 @@
 import { cleanup, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import near from "../../../crates/voidforge-web/tests/fixtures/planets_near.json";
-import home from "../../../crates/voidforge-web/tests/fixtures/planet_view_alice_home.json";
+import near from "../fixtures/planets_near.json";
+import home from "../fixtures/planet_view_alice_home.json";
 import { useAuth } from "../auth/authStore";
 import { logIn, renderAt, serve, wideWindow } from "../test-harness";
 

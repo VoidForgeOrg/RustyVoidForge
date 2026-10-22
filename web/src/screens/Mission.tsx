@@ -29,8 +29,7 @@ import { fleetsKey, type Order, useOrder } from "../game/commands";
 import { grown } from "../game/live";
 import { useChart, useMe, usePlanet, useRules } from "../game/queries";
 import { Refusal } from "./Orders";
-import { type PlanetView, useLive } from "./parts";
-import { DEFAULT_RADIUS_U, DU_PER_U } from "./Universe";
+import { DEFAULT_RADIUS_U, DU_PER_U, type PlanetView, RadiusField, useLive } from "./parts";
 
 type S = components["schemas"];
 type Stationed = Extract<S["FleetView"], { state: "stationed" }>;
@@ -403,8 +402,16 @@ function Targets({
   selected: number | null;
   onSelect: (id: number) => void;
 }) {
-  const { rows } = useChart(center, DEFAULT_RADIUS_U * DU_PER_U);
-  if (!rows) return <Spinner aria-label="Charting" />;
+  const [radius, setRadius] = useState(DEFAULT_RADIUS_U);
+  const { rows } = useChart(center, radius * DU_PER_U);
+  const field = <RadiusField value={radius} onChange={setRadius} />;
+  if (!rows)
+    return (
+      <>
+        {field}
+        <Spinner aria-label="Charting" />
+      </>
+    );
   const refused = (r: S["PlanetSummary"]) =>
     r.planet_id === center ||
     (mission === "colonize" && r.owner !== null) ||
@@ -414,26 +421,29 @@ function Targets({
       ? [...rows].sort((a, b) => Number(a.owner !== null) - Number(b.owner !== null))
       : rows;
   return (
-    <ListBox
-      aria-label="Targets in range, nearest first"
-      className="max-h-60 overflow-y-auto"
-      selectionMode="single"
-      selectedKeys={selected === null ? [] : [selected]}
-      disabledKeys={shown.filter(refused).map((r) => r.planet_id)}
-      onSelectionChange={(keys) => {
-        const [key] = keys === "all" ? [] : [...keys];
-        if (key !== undefined) onSelect(Number(key));
-      }}
-    >
-      {shown.map((r) => {
-        const trip = travelMs(r.distance, speed);
-        return (
-          <ListBox.Item key={r.planet_id} id={r.planet_id} textValue={`Planet #${r.planet_id.toString()}`}>
-            #{r.planet_id} · {owner(r.owner, me)} · {distance(r.distance)} ·{" "}
-            {trip === null ? "—" : duration(trip)}
-          </ListBox.Item>
-        );
-      })}
-    </ListBox>
+    <>
+      {field}
+      <ListBox
+        aria-label="Targets in range, nearest first"
+        className="max-h-60 overflow-y-auto"
+        selectionMode="single"
+        selectedKeys={selected === null ? [] : [selected]}
+        disabledKeys={shown.filter(refused).map((r) => r.planet_id)}
+        onSelectionChange={(keys) => {
+          const [key] = keys === "all" ? [] : [...keys];
+          if (key !== undefined) onSelect(Number(key));
+        }}
+      >
+        {shown.map((r) => {
+          const trip = travelMs(r.distance, speed);
+          return (
+            <ListBox.Item key={r.planet_id} id={r.planet_id} textValue={`Planet #${r.planet_id.toString()}`}>
+              #{r.planet_id} · {owner(r.owner, me)} · {distance(r.distance)} ·{" "}
+              {trip === null ? "—" : duration(trip)}
+            </ListBox.Item>
+          );
+        })}
+      </ListBox>
+    </>
   );
 }

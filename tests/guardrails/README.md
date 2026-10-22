@@ -1,10 +1,10 @@
 # Guardrail fixtures
 
-The P0.4 guardrails and their proof: the determinism bans in `voidforge-core`, `voidforge-rules` and `voidforge-worldgen` ([D-010](../../docs/decision-log.md#d-010-determinism-bans-in-core-rules-and-worldgen)), the type-aware float check ([D-013](../../docs/decision-log.md#d-013-type-aware-float-check)) and `voidforge-web`'s dependency isolation ([D-011](../../docs/decision-log.md#d-011-web-dependency-isolation-check)). The CI `lint` job runs all of these scripts.
+The P0.4 guardrails and their proof: the determinism bans in `voidforge-core`, `voidforge-rules` and `voidforge-worldgen` ([D-010](../../docs/decision-log.md#d-010-determinism-bans-in-core-rules-and-worldgen)), the type-aware float check ([D-013](../../docs/decision-log.md#d-013-type-aware-float-check)) and the bots' dependency isolation ([D-011](../../docs/decision-log.md#d-011-web-dependency-isolation-check), [D-055](../../docs/decision-log.md#d-055-phase-3-gate-repair)). The CI `lint` job runs all of these scripts.
 
 ```sh
 python3 tests/guardrails/check_no_floats.py     # no f32/f64 in the three crates' compiled MIR
-python3 tests/guardrails/check_web_deps.py      # the real check on this workspace
+python3 tests/guardrails/check_bots_deps.py     # the real check on this workspace
 python3 tests/guardrails/run_fixtures.py        # every fixture case; --only TEXT, --verbose
 ```
 
