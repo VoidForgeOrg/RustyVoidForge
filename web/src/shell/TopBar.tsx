@@ -4,55 +4,37 @@ import { type ReactNode, useState } from "react";
 import type { components } from "../api/schema";
 import { failure } from "../copy/messages";
 import { duration, mass, rate, thousands } from "../format";
-import { homeworldFirst, next, type Received, type Resource, total } from "../game/empire";
-import { useArrivals, useFleets, useLeaderboard, usePlanets, useRules } from "../game/queries";
+import { type Empire, next, type Received, type Resource, total } from "../game/empire";
+import { useLeaderboard, useRules } from "../game/queries";
 import { useNow } from "../game/useNow";
-import { FleetsIcon, IngotIcon, LeaderboardIcon, OreIcon, PlanetsIcon, ShipyardIcon } from "../theme/icons";
+import { IngotIcon, LeaderboardIcon, OreIcon, ShipyardIcon } from "../theme/icons";
 import type { Layout } from "./useLayout";
 
 type S = components["schemas"];
 
 const item = "flex items-center gap-2 rounded px-2 py-1 whitespace-nowrap hover:bg-default";
 
-/** The empire at a glance: every figure comes from reads the screens already make. */
+/** The empire at a glance: resources, score and what completes next. */
 export function TopBar({
   me,
-  email,
+  empire,
   layout,
   menu,
 }: {
   me: S["PlayerView"];
-  email: string | undefined;
+  empire: Empire;
   layout: Layout;
   menu: ReactNode;
 }) {
   const now = useNow();
   // Controlled, so following one of the sheet's links closes it.
   const [more, setMore] = useState(false);
-  const fleets = useFleets();
-  useArrivals();
   const board = useLeaderboard();
-  const ids = homeworldFirst(me.planet_ids, me.homeworld_id);
-  const planetReads = usePlanets(ids);
-  const planets: Received<S["PlanetView"]>[] = planetReads.flatMap((q) =>
-    q.data ? [{ view: q.data, receivedAt: q.dataUpdatedAt }] : [],
-  );
-  // The bar waits for every planet's first answer; after that a failed read leaves its planet
-  // out of the totals and says so, so a blip never blanks the bar.
-  const loaded = planetReads.every((q) => !q.isPending);
-  const missing = ids.flatMap((id, i) => {
-    const q = planetReads[i];
-    return q && !q.data && q.isError ? [{ id, error: q.error }] : [];
-  });
-  const partial = missing.length > 0 ? partialLabel(missing.map((m) => m.id)) : null;
-  const flying = fleets.data?.fleets.filter((f) => f.state !== "stationed").length ?? 0;
-  const stationed = (fleets.data?.fleets.length ?? 0) - flying;
+  const { fleets, planets, loaded, missing, partial } = empire;
   const rank = board.data?.entries.find((e) => e.player_id === me.player_id)?.rank;
   const soonest = loaded
     ? next(planets, fleets.data ? { view: fleets.data, receivedAt: fleets.dataUpdatedAt } : null)
     : null;
-  const used = planets.reduce((n, p) => n + p.view.buildings.length, 0);
-  const slots = planets.reduce((n, p) => n + p.view.slots, 0);
 
   const resources = loaded && (
     <>
@@ -77,46 +59,17 @@ export function TopBar({
     </>
   );
   const nextItem = <NextItem soonest={soonest} partial={partial} now={now} />;
-  const rest = (labels: string, onFollow?: () => void) => (
-    <>
-      <Link
-        to="/planets"
-        className={item}
-        onClick={onFollow}
-        aria-label={`Holdings: ${me.planet_ids.length.toString()} planets, ${used.toString()} of ${slots.toString()} slots used${partial ? `, ${partial}` : ""}`}
-      >
-        <PlanetsIcon />
-        {me.planet_ids.length} <span className={labels}>planets</span> · {used}/{slots}{" "}
-        <span className={labels}>slots</span>
-        <Partial label={partial} />
-      </Link>
-      <Link
-        to="/fleets"
-        className={item}
-        onClick={onFollow}
-        aria-label={`Fleets: ${flying.toString()} in flight, ${stationed.toString()} stationed`}
-      >
-        <FleetsIcon />
-        {flying} <span className={labels}>flying</span> · {stationed}{" "}
-        <span className={labels}>stationed</span>
-      </Link>
-      <Link
-        to="/leaderboard"
-        className={item}
-        onClick={onFollow}
-        aria-label={`Score ${thousands(me.score)}${rank ? `, rank ${rank.toString()}` : ""}`}
-      >
-        <LeaderboardIcon />
-        <span className="display text-muted">Score</span> {thousands(me.score)}
-        {rank !== undefined && <span className="text-muted">#{rank}</span>}
-      </Link>
-    </>
-  );
-  const ends = (
-    <>
-      <FastRules />
-      <span className="truncate text-xs text-muted">{email}</span>
-    </>
+  const score = (onFollow?: () => void) => (
+    <Link
+      to="/leaderboard"
+      className={item}
+      onClick={onFollow}
+      aria-label={`Score ${thousands(me.score)}${rank ? `, rank ${rank.toString()}` : ""}`}
+    >
+      <LeaderboardIcon />
+      <span className="display text-muted">Score</span> {thousands(me.score)}
+      {rank !== undefined && <span className="text-muted">#{rank}</span>}
+    </Link>
   );
 
   return (
@@ -134,10 +87,10 @@ export function TopBar({
               <Drawer.Content placement="bottom">
                 <Drawer.Dialog aria-label="Empire">
                   <Drawer.Body className="flex flex-col items-start gap-2 p-4">
-                    {rest("text-muted", () => {
+                    {score(() => {
                       setMore(false);
                     })}
-                    {ends}
+                    <FastRules />
                   </Drawer.Body>
                 </Drawer.Dialog>
               </Drawer.Content>
@@ -146,25 +99,19 @@ export function TopBar({
         </>
       ) : (
         <>
-          {rest("hidden text-muted xl:inline")}
+          {score()}
           {nextItem}
-          <div className="ml-auto flex min-w-0 items-center gap-3">{ends}</div>
+          <div className="ml-auto">
+            <FastRules />
+          </div>
         </>
       )}
     </header>
   );
 }
 
-/** "partial: Planet #26 didn't answer", naming the planets a total leaves out. */
-function partialLabel(ids: number[]): string {
-  const names = ids.map((id) => `#${id.toString()}`);
-  const list =
-    names.length === 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1) ?? ""}`;
-  return `partial: Planet${ids.length === 1 ? "" : "s"} ${list} didn't answer`;
-}
-
 /** Marks a figure that leaves out planets whose read failed. */
-function Partial({ label }: { label: string | null }) {
+export function Partial({ label }: { label: string | null }) {
   return label ? (
     <span className="text-xs text-warning" title={label}>
       <span aria-hidden>partial</span>

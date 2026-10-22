@@ -144,8 +144,9 @@ test("a planet that doesn't answer leaves the top bar partial, not blank", async
   expect(
     await within(bar).findByRole("button", { name: `Iron Ore: 2,000.0 t in storage, +2.0 t/h, ${partial}` }),
   ).toBeInTheDocument();
+  const nav = screen.getByRole("navigation", { name: "Command" });
   expect(
-    within(bar).getByRole("link", { name: new RegExp(`^Holdings: 2 planets, .*, ${partial}$`) }),
+    within(nav).getByRole("link", { name: new RegExp(`^Planets: 2 planets, .*, ${partial}$`) }),
   ).toBeInTheDocument();
 });
 

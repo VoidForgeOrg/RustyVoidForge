@@ -1,6 +1,7 @@
 import type { components } from "../api/schema";
 import { building, ship } from "../format";
 import { grown, ratedFor } from "./live";
+import { useArrivals, useFleets, usePlanets } from "./queries";
 
 type S = components["schemas"];
 type Stock = S["Stock"];
@@ -88,4 +89,44 @@ export function next(
     }
   }
   return all.reduce<Next | null>((soonest, n) => (soonest === null || n.at < soonest.at ? n : soonest), null);
+}
+
+/** The empire-wide figures the bar and the nav share, from reads the screens already make. */
+export function useEmpire(me: S["PlayerView"]) {
+  const fleets = useFleets();
+  useArrivals();
+  const ids = homeworldFirst(me.planet_ids, me.homeworld_id);
+  const planetReads = usePlanets(ids);
+  const planets: Received<S["PlanetView"]>[] = planetReads.flatMap((q) =>
+    q.data ? [{ view: q.data, receivedAt: q.dataUpdatedAt }] : [],
+  );
+  // The figures wait for every planet's first answer; after that a failed read leaves its planet
+  // out of the totals and says so, so a blip never blanks them.
+  const loaded = planetReads.every((q) => !q.isPending);
+  const missing = ids.flatMap((id, i) => {
+    const q = planetReads[i];
+    return q && !q.data && q.isError ? [{ id, error: q.error }] : [];
+  });
+  const flying = fleets.data?.fleets.filter((f) => f.state !== "stationed").length ?? 0;
+  return {
+    fleets,
+    planets,
+    loaded,
+    missing,
+    partial: missing.length > 0 ? partialLabel(missing.map((m) => m.id)) : null,
+    flying,
+    stationed: (fleets.data?.fleets.length ?? 0) - flying,
+    used: planets.reduce((n, p) => n + p.view.buildings.length, 0),
+    slots: planets.reduce((n, p) => n + p.view.slots, 0),
+  };
+}
+
+export type Empire = ReturnType<typeof useEmpire>;
+
+/** "partial: Planet #26 didn't answer", naming the planets a total leaves out. */
+function partialLabel(ids: number[]): string {
+  const names = ids.map((id) => `#${id.toString()}`);
+  const list =
+    names.length === 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1) ?? ""}`;
+  return `partial: Planet${ids.length === 1 ? "" : "s"} ${list} didn't answer`;
 }

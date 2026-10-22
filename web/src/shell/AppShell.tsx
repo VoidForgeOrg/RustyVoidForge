@@ -1,5 +1,5 @@
-import { Button, Chip, Spinner, Toast } from "@heroui/react";
-import { NavMenu } from "@kedar42/perseus";
+import { Button, Spinner, Toast } from "@heroui/react";
+import { NavMenu, useNavMenu } from "@kedar42/perseus";
 import { Outlet, useLocation, useMatches } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { login, logout } from "../auth/auth";
@@ -7,7 +7,8 @@ import { useAuth } from "../auth/authStore";
 import { failure, ORDER_LOST } from "../copy/messages";
 import { access } from "../copy/voices";
 import type { components } from "../api/schema";
-import { useFleets, useMe } from "../game/queries";
+import { useEmpire } from "../game/empire";
+import { useMe } from "../game/queries";
 import {
   FleetsIcon,
   LeaderboardIcon,
@@ -19,7 +20,7 @@ import {
 } from "../theme/icons";
 import { Failure, Notice, Stale } from "./Failure";
 import { useNavStore } from "./navStore";
-import { FastRules, TopBar } from "./TopBar";
+import { FastRules, Partial, TopBar } from "./TopBar";
 import { useLayout } from "./useLayout";
 
 const modes = { desktop: "inline", tablet: "compact", phone: "overlay" } as const;
@@ -85,8 +86,15 @@ function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = useLocation({ select: (l) => l.pathname });
   const email = useAuth((s) => s.user?.profile.email ?? s.user?.profile.name);
-  const fleets = useFleets();
-  const flying = fleets.data?.fleets.filter((f) => f.state !== "stationed").length ?? 0;
+  const empire = useEmpire(me);
+  const { loaded, partial, used, slots, flying, stationed } = empire;
+  const owned = me.planet_ids.length;
+  const holdings = loaded
+    ? `Planets: ${owned.toString()} ${owned === 1 ? "planet" : "planets"}, ${used.toString()} of ${slots.toString()} slots used${partial ? `, ${partial}` : ""}`
+    : "Planets";
+  const fleetsLabel = empire.fleets.data
+    ? `Fleets: ${flying.toString()} in flight, ${stationed.toString()} stationed`
+    : "Fleets";
   const open =
     layout === "desktop"
       ? { isOpen: desktopOpen, onOpenChange: setDesktopOpen }
@@ -109,16 +117,35 @@ function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: 
           </NavMenu.App>
         </NavMenu.Header>
         <NavMenu.Content>
-          <NavMenu.Item href="/planets" value="/planets" icon={<PlanetsIcon />}>
+          <NavMenu.Item
+            href="/planets"
+            value="/planets"
+            icon={<PlanetsIcon />}
+            aria-label={holdings}
+            textValue={holdings}
+            endContent={
+              loaded && (
+                <span className="text-xs text-muted">
+                  {owned} · {used}/{slots} <Partial label={partial} />
+                </span>
+              )
+            }
+          >
             Planets
           </NavMenu.Item>
           <NavMenu.Item
             href="/fleets"
             value="/fleets"
             icon={<FleetsIcon />}
-            aria-label={`Fleets, ${flying.toString()} in flight`}
-            textValue={`Fleets, ${flying.toString()} in flight`}
-            endContent={flying > 0 && <Chip size="sm">{flying}</Chip>}
+            aria-label={fleetsLabel}
+            textValue={fleetsLabel}
+            endContent={
+              empire.fleets.data && (
+                <span className="text-xs text-muted">
+                  {flying} flying · {stationed} stationed
+                </span>
+              )
+            }
           >
             Fleets
           </NavMenu.Item>
@@ -130,7 +157,12 @@ function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: 
           </NavMenu.Item>
         </NavMenu.Content>
         <NavMenu.Footer>
-          <NavMenu.Item icon={<LogoutIcon />} onPress={() => void logout()}>
+          <Account email={email} />
+          <NavMenu.Item
+            icon={<LogoutIcon />}
+            textValue={email ? `Log out ${email}` : "Log out"}
+            onPress={() => void logout()}
+          >
             Log out
           </NavMenu.Item>
         </NavMenu.Footer>
@@ -138,7 +170,7 @@ function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
           me={me}
-          email={email}
+          empire={empire}
           layout={layout}
           menu={
             layout === "phone" && (
@@ -164,6 +196,16 @@ function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: 
       <Toast.Provider placement="bottom end" />
     </div>
   );
+}
+
+/** Who is signed in, above Log out. The rail has no room for it, so Log out's tooltip names them. */
+function Account({ email }: { email: string | undefined }) {
+  const { isCompact } = useNavMenu();
+  return email && !isCompact ? (
+    <p className="truncate px-3 py-1 text-xs text-muted" title={email}>
+      {email}
+    </p>
+  ) : null;
 }
 
 /** The bar before the game is reachable: the mark and the rules when they're the fast ones. */
