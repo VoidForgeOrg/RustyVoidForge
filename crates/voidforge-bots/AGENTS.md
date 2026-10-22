@@ -13,7 +13,7 @@ Binary. P3.6 added its first subcommand, `e2e`, the end-to-end scenario ([D-052]
 
 ## Invariants
 
-- Telemetry: `main` calls `voidforge_telemetry::init` once, first, and `Telemetry::shutdown` before exit, reporting a failed shutdown with a non-zero exit ([D-016](../../docs/decision-log.md#d-016-telemetry-bootstrap)). It never configures its own exporter or subscriber.
+- Telemetry: `main` calls `voidforge_telemetry::init` once, first, and `Telemetry::shutdown` before exit ([D-016](../../docs/decision-log.md#d-016-telemetry-bootstrap)). Telemetry that couldn't be delivered is a loud ERROR on stderr and never changes the exit code, which reports the command itself; only the hidden `telemetry-check`, whose job is delivery, fails on it ([D-064](../../docs/decision-log.md#d-064-telemetry-a-commands-trace-the-hosts-metrics-and-trace-context-across-http), T6). It never configures its own exporter or subscriber.
 - Terminal login uses the device code grant as the public `voidforge-cli` dex client (P3.7). The CI end-to-end tests use the password grant, for the static test users only.
 - The terminal's login is a credential: saved only in the user-only token file (0600, in a 0700 directory, replaced atomically), refused when others can read it, and never printed or logged, nor are its subject or the device code (D-053). A login lasts dex's 24 h with no refresh token; an expired or refused one says "log in again" with the command, never a raw 401.
 - The terminal writes answers as JSON to stdout and everything for the person to stderr. `get` takes only API paths, never a URL. One exit-code table covers every subcommand (`--help`).
