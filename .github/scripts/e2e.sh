@@ -131,6 +131,7 @@ fi
 
 serve_pid=
 serve_container=
+images_up=0
 cleanup() {
     local code=$?
     if [ -n "$serve_pid" ] && kill -0 "$serve_pid" 2> /dev/null; then
@@ -143,7 +144,8 @@ cleanup() {
             || say "FAILED to remove the walk's web container; remove it with: docker rm -f voidforge-walk-web-$$"
     fi
     # The images' project goes whole, its serve container first killed if it still runs.
-    if [ -n "$serve_container" ]; then
+    # Set before `up`, so an `up` that fails partway is torn down too (R1-4).
+    if [ "$images_up" = 1 ]; then
         "${images_compose[@]}" logs --no-color --no-log-prefix server > "$log_dir/serve.log" 2>&1 || true
         "${images_compose[@]}" kill server > /dev/null 2>&1 || true
         "${images_compose[@]}" down --remove-orphans > /dev/null 2>&1 \
@@ -189,6 +191,7 @@ if [ "$images" = 1 ]; then
     # Exported, since compose reads every variable of the file on each command, cleanup's too.
     export VOIDFORGE_DATABASE_URL="$url_base/$db" VOIDFORGE_PORT="$port" VOIDFORGE_ISSUER="$issuer" \
         VOIDFORGE_RULES_FILE="${rules#rules/}" VOIDFORGE_LEADERBOARD_SECS=1 VOIDFORGE_WEB_CLIENT_SECRET="$web_secret"
+    images_up=1
     "${images_compose[@]}" up --detach --no-build server > "$log_dir/compose-up.log" 2>&1 \
         || { say "compose couldn't start serve:"; cat "$log_dir/compose-up.log" >&2; exit 3; }
     serve_container=$("${images_compose[@]}" ps -aq server)

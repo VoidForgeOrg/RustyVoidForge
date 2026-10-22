@@ -196,6 +196,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build both images (dockerfiles/Dockerfile)
         run: |
+          docker info --format 'docker {{.ServerVersion}}, storage driver {{.Driver}}, {{.OperatingSystem}}'
           started=$(date +%s)
           for target in server web; do
             docker build -f dockerfiles/Dockerfile --target "$target" --build-arg CARGO_BUILD_JOBS=4 \

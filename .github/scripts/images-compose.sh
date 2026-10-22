@@ -29,7 +29,9 @@ log_dir="${E2E_LOG_DIR:-target/e2e/images-$run}"
 psql=(docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -X -q -v ON_ERROR_STOP=1 -At -d postgres)
 sql() { "${psql[@]}" -c "$1" < /dev/null; }
 say() { echo "images-compose: $*" >&2; }
-images=(docker compose -f deploy/compose.images.yaml)
+# -p pins the project: an inherited COMPOSE_PROJECT_NAME outranks the file's `name:`, and set to
+# voidforge it would make the cleanup's down --remove-orphans remove the stack's containers (R1-1).
+images=(docker compose -f deploy/compose.images.yaml -p voidforge-images)
 
 case "$db" in
     "$prefix"[0-9]*_[0-9]*) ;;

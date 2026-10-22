@@ -2,7 +2,8 @@
 # backing services of deploy/compose.yaml, never inside them. This is its own project,
 # `voidforge-images`: compose never sees, recreates or orphans the `voidforge` project's postgres,
 # dex and otel-lgtm containers, and nothing here names them. It has no database, no volumes and no
-# published ports.
+# published ports. Every command names the project with -p: an inherited COMPOSE_PROJECT_NAME
+# outranks `name:` (R1-1).
 #
 # Both services use host networking (Architectural Design, Local development): the issuer URL means
 # the same thing in the browser, on the host and in these containers, and they reach Postgres, dex
@@ -15,11 +16,9 @@ name: voidforge-images
 
 services:
   server:
+    # Built only by `just images` (or CI), which labels the build with its commit: compose never
+    # builds, so no image here is "+unknown" (R1-5). Every recipe passes --no-build.
     image: voidforge-server:local
-    build:
-      context: ..
-      dockerfile: dockerfiles/Dockerfile
-      target: server
     network_mode: host
     command:
       - serve
@@ -52,10 +51,6 @@ services:
 
   web:
     image: voidforge-web:local
-    build:
-      context: ..
-      dockerfile: dockerfiles/Dockerfile
-      target: web
     network_mode: host
     environment:
       VOIDFORGE_WEB_ISSUER: ${VOIDFORGE_ISSUER:-http://localhost:5556/dex}

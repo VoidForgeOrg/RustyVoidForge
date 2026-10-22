@@ -123,17 +123,21 @@ images jobs="2":
     python3 .github/scripts/check-images.py --built
 
 # Both images under compose, healthy (D-065): their own project, voidforge-images, beside the stack,
-# never in it. Needs VOIDFORGE_DATABASE_URL naming a seeded scratch database, never voidforge.
+# never in it (-p pins it: an inherited COMPOSE_PROJECT_NAME would otherwise win). Needs
+# VOIDFORGE_DATABASE_URL naming a seeded voidforge_dev or voidforge_e2e_* database; anything else,
+# voidforge above all, is refused.
 # Exports to the stack's collector unless OTEL_EXPORTER_OTLP_ENDPOINT says otherwise.
 images-up:
+    db="${VOIDFORGE_DATABASE_URL:?name a seeded scratch database}"; db="${db##*/}"; db="${db%%\?*}"; \
+    case "$db" in voidforge_dev|voidforge_e2e_*) ;; *) echo "error: refusing database $db (voidforge_dev or voidforge_e2e_* only)" >&2; exit 2 ;; esac
     VOIDFORGE_WEB_CLIENT_SECRET=voidforge-web-local-test-secret \
     OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT-http://localhost:4318}" \
-        docker compose -f deploy/compose.images.yaml up --no-build --detach --wait --wait-timeout 360
+        docker compose -f deploy/compose.images.yaml -p voidforge-images up --no-build --detach --wait --wait-timeout 360
 
 # Stop and remove the images' project (never the stack's); serve stops with its final snapshot.
 images-down:
     VOIDFORGE_DATABASE_URL=unused VOIDFORGE_WEB_CLIENT_SECRET=unused \
-        docker compose -f deploy/compose.images.yaml down
+        docker compose -f deploy/compose.images.yaml -p voidforge-images down
 
 # Both images under compose, health-gated, then stopped cleanly and taken down (D-065, the
 # advisor's A1), on a seeded scratch database: the CI images job's step. Needs `just images` and a

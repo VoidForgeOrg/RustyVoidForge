@@ -9,5 +9,12 @@ deploy/
 dockerfiles/
 docs/
 tests/
+# Local agent and editor state: never in a build layer (R1-3).
+.mcp.json
+.claude/
+.codex/
+.agents/
+.openrig/
+.env
 *.md
 !crates/**/*.md

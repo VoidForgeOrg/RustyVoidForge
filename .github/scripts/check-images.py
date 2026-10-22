@@ -4,8 +4,10 @@
   --static  (the lint job) dockerfiles/Dockerfile pins every base by digest, its builder is the
             toolchain rust-toolchain.toml names, and deploy/compose.images.yaml is a project of its
             own: named voidforge-images, none of the owner's services (postgres, dex, otel-lgtm),
-            no volumes, no published ports, VOIDFORGE_DATABASE_URL without a default, and a server
-            stop grace period that covers a clean stop (40 s).
+            no volumes, no published ports, no build section, VOIDFORGE_DATABASE_URL without a
+            default, and a server stop grace period that covers a clean stop (40 s). Every docker
+            compose call on that file names the project with -p, since an inherited
+            COMPOSE_PROJECT_NAME outranks `name:` (R1-1).
   --built   (the images job, after `just images`) voidforge-server:local and voidforge-web:local
             run as 65532:65532, are at most MAX_MB each, and hold no shell, no cargo and no
             sources; prints each one's size and user.
@@ -38,7 +40,11 @@ def check(condition, message):
         failures.append(message)
 
 
-def static(dockerfile=DOCKERFILE, compose=COMPOSE, toolchain="rust-toolchain.toml"):
+# Every file that runs docker compose on the images' file (R1-1).
+CALLERS = [".github/scripts/e2e.sh", ".github/scripts/images-compose.sh", "justfile", ".github/workflows/ci.yml"]
+
+
+def static(dockerfile=DOCKERFILE, compose=COMPOSE, toolchain="rust-toolchain.toml", callers=CALLERS):
     text = open(dockerfile).read()
     stages = set()
     froms = re.findall(r"^FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*$", text, re.M | re.I)
@@ -56,6 +62,8 @@ def static(dockerfile=DOCKERFILE, compose=COMPOSE, toolchain="rust-toolchain.tom
 
     env = dict(os.environ, VOIDFORGE_DATABASE_URL="postgres://x@localhost/voidforge_e2e_0_0",
                VOIDFORGE_WEB_CLIENT_SECRET="x")
+    # The file's own name is what's checked here, whatever this shell inherits.
+    env.pop("COMPOSE_PROJECT_NAME", None)
     out = subprocess.run(["docker", "compose", "-f", compose, "config", "--format", "json"],
                          env=env, capture_output=True, text=True)
     if out.returncode != 0:
@@ -67,6 +75,7 @@ def static(dockerfile=DOCKERFILE, compose=COMPOSE, toolchain="rust-toolchain.tom
     check(not OWNER_SERVICES & set(services), "no owner service in it (%s)" % ", ".join(sorted(services)))
     check(not config.get("volumes"), "no volumes")
     for name, service in services.items():
+        check(not service.get("build"), "%s has no build section (only `just images` builds, with its commit)" % name)
         check(not service.get("ports"), "%s publishes no ports" % name)
         check(service.get("network_mode") == "host", "%s uses host networking (the issuer's URL)" % name)
         check(not service.get("volumes"), "%s mounts nothing" % name)
@@ -75,6 +84,16 @@ def static(dockerfile=DOCKERFILE, compose=COMPOSE, toolchain="rust-toolchain.tom
     grace = services.get("server", {}).get("stop_grace_period", "")
     seconds = sum(int(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"(\d+)([hms])", grace))
     check(seconds >= 40, "the server's stop_grace_period covers a clean stop: at least 40 s (%r)" % grace)
+    # R1-1: an inherited COMPOSE_PROJECT_NAME outranks `name:`, so every command names the project.
+    pinned = subprocess.run(["docker", "compose", "-f", compose, "-p", PROJECT, "config", "--format", "json"],
+                            env=dict(env, COMPOSE_PROJECT_NAME="voidforge"), capture_output=True, text=True)
+    check(pinned.returncode == 0 and json.loads(pinned.stdout).get("name") == PROJECT,
+          "with COMPOSE_PROJECT_NAME=voidforge inherited, -p %s still names the project %s" % (PROJECT, PROJECT))
+    for path in callers:
+        for n, line in enumerate(open(path), 1):
+            if "docker compose" in line and os.path.basename(compose) in line:
+                check(re.search(r"\s-p\s", line) is not None,
+                      "%s:%d names its compose project with -p" % (path, n))
     env.pop("VOIDFORGE_DATABASE_URL")
     out = subprocess.run(["docker", "compose", "-f", compose, "config"], env=env, capture_output=True, text=True)
     check(out.returncode != 0 and "VOIDFORGE_DATABASE_URL" in out.stderr,
