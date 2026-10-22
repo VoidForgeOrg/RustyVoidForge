@@ -38,7 +38,7 @@ These values exist only for local runs and CI. They are not secrets, and they mu
 
 The password grant for the static users is enabled only in `dex/config.ci.yaml`. Client credentials are never enabled.
 
-dex's pages (login, device code, errors) wear the console's look: the `voidforge` theme and a `header.html` override in `dex/web/`, which both configs read through `frontend.dir: /srv/dex/web` (D-066). A theme change needs `just up` to rebuild dex.
+dex's pages (login, device code, errors) wear the console's look: the `voidforge` theme and three template overrides (`header.html`, `password.html`, `device.html`) in `dex/web/`, which both configs read through `frontend.dir: /srv/dex/web` (D-066). A theme change needs `just up` to rebuild dex.
 
 ## Telemetry
 
