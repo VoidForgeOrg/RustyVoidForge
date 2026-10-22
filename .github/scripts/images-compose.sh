@@ -44,7 +44,7 @@ web_image=$(docker image inspect -f '{{.Id}}' voidforge-web:local)
 sql "SELECT 1" > /dev/null || { say "can't reach the stack's Postgres; start it with: just up"; exit 3; }
 curl -sf -o /dev/null "$issuer/.well-known/openid-configuration" || { say "no dex at $issuer"; exit 3; }
 
-port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+port=$(python3 .github/scripts/free-port.py)
 export VOIDFORGE_DATABASE_URL="$url_base/$db" VOIDFORGE_PORT="$port" VOIDFORGE_ISSUER="$issuer" \
     VOIDFORGE_RULES_FILE=v0-fast.toml VOIDFORGE_WEB_CLIENT_SECRET=voidforge-web-local-test-secret
 up=0

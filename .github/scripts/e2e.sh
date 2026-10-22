@@ -185,7 +185,7 @@ serve_alive() {
     fi
 }
 if [ "$images" = 1 ]; then
-    port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    port=$(python3 .github/scripts/free-port.py)
     # Exported, since compose reads every variable of the file on each command, cleanup's too.
     export VOIDFORGE_DATABASE_URL="$url_base/$db" VOIDFORGE_PORT="$port" VOIDFORGE_ISSUER="$issuer" \
         VOIDFORGE_RULES_FILE="${rules#rules/}" VOIDFORGE_LEADERBOARD_SECS=1 VOIDFORGE_WEB_CLIENT_SECRET="$web_secret"
