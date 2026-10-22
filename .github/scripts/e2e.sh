@@ -131,15 +131,10 @@ fi
 web_origin=http://localhost:8081
 
 serve_pid=
-web_pid=
 serve_container=
 images_up=0
 cleanup() {
     local code=$?
-    if [ -n "$web_pid" ] && kill -0 "$web_pid" 2> /dev/null; then
-        kill -TERM "$web_pid" 2> /dev/null || true
-        wait "$web_pid" 2> /dev/null || true
-    fi
     if [ -n "$serve_pid" ] && kill -0 "$serve_pid" 2> /dev/null; then
         kill -KILL "$serve_pid" 2> /dev/null || true
         wait "$serve_pid" 2> /dev/null || true
@@ -261,30 +256,22 @@ if [ "$bots_code" = 0 ] && [ "$smoke" = 0 ]; then
         2>&1 | tee "$log_dir/device-login.log"
     device_code=${PIPESTATUS[0]}
 fi
-# 5c. The web walk (D-066): the app built against this serve and served on its one origin, then
-# Playwright logs alice in through dex's pages, renders every screen and plays the MVP loop,
-# each step checked against the API's JSON. The build goes to this run's own directory, so a build
-# in web/dist (`just web`, another run) can't swap the app out from under the walk.
+# 5c. The web walk (D-066): the app built against this serve, into this run's own directory (so a
+# build in web/dist can't swap it out), then web-walk.py serves it as its own child on
+# 127.0.0.1:8081, only after checking nothing else listens on localhost:8081 (D-063's R2-G1), and
+# runs Playwright's walk: alice logs in through dex's pages, every screen renders and the MVP loop
+# plays, each step checked against the API's JSON.
 web_code=0
 if [ "$bots_code" = 0 ]; then
     run_dir="$(cd "$log_dir" && pwd)"
     {
         VITE_API_URL="http://$addr" VITE_OIDC_ISSUER="$issuer" \
             npm --prefix web run build -- --outDir "$run_dir/dist" --emptyOutDir \
-            && { (cd web && exec node_modules/.bin/vite preview --outDir "$run_dir/dist") > "$log_dir/web.log" 2>&1 & web_pid=$!; } \
-            && for _ in $(seq 1 100); do
-                curl -sf -o /dev/null "$web_origin/" && break
-                kill -0 "$web_pid" 2> /dev/null || break
-                sleep 0.2
-            done \
-            && curl -sf -o /dev/null "$web_origin/" \
-            && WALK_API="http://$addr" WALK_ISSUER="$issuer" npm --prefix web run walk -- --output "$run_dir/walk"
+            && python3 .github/scripts/web-walk.py --dist "$run_dir/dist" --api "http://$addr" \
+                --issuer "$issuer" --output "$run_dir/walk" --log "$log_dir/web.log"
     } > "$log_dir/web-walk.log" 2>&1
     web_code=$?
     tail -n 30 "$log_dir/web-walk.log"
-    kill -TERM "$web_pid" 2> /dev/null || true
-    wait "$web_pid" 2> /dev/null || true
-    web_pid=
 fi
 set -e
 

@@ -43,9 +43,9 @@ The password grant for the static users is enabled only in `dex/config.ci.yaml`.
 Binaries export traces and metrics when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and only log locally without it ([D-016](../docs/decision-log.md#d-016-telemetry-bootstrap), [D-064](../docs/decision-log.md#d-064-telemetry-a-commands-trace-the-hosts-metrics-and-trace-context-across-http)). Grafana at `http://localhost:3000` shows them in **Explore**, with no dashboard to set up. Undelivered telemetry is an ERROR on stderr and never changes an exit code (only `telemetry-check` fails on it).
 
 - **A command's trace** (Explore > Tempo, query type TraceQL):
-  - `{ name = "web.act" } && { name = "host.append" }` finds a browser form's trace;
+  - `{ name = "api.request" && span.http.route = "/commands" } && { name = "host.append" }` finds an order's trace;
   - `{ name = "host.command" && span.outcome != "accepted" }` finds rejected commands.
-  - A trace runs `web.act` (voidforge-web) → `api.request` (voidforge-server; `http.route`, the status) → `host.inbox` (the wait) and `host.command` (`command.type`, `player_id` as the API's UUID, `seq`, `outcome`) → `host.step` and `host.append` (`batch.size`). The bots' commands start under their `e2e` span.
+  - A trace runs `api.request` (voidforge-server; `http.route`, the status) → `host.inbox` (the wait) and `host.command` (`command.type`, `player_id` as the API's UUID, `seq`, `outcome`) → `host.step` and `host.append` (`batch.size`). The bots' commands start under their `e2e` span. An order from the web app carries a W3C `traceparent` whose trace id the browser chose, one per opened order form and shared by its retries, so every attempt of one order lands in one trace; its parent is recorded by no span, since the app exports none (D-066).
 - **The host's metrics** (Explore > Prometheus):
 
   | Metric | Query |

@@ -321,7 +321,7 @@ Telemetry, container images built in CI and nightly checks. An image registry, C
 
 | ID | Package | Area | Done when |
 | --- | --- | --- | --- |
-| P5.1 | Telemetry: spans from the API through the engine step and log append; metrics for inbox depth, event lag, step and append latency, snapshot age | server, host | Grafana shows a command's full trace and every metric |
+| P5.1 | Telemetry: spans from the API through the engine step and log append; metrics for inbox depth, event lag, step and append latency, snapshot age. The web app sends a `traceparent` on each order, one trace per order form and its retries (D-066) | server, host, web | Grafana shows a command's full trace and every metric |
 | P5.2 | Container image for the server: multi-stage build, non-root runtime, built in CI and pushed nowhere | `dockerfiles/`, `.github/workflows` | The image runs under compose and passes the smoke test |
 | P5.3 | Nightly runs: a long bot simulation on the fast test rules, crash-and-retry and the full golden replay set | CI | Results are posted, and a failure opens an issue |
 | P5.4 | Backup and restore drill: restore Postgres into a fresh stack and check the state hash | ops runbook | The restored hash matches the source |

@@ -40,7 +40,7 @@ lint:
     .github/scripts/test-check-no-managed-blocks.sh
     .github/scripts/check-dex-parity.sh
     .github/scripts/test-check-dex-parity.sh
-    python3 .github/scripts/test-web-login-ready.py
+    python3 .github/scripts/test-web-walk-ready.py
     python3 .github/scripts/check-images.py --static
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings

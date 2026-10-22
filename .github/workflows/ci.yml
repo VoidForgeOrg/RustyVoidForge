@@ -41,8 +41,8 @@ jobs:
         run: .github/scripts/check-dex-parity.sh
       - name: dex parity check regression cases
         run: .github/scripts/test-check-dex-parity.sh
-      - name: The web walk starts only its own voidforge-web (regression cases)
-        run: python3 .github/scripts/test-web-login-ready.py
+      - name: The web walk serves only its own app (regression cases, D-063 R2-G1)
+        run: python3 .github/scripts/test-web-walk-ready.py
       - name: The images' pins and their compose project (P5.2, D-065)
         run: python3 .github/scripts/check-images.py --static
       - name: Format
