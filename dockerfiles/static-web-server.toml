@@ -1,0 +1,27 @@
+# static-web-server's settings for the web image (D-066). The bind is in the image's env, since the
+# server's CLI defaults outrank this file's host and port.
+[general]
+root = "/public"
+# Every path the app doesn't hold is a route of the single-page app: 200 with index.html.
+page-fallback = "/public/index.html"
+health = true
+log-level = "info"
+grace-period = 0
+cache-control-headers = false
+
+[advanced]
+
+# Every response, index.html and the fallback included: never reuse the shell without asking, and
+# carry the app's security headers. frame-ancestors can only be sent as a header.
+[[advanced.headers]]
+source = "**"
+[advanced.headers.headers]
+Cache-Control = "no-cache"
+Content-Security-Policy = "CSP_PLACEHOLDER"
+X-Content-Type-Options = "nosniff"
+
+# Vite's hashed assets never change under their name.
+[[advanced.headers]]
+source = "/assets/**"
+[advanced.headers.headers]
+Cache-Control = "public, max-age=31536000, immutable"

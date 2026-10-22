@@ -5,13 +5,15 @@
 # the same walk CI runs inside the whole scenario, never a second copy.
 #
 #   1. checks dex's password grant, and lists leftover e2e databases;
-#   2. builds voidforge-server, voidforge-bots and voidforge-web;
+#   2. builds voidforge-server and voidforge-bots;
 #   3. creates this run's own database, voidforge_e2e_<time>_<pid>, and seeds it on the fast rules;
 #   4. starts the serve binary as a host process (never through just or cargo run: D-050 I5) on a
-#      free port, and waits for its ready line and GET /openapi.json;
+#      free port (with --images, under compose on VOIDFORGE_PORT), with the web app's origin
+#      allowed, and waits for its ready line and GET /openapi.json;
 #   5. runs `voidforge-bots e2e`, then the terminal login check (.github/scripts/device-login.py),
-#      then the web login check (.github/scripts/web-login.py; it needs localhost:8081 free, and
-#      refuses to start if anything already listens there);
+#      then the web walk: .github/scripts/web-walk.py serves the app on localhost:8081 (which must
+#      be free) as its own child, `vite preview` on a build against this serve or, with --images,
+#      the web image, and runs Playwright's walk (web/e2e) in Chromium;
 #   6. stops serve with one SIGTERM and requires exit 0 (the final snapshot at the log head);
 #   7. drops this run's database, on every exit.
 #
@@ -27,8 +29,10 @@
 # `docker run --rm -i` by image ID. Step 6 is then `docker compose stop`, which must end in exit 0.
 # Both images' IDs are printed, and the serve container is checked to run the server image's ID.
 #
-# E2E_ISSUER (default http://localhost:5556/dex) names the dex to use. Logs go to E2E_LOG_DIR (default target/e2e/<run>): serve.log, bots.log, seed.log,
-# device-login.log, web-login.log and web.log.
+# E2E_ISSUER (default http://localhost:5556/dex) names the dex to use. The web walk needs web/'s
+# packages and Playwright's Chromium (`npm ci --prefix web`, then `npx --prefix web playwright
+# install chromium`). Logs go to E2E_LOG_DIR (default target/e2e/<run>): serve.log, bots.log,
+# seed.log, device-login.log, web-walk.log and web.log.
 # Usage: e2e.sh [--smoke] [--images]
 # Exit codes: 0 passed; 1 the scenario failed, or serve didn't stop cleanly; 2 usage;
 # 3 the stack isn't ready (dex without the password grant, Postgres unreachable, serve not ready).
@@ -59,7 +63,6 @@ for arg in "$@"; do
 done
 # The images' compose project for this run: never the owner's `voidforge` (D-065).
 images_compose=(docker compose -f deploy/compose.images.yaml -p "voidforge-images-e2e-$$")
-web_secret=voidforge-web-local-test-secret  # TEST-ONLY, from deploy/dex/config*.yaml
 drop_hint() { say "  docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -d postgres -c 'DROP DATABASE \"$1\"'"; }
 
 case "$db" in
@@ -67,9 +70,6 @@ case "$db" in
     *) say "refusing database $db"; exit 2 ;;
 esac
 mkdir -p "$log_dir"
-# A reused E2E_LOG_DIR may hold an earlier run's walk log, whose timing line would satisfy the
-# walk-ran check below without this run walking at all (P4.5 QA's F1).
-rm -f "$log_dir/web-login.log"
 
 # 1. The stack: dex's password grant for the static users, as the bots' public client.
 grant=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
@@ -112,7 +112,6 @@ if [ "$images" = 0 ] || [ "$smoke" = 0 ]; then
     target_dir=$(cargo metadata -q --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
     server="$target_dir/debug/voidforge-server"
     bots="$target_dir/debug/voidforge-bots"
-    web="$target_dir/debug/voidforge-web"
 fi
 if [ "$images" = 1 ]; then
     for image in voidforge-server:local voidforge-web:local; do
@@ -124,10 +123,29 @@ if [ "$images" = 1 ]; then
     server_image=$(docker image inspect -f '{{.Id}}' voidforge-server:local)
     web_image=$(docker image inspect -f '{{.Id}}' voidforge-web:local)
     say "images: voidforge-server:local $server_image, voidforge-web:local $web_image"
+    # The web image calls the API it was built for (D-066), so serve runs there: VOIDFORGE_PORT,
+    # 8080 by default, as `just images` built it.
+    port="${VOIDFORGE_PORT:-8080}"
+    built_for=$(docker image inspect -f '{{index .Config.Labels "org.voidforge.api-url"}}' voidforge-web:local)
+    if [ "$built_for" != "http://localhost:$port" ]; then
+        say "voidforge-web:local calls $built_for, not http://localhost:$port; rebuild it with"
+        say "  VOIDFORGE_PORT=$port just images"
+        exit 3
+    fi
+    built_issuer=$(docker image inspect -f '{{index .Config.Labels "org.voidforge.issuer"}}' voidforge-web:local)
+    if [ "$built_issuer" != "$issuer" ]; then
+        say "voidforge-web:local logs in through $built_issuer, not $issuer; rebuild it with"
+        say "  E2E_ISSUER=$issuer VOIDFORGE_PORT=$port just images"
+        exit 3
+    fi
+    # serve binds this port under host networking; another app there would get the walk's calls.
+    python3 .github/scripts/web-walk.py --check-port "$port" || exit 3
     [ "$smoke" = 1 ] || SQLX_OFFLINE=true cargo build -q --locked -p voidforge-bots
 else
-    SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots -p voidforge-web
+    SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots
 fi
+# The web app's one origin: dex's redirect URI and the API's CORS origin (D-066).
+web_origin=http://localhost:8081
 
 serve_pid=
 serve_container=
@@ -187,10 +205,9 @@ serve_alive() {
     fi
 }
 if [ "$images" = 1 ]; then
-    port=$(python3 .github/scripts/free-port.py)
     # Exported, since compose reads every variable of the file on each command, cleanup's too.
     export VOIDFORGE_DATABASE_URL="$url_base/$db" VOIDFORGE_PORT="$port" VOIDFORGE_ISSUER="$issuer" \
-        VOIDFORGE_RULES_FILE="${rules#rules/}" VOIDFORGE_LEADERBOARD_SECS=1 VOIDFORGE_WEB_CLIENT_SECRET="$web_secret"
+        VOIDFORGE_RULES_FILE="${rules#rules/}" VOIDFORGE_LEADERBOARD_SECS=1
     images_up=1
     "${images_compose[@]}" up --detach --no-build server > "$log_dir/compose-up.log" 2>&1 \
         || { say "compose couldn't start serve:"; cat "$log_dir/compose-up.log" >&2; exit 3; }
@@ -202,7 +219,7 @@ if [ "$images" = 1 ]; then
     fi
 else
     VOIDFORGE_DATABASE_URL="$url_base/$db" "$server" serve --rules "$rules" --bind 127.0.0.1:0 \
-        --leaderboard-secs 1 --issuer "$issuer" > "$log_dir/serve.log" 2>&1 &
+        --leaderboard-secs 1 --issuer "$issuer" --cors-origin "$web_origin" > "$log_dir/serve.log" 2>&1 &
     serve_pid=$!
 fi
 addr=
@@ -255,23 +272,28 @@ if [ "$bots_code" = 0 ] && [ "$smoke" = 0 ]; then
         2>&1 | tee "$log_dir/device-login.log"
     device_code=${PIPESTATUS[0]}
 fi
-# 5c. The web login (P4.1, D-057): alice logs in and out of voidforge-web through dex's
-# authorization code flow, driven over HTTP with cookie jars; Home's score proves the API took
-# the web app's token, and the page walk (P4.3, D-060) reads every page from the live game. It
-# starts and stops voidforge-web itself, on localhost:8081.
-# With --images, the walk starts the web image by ID through `docker run --rm -i`: the one form
-# that relays its stop's SIGTERM and returns the container's exit code (P5.2's spikes, D-065).
+# 5c. The web walk (D-066): the app built against this serve, into this run's own directory (so a
+# build in web/dist can't swap it out), then web-walk.py serves it as its own child on
+# 127.0.0.1:8081, only after checking nothing else listens on localhost:8081 (D-063's R2-G1), and
+# runs Playwright's walk: alice logs in through dex's pages, every screen renders and the MVP loop
+# plays, each step checked against the API's JSON. With --images, web-walk.py starts the web image
+# instead, as its own `docker run --rm -i` child, with the same check, receipt and pin.
 web_code=0
-if [ "$images" = 1 ]; then
-    # Named per run, so cleanup can remove one a crash left behind.
-    web_args=(--web-cmd "docker run --rm -i --name voidforge-walk-web-$$ --network host -e VOIDFORGE_WEB_CLIENT_SECRET $web_image")
-else
-    web_args=(--web "$web")
-fi
 if [ "$bots_code" = 0 ]; then
-    python3 .github/scripts/web-login.py "${web_args[@]}" --api "http://$addr" --issuer "$issuer" \
-        --log "$log_dir/web.log" 2>&1 | tee "$log_dir/web-login.log"
-    web_code=${PIPESTATUS[0]}
+    run_dir="$(cd "$log_dir" && pwd)"
+    walk=(--api "http://$addr" --issuer "$issuer" --output "$run_dir/walk" --log "$log_dir/web.log")
+    if [ "$images" = 1 ]; then
+        python3 .github/scripts/web-walk.py --image "$web_image" --name "voidforge-walk-web-$$" "${walk[@]}" \
+            > "$log_dir/web-walk.log" 2>&1
+    else
+        {
+            VITE_API_URL="http://$addr" VITE_OIDC_ISSUER="$issuer" \
+                npm --prefix web run build -- --outDir "$run_dir/dist" --emptyOutDir \
+                && python3 .github/scripts/web-walk.py --dist "$run_dir/dist" "${walk[@]}"
+        } > "$log_dir/web-walk.log" 2>&1
+    fi
+    web_code=$?
+    tail -n 30 "$log_dir/web-walk.log"
 fi
 set -e
 
@@ -318,20 +340,12 @@ if [ "$bots_code" = 0 ] && [ "$device_code" != 0 ]; then
     say "FAILED: the scenario passed, but the terminal login check exited $device_code; its log is $log_dir/device-login.log"
     exit 1
 fi
-# The walk must have run to its end: web-login.py prints its timing line only once steps 1 to 9
-# (login, pages, the forms' MVP loop, replay, logout) have all passed (P4.5, D-062), so a run that
-# skipped it, or stopped short with exit 0, can't pass.
-if [ "$bots_code" = 0 ] && [ "$web_code" = 0 ] \
-    && ! grep -q '^ok: the smoke walk took ' "$log_dir/web-login.log" 2> /dev/null; then
-    say "FAILED: the web walk didn't run to its end (no timing line in $log_dir/web-login.log)"
-    exit 1
-fi
 if [ "$bots_code" = 0 ] && [ "$web_code" != 0 ]; then
     if [ "$smoke" = 1 ]; then
-        say "FAILED (smoke): the web walk exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
+        say "FAILED (smoke): the web walk exited $web_code; its log is $log_dir/web-walk.log, the web app's $log_dir/web.log"
         exit 1
     fi
-    say "FAILED: the scenario passed, but the web login check exited $web_code; its log is $log_dir/web-login.log, the web app's $log_dir/web.log"
+    say "FAILED: the scenario passed, but the web walk exited $web_code; its log is $log_dir/web-walk.log, the web app's $log_dir/web.log"
     exit 1
 fi
 if [ "$bots_code" != 0 ]; then
@@ -344,7 +358,7 @@ if [ "$serve_code" != 0 ]; then
     exit 1
 fi
 if [ "$smoke" = 1 ]; then
-    say "PASSED (smoke): the web walk passed, and serve stopped cleanly; $(grep '^ok: the smoke walk took ' "$log_dir/web-login.log")"
+    say "PASSED (smoke): the web walk passed, and serve stopped cleanly"
 else
-    say "PASSED: the scenario, the terminal login and the web login passed, and serve stopped cleanly"
+    say "PASSED: the scenario, the terminal login and the web walk passed, and serve stopped cleanly"
 fi

@@ -59,7 +59,10 @@ pub struct AuthArgs {
         long = "audience",
         env = "VOIDFORGE_AUDIENCES",
         value_delimiter = ',',
-        default_values_t = [String::from("voidforge-web"), String::from("voidforge-cli")]
+        default_values_t = [
+            String::from("voidforge-spa"),
+            String::from("voidforge-cli"),
+        ]
     )]
     pub audiences: Vec<String>,
     /// Clock skew allowed on `exp`, `nbf` and `iat`, in seconds (at most 300).

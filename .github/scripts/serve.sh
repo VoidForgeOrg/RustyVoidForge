@@ -22,4 +22,5 @@ esac
 # its own place, so after this exec Ctrl-C and SIGTERM reach serve itself, which stops with its
 # final snapshot. (Compose runs the binary directly, never `just`: D-050.)
 VOIDFORGE_DATABASE_URL="postgres://voidforge:voidforge-local-test-password@localhost:5432/$db" \
-    SQLX_OFFLINE=true exec cargo run -q -p voidforge-server --locked -- serve --rules "$rules"
+    SQLX_OFFLINE=true exec cargo run -q -p voidforge-server --locked -- serve --rules "$rules" \
+        --cors-origin http://localhost:8081

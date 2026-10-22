@@ -16,11 +16,12 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, FromRef, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{HeaderMap, HeaderValue, Method};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get, post};
 use serde::Deserialize;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use voidforge_api_types::command::{CommandAccepted, CommandRequest};
 use voidforge_api_types::error::ErrorCode;
 use voidforge_api_types::view as api;
@@ -48,6 +49,15 @@ pub const STALE_WAIT: Duration = Duration::from_secs(1);
 
 /// Seconds a client waits after a stale projection's 503.
 pub const STALE_RETRY_AFTER_SECS: u64 = 1;
+
+/// The header that names a command's idempotency key (D-037).
+pub const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
+
+/// The caller's W3C trace context, the only header `api.request` reads to join a trace (D-064).
+pub const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
+
+/// How long a browser may cache a CORS preflight's answer.
+pub const CORS_MAX_AGE: Duration = Duration::from_secs(600);
 
 /// What the handlers share.
 #[derive(Clone)]
@@ -121,12 +131,12 @@ pub fn routes() -> Vec<Route> {
     ]
 }
 
-/// The API.
-pub fn router(state: AppState) -> Router {
+pub fn router(state: AppState, cors_origins: &[HeaderValue]) -> Router {
     layered(
         routes()
             .into_iter()
             .fold(Router::new(), |r, route| r.route(route.path, route.handler)),
+        cors_origins,
     )
     .with_state(state)
 }
@@ -150,7 +160,7 @@ async fn traced(
         &span,
         request
             .headers()
-            .get("traceparent")
+            .get(TRACEPARENT)
             .and_then(|v| v.to_str().ok()),
     );
     let response = tracing::Instrument::instrument(next.run(request), span.clone()).await;
@@ -159,16 +169,47 @@ async fn traced(
 }
 
 /// The layers every route sits behind: `not_found` for an unknown route or method, HEAD
-/// included, the body limit, and a panic answered 500. Public so a test can put a panicking
-/// route behind exactly these.
-pub fn layered<S: Clone + Send + Sync + 'static>(routes: Router<S>) -> Router<S> {
-    routes
+/// included, the body limit, a panic answered 500, and CORS for `cors_origins` outermost, so a
+/// preflight is answered before the fallback and every refusal carries the allow headers. Public
+/// so a test can put a route behind exactly these.
+pub fn layered<S: Clone + Send + Sync + 'static>(
+    routes: Router<S>,
+    cors_origins: &[HeaderValue],
+) -> Router<S> {
+    let routes = routes
         .route_layer(axum::middleware::from_fn(traced))
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::not_found)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(error::refuse_head))
-        .layer(axum::middleware::from_fn(error::catch_panic))
+        .layer(axum::middleware::from_fn(error::catch_panic));
+    if cors_origins.is_empty() {
+        return routes;
+    }
+    routes.layer(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(cors_origins.iter().cloned()))
+            .allow_methods([Method::GET, Method::POST])
+            .allow_headers([AUTHORIZATION, CONTENT_TYPE, IDEMPOTENCY_KEY, TRACEPARENT])
+            .expose_headers([RETRY_AFTER])
+            .max_age(CORS_MAX_AGE),
+    )
+}
+
+/// Parses one `--cors-origin`: exactly an origin as a browser sends it, `http` or `https`, with
+/// no path, query or trailing slash.
+///
+/// # Errors
+///
+/// A message naming the expected form, for clap to print.
+pub fn cors_origin(value: &str) -> Result<HeaderValue, String> {
+    let expected = || format!("{value:?} is not an origin such as http://localhost:8081");
+    let url = reqwest::Url::parse(value).map_err(|_| expected())?;
+    let http = matches!(url.scheme(), "http" | "https");
+    if !http || url.origin().ascii_serialization() != value {
+        return Err(expected());
+    }
+    HeaderValue::from_str(value).map_err(|_| expected())
 }
 
 // --- POST /commands ---
@@ -212,7 +253,7 @@ async fn commands(
 /// The `Idempotency-Key` header, by the host's own rule (D-037): exactly one, 1 to 128 bytes of
 /// printable ASCII without spaces.
 fn idempotency_key(headers: &HeaderMap) -> Result<IdempotencyKey, ApiError> {
-    let mut all = headers.get_all("idempotency-key").iter();
+    let mut all = headers.get_all(IDEMPOTENCY_KEY).iter();
     let Some(value) = all.next() else {
         return Err(ApiError::new(
             ErrorCode::MissingIdempotencyKey,

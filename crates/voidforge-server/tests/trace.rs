@@ -17,7 +17,7 @@ async fn whose() -> String {
 }
 
 async fn serve() -> String {
-    let app: Router = layered(Router::new().route("/planets/{id}", get(whose)));
+    let app: Router = layered(Router::new().route("/planets/{id}", get(whose)), &[]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

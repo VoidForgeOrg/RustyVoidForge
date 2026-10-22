@@ -18,6 +18,8 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The browser app's origin through CORS (D-066).
+tower-http.workspace = true
 # serve (P3.4s, D-050): SIGINT and SIGTERM, and a multi-threaded runtime for the API.
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "signal"] }
 tracing.workspace = true

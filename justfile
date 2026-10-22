@@ -40,17 +40,27 @@ lint:
     .github/scripts/test-check-no-managed-blocks.sh
     .github/scripts/check-dex-parity.sh
     .github/scripts/test-check-dex-parity.sh
-    python3 .github/scripts/test-web-login-ready.py
+    python3 .github/scripts/test-web-walk-ready.py
     python3 .github/scripts/check-images.py --static
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     python3 tests/guardrails/check_no_floats.py
-    python3 tests/guardrails/check_web_deps.py
+    python3 tests/guardrails/check_bots_deps.py
     python3 tests/guardrails/run_fixtures.py
 
 # The CI supply-chain job.
 supply-chain:
     cargo deny check
+    npm audit --prefix web
+
+# The CI web job.
+web:
+    cd web && npm ci
+    cd web && npm run gen:api && git diff --exit-code src/api/schema.ts
+    cd web && npm run typecheck
+    cd web && npm run lint
+    cd web && npm test
+    cd web && npm run build
 
 # The CI test job.
 test:
@@ -111,14 +121,17 @@ bless:
 e2e:
     .github/scripts/e2e.sh
 
-# The server and web images (Technical Plan P5.2, D-065), voidforge-server:local and
-# voidforge-web:local, from dockerfiles/Dockerfile, then their checks (user, size, nothing but the
-# binary). Nothing is pushed. `just images 1` builds with one job, for a small Docker VM: lower the
-# jobs, never resize the VM.
+# The server and web images (Technical Plan P5.2, D-065, D-066), voidforge-server:local and
+# voidforge-web:local, from dockerfiles/Dockerfile, then their checks (user, size, nothing but what
+# each serves with). Nothing is pushed. `just images 1` builds with one job, for a small Docker VM:
+# lower the jobs, never resize the VM. The web app calls the API at http://localhost:$VOIDFORGE_PORT
+# (8080 by default), baked in at build time, so serve must run there.
 images jobs="2":
     for target in server web; do \
         docker build -f dockerfiles/Dockerfile --target "$target" --build-arg CARGO_BUILD_JOBS={{jobs}} \
-            --build-arg VOIDFORGE_GIT_SHA="$(git rev-parse --short=12 HEAD)" -t "voidforge-$target:local" . ; \
+            --build-arg VOIDFORGE_GIT_SHA="$(git rev-parse --short=12 HEAD)" \
+            --build-arg VITE_API_URL="http://localhost:${VOIDFORGE_PORT:-8080}" \
+            --build-arg VITE_OIDC_ISSUER="${E2E_ISSUER:-http://localhost:5556/dex}" -t "voidforge-$target:local" . ; \
     done
     python3 .github/scripts/check-images.py --built
 
@@ -130,13 +143,12 @@ images jobs="2":
 images-up:
     db="${VOIDFORGE_DATABASE_URL:?name a seeded scratch database}"; db="${db##*/}"; db="${db%%\?*}"; \
     case "$db" in voidforge_dev|voidforge_e2e_*) ;; *) echo "error: refusing database $db (voidforge_dev or voidforge_e2e_* only)" >&2; exit 2 ;; esac
-    VOIDFORGE_WEB_CLIENT_SECRET=voidforge-web-local-test-secret \
     OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT-http://localhost:4318}" \
         docker compose -f deploy/compose.images.yaml -p voidforge-images up --no-build --detach --wait --wait-timeout 360
 
 # Stop and remove the images' project (never the stack's); serve stops with its final snapshot.
 images-down:
-    VOIDFORGE_DATABASE_URL=unused VOIDFORGE_WEB_CLIENT_SECRET=unused \
+    VOIDFORGE_DATABASE_URL=unused \
         docker compose -f deploy/compose.images.yaml -p voidforge-images down
 
 # Both images under compose, health-gated, then stopped cleanly and taken down (D-065, the
@@ -145,17 +157,18 @@ images-down:
 images-compose:
     .github/scripts/images-compose.sh
 
-# `just smoke` against the images (D-065): seed from the server image, serve under compose, the
-# web walk against the web image, then `docker compose stop` must end in exit 0. The same needs
-# and owner safety as `smoke`.
+# `just smoke` against the images (D-065, D-066): seed from the server image, serve under compose
+# on VOIDFORGE_PORT (8080 by default, the API the web image was built for), the web walk against
+# the web image, then `docker compose stop` must end in exit 0. The same needs and owner safety as
+# `smoke`.
 smoke-images: images
     .github/scripts/e2e.sh --images --smoke
 
 # The smoke test (Technical Plan P4.5, D-062): the e2e job's web walk alone, on the fast rules
-# against the compose stack: alice logs in through dex with a cookie jar and plays the MVP loop
-# through voidforge-web's forms (build, queue ships, assemble, colonize, transport), each step
-# checked against the API's JSON. About two minutes. The same needs and owner safety as `e2e`,
-# whose CI run includes this walk.
+# against the compose stack: Playwright logs alice in through dex and plays the MVP loop through
+# the web app in Chromium (build, queue ships, assemble, colonize, transport), each step checked
+# against the API's JSON. The same needs and owner safety as `e2e`, whose CI run includes this
+# walk, plus web/'s packages and Playwright's Chromium (D-066).
 smoke:
     .github/scripts/e2e.sh --smoke
 

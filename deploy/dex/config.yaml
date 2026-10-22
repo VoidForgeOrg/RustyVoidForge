@@ -10,6 +10,15 @@ storage:
 
 web:
   http: 0.0.0.0:5556
+  # The browser web app calls the token endpoint and discovery from its own origin (D-066).
+  allowedOrigins: ["http://localhost:8081"]
+
+# The login pages in the console's look: our theme and header over dex's stock pages (D-066).
+frontend:
+  dir: /srv/dex/web
+  theme: voidforge
+  issuer: Voidforge
+  logoURL: theme/logo.svg
 
 oauth2:
   skipApprovalScreen: true
@@ -35,10 +44,10 @@ staticPasswords:
     hash: "$2y$10$4oJw.MHtDYGkf1atOwyhqeUQEy.SiU2398nVfIh7QtzbIIC4CfC2."
 
 staticClients:
-  # Web frontend: confidential client, authorization code with PKCE.
-  - id: voidforge-web
-    name: Voidforge web
-    secret: voidforge-web-local-test-secret
+  # The browser web app: public client, authorization code with PKCE run in the browser.
+  - id: voidforge-spa
+    name: Voidforge
+    public: true
     redirectURIs:
       - http://localhost:8081/callback
   # Bots and the terminal client: public client, device code grant.

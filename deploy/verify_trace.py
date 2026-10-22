@@ -3,7 +3,7 @@
 telemetry_check span travels through the local OTLP collector into Tempo and is found through Grafana.
 `just trace-check` runs this after `just up`.
 
-For each of voidforge-server, voidforge-web, voidforge-bots and voidforge-replay:
+For each of voidforge-server, voidforge-bots and voidforge-replay:
   export   run it with OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318; it must exit 0 and
            print trace_id=<32 hex digits>
   find     fetch that trace through Grafana's Tempo datasource; it must hold a telemetry_check span
@@ -26,10 +26,9 @@ import time
 import urllib.error
 import urllib.request
 
-BINARIES = ["voidforge-server", "voidforge-web", "voidforge-bots", "voidforge-replay"]
-# Each binary's hidden check (D-064): a subcommand, or the web's flag (it has no subcommands). It
-# records one telemetry_check span and prints trace_id=<hex> on stdout, reading nothing else.
-CHECK = {"voidforge-web": ["--telemetry-check"]}
+# Each binary records one telemetry_check span through its hidden `telemetry-check` subcommand
+# (D-064) and prints trace_id=<hex> on stdout, reading nothing else.
+BINARIES = ["voidforge-server", "voidforge-bots", "voidforge-replay"]
 ENDPOINT = "http://localhost:4318"
 GRAFANA_TRACE = "http://localhost:3000/api/datasources/proxy/uid/tempo/api/v2/traces/"
 FIND_TIMEOUT_S = 30
@@ -53,7 +52,7 @@ def run_binary(binary, endpoint):
         env["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
     try:
         return subprocess.run(["cargo", "run", "--quiet", "--locked", "-p", binary, "--"]
-                              + CHECK.get(binary, ["telemetry-check"]), env=env,
+                              + ["telemetry-check"], env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     except OSError as exc:
         print("error: cannot run cargo (%s); could not check" % exc, file=sys.stderr)

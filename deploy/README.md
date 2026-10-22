@@ -33,19 +33,21 @@ These values exist only for local runs and CI. They are not secrets, and they mu
 | Postgres user / password / database | `voidforge` / `voidforge-local-test-password` / `voidforge` |
 | dex user | `alice@voidforge.test` / `alice-local-test-password` |
 | dex user | `bob@voidforge.test` / `bob-local-test-password` |
-| Web client (confidential, authorization code with PKCE) | `voidforge-web` / `voidforge-web-local-test-secret`, redirect `http://localhost:8081/callback` |
+| Web app client (public, authorization code with PKCE in the browser; dex allows its origin) | `voidforge-spa`, redirect `http://localhost:8081/callback` |
 | CLI client (public, device code) | `voidforge-cli`, device callback `/dex/device/callback` (the issuer's path plus `/device/callback`: dex builds it that way, so a bare `/device/callback` refuses every approval, D-053) |
 
 The password grant for the static users is enabled only in `dex/config.ci.yaml`. Client credentials are never enabled.
+
+dex's pages (login, device code, errors) wear the console's look: the `voidforge` theme and three template overrides (`header.html`, `password.html`, `device.html`) in `dex/web/`, which both configs read through `frontend.dir: /srv/dex/web` (D-066). A theme change needs `just up` to rebuild dex.
 
 ## Telemetry
 
 Binaries export traces and metrics when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and only log locally without it ([D-016](../docs/decision-log.md#d-016-telemetry-bootstrap), [D-064](../docs/decision-log.md#d-064-telemetry-a-commands-trace-the-hosts-metrics-and-trace-context-across-http)). Grafana at `http://localhost:3000` shows them in **Explore**, with no dashboard to set up. Undelivered telemetry is an ERROR on stderr and never changes an exit code (only `telemetry-check` fails on it).
 
 - **A command's trace** (Explore > Tempo, query type TraceQL):
-  - `{ name = "web.act" } && { name = "host.append" }` finds a browser form's trace;
+  - `{ name = "api.request" && span.http.route = "/commands" } && { name = "host.append" }` finds an order's trace;
   - `{ name = "host.command" && span.outcome != "accepted" }` finds rejected commands.
-  - A trace runs `web.act` (voidforge-web) → `api.request` (voidforge-server; `http.route`, the status) → `host.inbox` (the wait) and `host.command` (`command.type`, `player_id` as the API's UUID, `seq`, `outcome`) → `host.step` and `host.append` (`batch.size`). The bots' commands start under their `e2e` span.
+  - A trace runs `api.request` (voidforge-server; `http.route`, the status) → `host.inbox` (the wait) and `host.command` (`command.type`, `player_id` as the API's UUID, `seq`, `outcome`) → `host.step` and `host.append` (`batch.size`). The bots' commands start under their `e2e` span. An order from the web app carries a W3C `traceparent` whose trace id the browser chose, one per opened order form and shared by its retries, so every attempt of one order lands in one trace; its parent is recorded by no span, since the app exports none (D-066).
 - **The host's metrics** (Explore > Prometheus):
 
   | Metric | Query |
@@ -71,19 +73,20 @@ The issuer is `http://localhost:5556/dex` everywhere. A container that needs it 
 
 ## The images (P5.2)
 
-`dockerfiles/Dockerfile` builds `voidforge-server:local` and `voidforge-web:local`: distroless, no shell, running as 65532:65532. Nothing is pushed. They run under `deploy/compose.images.yaml`, a project of its own (`voidforge-images`) beside this stack, never inside it, so compose never recreates the stack's containers (D-065).
+`dockerfiles/Dockerfile` builds `voidforge-server:local`, distroless, and `voidforge-web:local`, the built web app served by static-web-server with microcheck's `httpcheck` as its health client (D-066). Neither has a shell; both run as 65532:65532. Nothing is pushed. The web app calls the API at `http://localhost:8080`, baked in at build time: `VOIDFORGE_PORT=<port> just images` builds it for another port, and serve must then run there. They run under `deploy/compose.images.yaml`, a project of its own (`voidforge-images`) beside this stack, never inside it, so compose never recreates the stack's containers (D-065).
 
 ```sh
 just images                                        # build both, then check user, size and contents (`just images 1` for one build job)
 E2E_ISSUER=http://localhost:5563/dex just images-compose   # both up healthy on a scratch database, stopped cleanly, taken down
-E2E_ISSUER=http://localhost:5563/dex just smoke-images     # the smoke test against the images
+E2E_ISSUER=http://localhost:5563/dex just smoke-images     # the smoke test against the images, serve on VOIDFORGE_PORT (8080)
 VOIDFORGE_DATABASE_URL=postgres://…/<scratch> just images-up   # leave both running; `just images-down` stops them
 ```
 
 - `VOIDFORGE_DATABASE_URL` is required and has no default: name a seeded scratch database, never `voidforge`.
 - `docker compose stop` sends SIGTERM to serve itself (PID 1); it drains and stops with its final snapshot, exit 0. SIGKILL comes only after 40 s.
-- Health: serve's is `voidforge-server health` on `/openapi.json`, the web's `voidforge-web --health-check` on `/`. Serve's start period is 300 s, so a long recovery reads "starting", never "unhealthy".
-- On colima, "host" is the VM's network; colima forwards each listening port to the Mac with an ssh listener that outlives a stopped container by up to ~3 s. The web walk waits for its own previous web's port to come free, and after its web's receipt waits for the forward (20-30 ms). A known colima limit (D-065): in that gap the receipt proves the bind in the VM, not on the Mac; Linux has no forward and no gap.
+- Health: serve's is `voidforge-server health` on `/openapi.json`, the web's `httpcheck` on static-web-server's `/health`. Serve's start period is 300 s, so a long recovery reads "starting", never "unhealthy".
+- The web image sends the app's CSP with `frame-ancestors 'none'`, `nosniff` and `no-cache` on every page, and caches the hashed assets for a year. Every path it doesn't hold, a missing asset included, gets `index.html` with 200, since the app routes in the browser.
+- On colima, "host" is the VM's network; colima forwards each listening port to the Mac with an ssh listener that outlives a stopped container by up to ~3 s. The web walk refuses to start while anything listens on `localhost:8081`, and after its web's receipt waits for the forward (20-30 ms). A known colima limit (D-065): in that gap the receipt proves the bind in the VM, not on the Mac; Linux has no forward and no gap.
 
 ## Troubleshooting
 

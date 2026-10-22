@@ -42,7 +42,7 @@ HOST_NETWORK_HINT = (
     "Settings > Resources > Network > 'Enable host networking'."
 )
 # TEST-ONLY values from deploy/dex/config.yaml.
-WEB_CLIENT, WEB_SECRET, WEB_REDIRECT = "voidforge-web", "voidforge-web-local-test-secret", "http://localhost:8081/callback"
+WEB_CLIENT, WEB_REDIRECT = "voidforge-spa", "http://localhost:8081/callback"
 CLI_CLIENT = "voidforge-cli"
 TEST_USER, TEST_PASSWORD = "alice@voidforge.test", "alice-local-test-password"
 
@@ -71,11 +71,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def http(url, data=None, headers=None, auth=None):
+def http(url, data=None, headers=None):
     """(status, body text, headers); never raises for HTTP error statuses."""
     headers = dict(headers or {})
-    if auth:
-        headers["Authorization"] = "Basic " + base64.b64encode((auth[0] + ":" + auth[1]).encode()).decode()
     body = None
     if data is not None:
         body = data if isinstance(data, bytes) else urllib.parse.urlencode(data).encode()
@@ -182,7 +180,7 @@ def check_dex():
     else:
         fail("dex: device code request for %s returned %s: %s" % (CLI_CLIENT, status, body[:200]))
 
-    # The confidential web client's PKCE authorization request is accepted; a foreign redirect is not.
+    # The public web client's PKCE authorization request is accepted; a foreign redirect is not.
     verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     params = {"client_id": WEB_CLIENT, "redirect_uri": WEB_REDIRECT, "response_type": "code",
@@ -201,16 +199,16 @@ def check_dex():
         fail("dex: unregistered redirect URI was not refused (ended at %s with %s)" % (final, status))
 
     token = disco["token_endpoint"]
-    status, body, _ = http(token, data={"grant_type": "client_credentials", "scope": "openid"},
-                           auth=(WEB_CLIENT, WEB_SECRET))
+    status, body, _ = http(token, data={"grant_type": "client_credentials", "scope": "openid",
+                                        "client_id": WEB_CLIENT})
     if status is not None and status >= 400:
         ok("dex: client credentials grant refused (HTTP %s)" % status)
     else:
         fail("dex: client credentials grant was not refused (HTTP %s)" % status)
 
     status, body, _ = http(token, data={"grant_type": "password", "username": TEST_USER,
-                                        "password": TEST_PASSWORD, "scope": "openid email"},
-                           auth=(WEB_CLIENT, WEB_SECRET))
+                                        "password": TEST_PASSWORD, "scope": "openid email",
+                                        "client_id": WEB_CLIENT})
     if CI_CONFIG:
         claims = {}
         if status == 200 and "id_token" in body:

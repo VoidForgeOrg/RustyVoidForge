@@ -9,12 +9,11 @@ use voidforge_server::auth::{AuthArgs, Refusal, TokenVerifier};
 
 const ISSUER: &str = "http://localhost:5556/dex";
 
-/// alice's ID token from dex's password grant, through the web client (TEST-ONLY credentials
-/// from deploy/dex/config.ci.yaml).
+/// alice's ID token from dex's password grant, through the public CLI client (TEST-ONLY
+/// credentials from deploy/dex/config.ci.yaml).
 async fn alice_token() -> String {
     let body = "grant_type=password&username=alice%40voidforge.test\
-        &password=alice-local-test-password&client_id=voidforge-web\
-        &client_secret=voidforge-web-local-test-secret&scope=openid%20email";
+        &password=alice-local-test-password&client_id=voidforge-cli&scope=openid%20email";
     let response = reqwest::Client::new()
         .post(format!("{ISSUER}/token"))
         .header("content-type", "application/x-www-form-urlencoded")
@@ -41,7 +40,7 @@ fn bearer(token: &str) -> HeaderMap {
 fn verifier() -> TokenVerifier {
     let args = AuthArgs {
         issuer: ISSUER.to_owned(),
-        audiences: vec!["voidforge-web".to_owned(), "voidforge-cli".to_owned()],
+        audiences: vec!["voidforge-cli".to_owned()],
         token_leeway_secs: 30,
         jwks_refresh_secs: 900,
         jwks_min_refresh_secs: 10,

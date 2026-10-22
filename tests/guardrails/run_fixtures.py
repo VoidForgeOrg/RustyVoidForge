@@ -16,7 +16,7 @@ clippy.toml files and lint attributes are what gets tested. For each case:
                                 core, rules and worldgen, naming exactly the "expect-float-fn:"
                                 functions; <name>.ok.rs must pass; <name>.err.rs does not
                                 compile and must make the check exit 2, never pass;
-  WEB_CASES below               manifest edits checked with check_web_deps.py.
+  DEPS_CASES below              manifest edits checked with check_bots_deps.py.
 
 Before running cases it checks that the three clippy.toml files are identical and that every
 banned path in them is expected by at least one fixture.
@@ -337,154 +337,142 @@ def run_meta(ws, report, only):
                     ["classified %s, clippy exit %d" % (outcome, code)] + [describe(d) for d in diags])
 
 
-# Web dependency cases: (name, edits, expected exit, expected violation lines or stderr fragments).
+# Dependency cases: (name, edits, expected exit, expected violation lines or stderr fragments).
 # An edit is (crate, section, line) appended to that crate's Cargo.toml.
-def both(lines):
-    """`lines` for voidforge-web, and the same for voidforge-bots: since the Phase 3 gate (D-055)
-    the bots are isolated too, and they reach api-types and telemetry as web does, so an edge
-    injected there shows on both crates' paths."""
-    return lines + [l.replace("voidforge-web ->", "voidforge-bots ->") for l in lines]
-
-
-WEB_CASES = [
-    ("web as committed (telemetry only, and telemetry's external crates)", [], 0, []),
-    ("web adds api-types next to telemetry (allowed)",
-     [("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 0, []),
-    ("web on core", [("voidforge-web", "dependencies", "voidforge-core = { workspace = true }")], 1,
-     ["violation: declared normal dependency: voidforge-web -> voidforge-core",
-      "violation: resolved normal path: voidforge-web -> voidforge-core"]),
+DEPS_CASES = [
+    ("the workspace as committed", [], 0, []),
+    ("bots on core", [("voidforge-bots", "dependencies", "voidforge-core = { workspace = true }")], 1,
+     ["violation: declared normal dependency: voidforge-bots -> voidforge-core",
+      "violation: resolved normal path: voidforge-bots -> voidforge-core"]),
     # From P2.3 host depends on core and store, and dev-depends on testkit (D-036): the checker,
     # which follows every dependency kind transitively, names those paths too.
-    ("web on host by path", [("voidforge-web", "dependencies", 'voidforge-host = { path = "../voidforge-host" }')], 1,
-     ["violation: declared dev dependency: voidforge-web -> voidforge-host -> voidforge-store -> voidforge-testkit",
-      "violation: declared dev dependency: voidforge-web -> voidforge-host -> voidforge-store -> voidforge-worldgen",
-      "violation: declared dev dependency: voidforge-web -> voidforge-host -> voidforge-store -> voidforge-worldgen -> voidforge-testkit",
-      "violation: declared dev dependency: voidforge-web -> voidforge-host -> voidforge-testkit",
-      "violation: declared normal dependency: voidforge-web -> voidforge-host",
-      "violation: declared normal dependency: voidforge-web -> voidforge-host -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-host -> voidforge-store",
-      "violation: declared normal dependency: voidforge-web -> voidforge-host -> voidforge-store -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-host -> voidforge-store -> voidforge-worldgen -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-host -> voidforge-testkit -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-host -> voidforge-testkit -> voidforge-rules",
-      "violation: declared normal dependency: voidforge-web -> voidforge-host -> voidforge-testkit -> voidforge-rules -> voidforge-core",
-      "violation: resolved dev path: voidforge-web -> voidforge-host -> voidforge-store -> voidforge-worldgen",
-      "violation: resolved dev path: voidforge-web -> voidforge-host -> voidforge-testkit",
-      "violation: resolved normal path: voidforge-web -> voidforge-host",
-      "violation: resolved normal path: voidforge-web -> voidforge-host -> voidforge-core",
-      "violation: resolved normal path: voidforge-web -> voidforge-host -> voidforge-store",
-      "violation: resolved normal path: voidforge-web -> voidforge-host -> voidforge-testkit -> voidforge-rules"]),
+    ("bots on host by path", [("voidforge-bots", "dependencies", 'voidforge-host = { path = "../voidforge-host" }')], 1,
+     ["violation: declared dev dependency: voidforge-bots -> voidforge-host -> voidforge-store -> voidforge-testkit",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-host -> voidforge-store -> voidforge-worldgen",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-host -> voidforge-store -> voidforge-worldgen -> voidforge-testkit",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-host -> voidforge-testkit",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-host",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-host -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-host -> voidforge-store",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-host -> voidforge-store -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-host -> voidforge-store -> voidforge-worldgen -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-host -> voidforge-testkit -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-host -> voidforge-testkit -> voidforge-rules",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-host -> voidforge-testkit -> voidforge-rules -> voidforge-core",
+      "violation: resolved dev path: voidforge-bots -> voidforge-host -> voidforge-store -> voidforge-worldgen",
+      "violation: resolved dev path: voidforge-bots -> voidforge-host -> voidforge-testkit",
+      "violation: resolved normal path: voidforge-bots -> voidforge-host",
+      "violation: resolved normal path: voidforge-bots -> voidforge-host -> voidforge-core",
+      "violation: resolved normal path: voidforge-bots -> voidforge-host -> voidforge-store",
+      "violation: resolved normal path: voidforge-bots -> voidforge-host -> voidforge-testkit -> voidforge-rules"]),
     # From P2.2 store depends on core and dev-depends on testkit and worldgen (D-035), so the
     # checker, which follows every dependency kind transitively, names those paths too.
-    ("web on store as a dev-dependency",
-     [("voidforge-web", "dev-dependencies", "voidforge-store = { workspace = true }")], 1,
-     ["violation: declared dev dependency: voidforge-web -> voidforge-store",
-      "violation: declared dev dependency: voidforge-web -> voidforge-store -> voidforge-testkit",
-      "violation: declared dev dependency: voidforge-web -> voidforge-store -> voidforge-worldgen",
-      "violation: declared dev dependency: voidforge-web -> voidforge-store -> voidforge-worldgen -> voidforge-testkit",
-      "violation: declared normal dependency: voidforge-web -> voidforge-store -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-store -> voidforge-testkit -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-store -> voidforge-testkit -> voidforge-rules",
-      "violation: declared normal dependency: voidforge-web -> voidforge-store -> voidforge-testkit -> voidforge-rules -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-store -> voidforge-worldgen -> voidforge-core",
-      "violation: resolved dev path: voidforge-web -> voidforge-store",
-      "violation: resolved dev path: voidforge-web -> voidforge-store -> voidforge-testkit",
-      "violation: resolved dev path: voidforge-web -> voidforge-store -> voidforge-worldgen",
-      "violation: resolved normal path: voidforge-web -> voidforge-store -> voidforge-core",
-      "violation: resolved normal path: voidforge-web -> voidforge-store -> voidforge-testkit -> voidforge-rules"]),
-    ("web on core as a build-dependency",
-     [("voidforge-web", "build-dependencies", "voidforge-core = { workspace = true }")], 1,
-     ["violation: declared build dependency: voidforge-web -> voidforge-core",
-      "violation: resolved build path: voidforge-web -> voidforge-core"]),
-    ("web on core under another name",
-     [("voidforge-web", "dependencies", 'engine = { package = "voidforge-core", path = "../voidforge-core" }')], 1,
-     ["violation: declared normal dependency: voidforge-web -> voidforge-core (as engine)",
-      "violation: resolved normal path: voidforge-web -> voidforge-core"]),
+    ("bots on store as a dev-dependency",
+     [("voidforge-bots", "dev-dependencies", "voidforge-store = { workspace = true }")], 1,
+     ["violation: declared dev dependency: voidforge-bots -> voidforge-store",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-store -> voidforge-testkit",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-store -> voidforge-worldgen",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-store -> voidforge-worldgen -> voidforge-testkit",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-store -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-store -> voidforge-testkit -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-store -> voidforge-testkit -> voidforge-rules",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-store -> voidforge-testkit -> voidforge-rules -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-store -> voidforge-worldgen -> voidforge-core",
+      "violation: resolved dev path: voidforge-bots -> voidforge-store",
+      "violation: resolved dev path: voidforge-bots -> voidforge-store -> voidforge-testkit",
+      "violation: resolved dev path: voidforge-bots -> voidforge-store -> voidforge-worldgen",
+      "violation: resolved normal path: voidforge-bots -> voidforge-store -> voidforge-core",
+      "violation: resolved normal path: voidforge-bots -> voidforge-store -> voidforge-testkit -> voidforge-rules"]),
+    ("bots on core as a build-dependency",
+     [("voidforge-bots", "build-dependencies", "voidforge-core = { workspace = true }")], 1,
+     ["violation: declared build dependency: voidforge-bots -> voidforge-core",
+      "violation: resolved build path: voidforge-bots -> voidforge-core"]),
+    ("bots on core under another name",
+     [("voidforge-bots", "dependencies", 'engine = { package = "voidforge-core", path = "../voidforge-core" }')], 1,
+     ["violation: declared normal dependency: voidforge-bots -> voidforge-core (as engine)",
+      "violation: resolved normal path: voidforge-bots -> voidforge-core"]),
     # The server has a library since P3.2 (D-046), so cargo resolves this dependency, and the checker
     # reports the declaration, the resolved path, and everything the server reaches (dev-qa's Q2).
     # Since P3.3 (D-047) the server depends on the host normally, not only in its tests.
-    ("web on server by path (resolves since P3.2: a library target)",
-     [("voidforge-web", "dependencies", 'voidforge-server = { path = "../voidforge-server" }')], 1,
+    ("bots on server by path (resolves since P3.2: a library target)",
+     [("voidforge-bots", "dependencies", 'voidforge-server = { path = "../voidforge-server" }')], 1,
      [
-      "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-core",
-      "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-host -> voidforge-testkit",
-      "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-store -> voidforge-testkit",
-      "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-store -> voidforge-worldgen",
-      "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-testkit",
-      "violation: declared dev dependency: voidforge-web -> voidforge-server -> voidforge-worldgen -> voidforge-testkit",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-host",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-host -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-host -> voidforge-store",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-rules",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-rules -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-store",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-store -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-testkit -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-testkit -> voidforge-rules",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-worldgen",
-      "violation: declared normal dependency: voidforge-web -> voidforge-server -> voidforge-worldgen -> voidforge-core",
-      "violation: resolved dev path: voidforge-web -> voidforge-server -> voidforge-core",
-      "violation: resolved dev path: voidforge-web -> voidforge-server -> voidforge-testkit",
-      "violation: resolved normal path: voidforge-web -> voidforge-server",
-      "violation: resolved normal path: voidforge-web -> voidforge-server -> voidforge-host",
-      "violation: resolved normal path: voidforge-web -> voidforge-server -> voidforge-rules",
-      "violation: resolved normal path: voidforge-web -> voidforge-server -> voidforge-store",
-      "violation: resolved normal path: voidforge-web -> voidforge-server -> voidforge-worldgen"]),
+      "violation: declared dev dependency: voidforge-bots -> voidforge-server -> voidforge-core",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-server -> voidforge-host -> voidforge-testkit",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-server -> voidforge-store -> voidforge-testkit",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-server -> voidforge-store -> voidforge-worldgen",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-server -> voidforge-testkit",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-server -> voidforge-worldgen -> voidforge-testkit",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-host",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-host -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-host -> voidforge-store",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-rules",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-rules -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-store",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-store -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-testkit -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-testkit -> voidforge-rules",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-worldgen",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-server -> voidforge-worldgen -> voidforge-core",
+      "violation: resolved dev path: voidforge-bots -> voidforge-server -> voidforge-core",
+      "violation: resolved dev path: voidforge-bots -> voidforge-server -> voidforge-testkit",
+      "violation: resolved normal path: voidforge-bots -> voidforge-server",
+      "violation: resolved normal path: voidforge-bots -> voidforge-server -> voidforge-host",
+      "violation: resolved normal path: voidforge-bots -> voidforge-server -> voidforge-rules",
+      "violation: resolved normal path: voidforge-bots -> voidforge-server -> voidforge-store",
+      "violation: resolved normal path: voidforge-bots -> voidforge-server -> voidforge-worldgen"]),
     # A binary-only crate: cargo ignores the path dependency, so only the declaration catches it.
     # (voidforge-server has a library since P3.2, D-046, so replay stands in.)
-    ("web on replay by path (cargo ignores it: no library target)",
-     [("voidforge-web", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }')], 1,
-     ["violation: declared normal dependency: voidforge-web -> voidforge-replay"]),
-    ("web on core through api-types",
-     [("voidforge-api-types", "dependencies", "voidforge-core = { workspace = true }"),
-      ("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 1,
-     both(["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-core",
-      "violation: resolved normal path: voidforge-web -> voidforge-api-types -> voidforge-core"])),
+    ("bots on replay by path (cargo ignores it: no library target)",
+     [("voidforge-bots", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }')], 1,
+     ["violation: declared normal dependency: voidforge-bots -> voidforge-replay"]),
+    ("bots on core through api-types",
+     [("voidforge-api-types", "dependencies", "voidforge-core = { workspace = true }")], 1,
+     ["violation: declared normal dependency: voidforge-bots -> voidforge-api-types -> voidforge-core",
+      "violation: resolved normal path: voidforge-bots -> voidforge-api-types -> voidforge-core"]),
     # From P5.1 host depends on telemetry (D-064), so telemetry -> host would be a cycle cargo
     # refuses outright; store is the engine crate telemetry can still be made to reach.
-    ("web on store through telemetry",
+    ("bots on store through telemetry",
      [("voidforge-telemetry", "dependencies", "voidforge-store = { workspace = true }")], 1,
-     both(["violation: declared dev dependency: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-testkit",
-      "violation: declared dev dependency: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-worldgen",
-      "violation: declared dev dependency: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-worldgen -> voidforge-testkit",
-      "violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-store",
-      "violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-testkit -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-testkit -> voidforge-rules",
-      "violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-testkit -> voidforge-rules -> voidforge-core",
-      "violation: declared normal dependency: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-worldgen -> voidforge-core",
-      "violation: resolved dev path: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-testkit",
-      "violation: resolved dev path: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-worldgen",
-      "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-store",
-      "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-core",
-      "violation: resolved normal path: voidforge-web -> voidforge-telemetry -> voidforge-store -> voidforge-testkit -> voidforge-rules"])),
+     ["violation: declared dev dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-testkit",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-worldgen",
+      "violation: declared dev dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-worldgen -> voidforge-testkit",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-testkit -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-testkit -> voidforge-rules",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-testkit -> voidforge-rules -> voidforge-core",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-worldgen -> voidforge-core",
+      "violation: resolved dev path: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-testkit",
+      "violation: resolved dev path: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-worldgen",
+      "violation: resolved normal path: voidforge-bots -> voidforge-telemetry -> voidforge-store",
+      "violation: resolved normal path: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-core",
+      "violation: resolved normal path: voidforge-bots -> voidforge-telemetry -> voidforge-store -> voidforge-testkit -> voidforge-rules"]),
     # Since P0.6 every binary depends on telemetry, so telemetry -> server would be a cycle;
     # api-types is the reachable crate that declares the binary here.
     # replay, not server: the server depends on api-types since P3.2, so api-types -> server
     # would be a cycle cargo refuses outright.
-    ("web on replay through api-types by path (a declaration cargo drops, in a reachable crate)",
-     [("voidforge-api-types", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }'),
-      ("voidforge-web", "dependencies", "voidforge-api-types = { workspace = true }")], 1,
-     both(["violation: declared normal dependency: voidforge-web -> voidforge-api-types -> voidforge-replay"])),
+    ("bots on replay through api-types by path (a declaration cargo drops, in a reachable crate)",
+     [("voidforge-api-types", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }') ], 1,
+     ["violation: declared normal dependency: voidforge-bots -> voidforge-api-types -> voidforge-replay"]),
     ("reachable crate declaring an allowed crate (telemetry on api-types)",
      [("voidforge-telemetry", "dependencies", "voidforge-api-types = { workspace = true }")], 0, []),
     # Since the Phase 3 gate (D-055) the server itself is governed (it never depends on core
     # directly), so an ungoverned crate that nothing isolated reaches stands in: replay.
     ("unreachable crate may declare anything (replay on core; nothing isolated reaches replay)",
      [("voidforge-replay", "dependencies", "voidforge-core = { workspace = true }")], 0, []),
-    ("web on another workspace crate (rules)",
-     [("voidforge-web", "dependencies", "voidforge-rules = { workspace = true }")], 1,
-     # Since P1.2 rules depends on core, so web reaches core through it as well.
-     ["violation: declared normal dependency: voidforge-web -> voidforge-rules",
-      "violation: declared normal dependency: voidforge-web -> voidforge-rules -> voidforge-core",
-      "violation: resolved normal path: voidforge-web -> voidforge-rules",
-      "violation: resolved normal path: voidforge-web -> voidforge-rules -> voidforge-core"]),
-    ("cargo itself rejects web on server through [workspace.dependencies]",
-     [("voidforge-web", "dependencies", "voidforge-server = { workspace = true }")], 2,
+    ("bots on another workspace crate (rules)",
+     [("voidforge-bots", "dependencies", "voidforge-rules = { workspace = true }")], 1,
+     # Since P1.2 rules depends on core, so the bots reach core through it as well.
+     ["violation: declared normal dependency: voidforge-bots -> voidforge-rules",
+      "violation: declared normal dependency: voidforge-bots -> voidforge-rules -> voidforge-core",
+      "violation: resolved normal path: voidforge-bots -> voidforge-rules",
+      "violation: resolved normal path: voidforge-bots -> voidforge-rules -> voidforge-core"]),
+    ("cargo itself rejects bots on server through [workspace.dependencies]",
+     [("voidforge-bots", "dependencies", "voidforge-server = { workspace = true }")], 2,
      ["stderr:voidforge-server", "stderr:workspace.dependencies"]),
-    # The Phase 3 gate (D-055, review-r1's R1-G8): the bots are isolated like web, and the server
-    # never depends on core directly. The server's dev-dependency on core (api_codes) is in the
+    # The Phase 3 gate (D-055, review-r1's R1-G8): the server never depends on core directly. The server's dev-dependency on core (api_codes) is in the
     # committed manifest, so the first case above shows it's allowed.
     ("server on core (normal)",
      [("voidforge-server", "dependencies", "voidforge-core = { workspace = true }")], 1,
@@ -498,28 +486,21 @@ WEB_CASES = [
       "violation: resolved normal path: voidforge-server -> voidforge-core"]),
     ("server on core as a build-dependency (allowed: links nothing into the server)",
      [("voidforge-server", "build-dependencies", "voidforge-core = { workspace = true }")], 0, []),
-    ("bots on core",
-     [("voidforge-bots", "dependencies", "voidforge-core = { workspace = true }")], 1,
-     ["violation: declared normal dependency: voidforge-bots -> voidforge-core",
-      "violation: resolved normal path: voidforge-bots -> voidforge-core"]),
     ("bots on rules as a dev-dependency",
      [("voidforge-bots", "dev-dependencies", "voidforge-rules = { workspace = true }")], 1,
      ["violation: declared dev dependency: voidforge-bots -> voidforge-rules",
       "violation: declared normal dependency: voidforge-bots -> voidforge-rules -> voidforge-core",
       "violation: resolved dev path: voidforge-bots -> voidforge-rules",
       "violation: resolved normal path: voidforge-bots -> voidforge-rules -> voidforge-core"]),
-    ("bots on replay by path (cargo ignores it: no library target)",
-     [("voidforge-bots", "dependencies", 'voidforge-replay = { path = "../voidforge-replay" }')], 1,
-     ["violation: declared normal dependency: voidforge-bots -> voidforge-replay"]),
     ("checker error: broken manifest is exit 2, not a pass",
-     [("voidforge-web", "dependencies", "this is not toml")], 2, ["stderr:could not check"]),
+     [("voidforge-bots", "dependencies", "this is not toml")], 2, ["stderr:could not check"]),
 ]
 
 
-def run_web(ws, report, only):
-    checker = os.path.join(HERE, "check_web_deps.py")
-    for name, edits, want_code, want in WEB_CASES:
-        name = "web deps: " + name
+def run_deps(ws, report, only):
+    checker = os.path.join(HERE, "check_bots_deps.py")
+    for name, edits, want_code, want in DEPS_CASES:
+        name = "deps: " + name
         if only and only not in name:
             continue
         grouped = {}
@@ -537,7 +518,7 @@ def run_web(ws, report, only):
                     + ["got " + g for g in got] + ["want " + w for w in want_lines]
                     + ["stderr " + l for l in proc.stderr.splitlines()[-4:]])
 
-    name = "web deps: checker error: a directory that is not a workspace is exit 2, not a pass"
+    name = "deps: checker error: a directory that is not a workspace is exit 2, not a pass"
     if not only or only in name:
         empty = tempfile.mkdtemp(prefix="voidforge-guardrails-empty-")
         proc = run([sys.executable, checker, empty], empty)
@@ -599,7 +580,7 @@ def main():
         run_determinism(ws, report, args.only)
         run_float_values(ws, report, args.only)
         run_meta(ws, report, args.only)
-        run_web(ws, report, args.only)
+        run_deps(ws, report, args.only)
     except HarnessError as exc:
         print("error: " + str(exc) + "; the guardrail fixtures could not run", file=sys.stderr)
         return 2
