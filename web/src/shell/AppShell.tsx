@@ -1,7 +1,7 @@
 import { Button, Chip, Spinner, Toast } from "@heroui/react";
 import { NavMenu } from "@kedar42/perseus";
 import { Outlet, useLocation, useMatches } from "@tanstack/react-router";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { login, logout } from "../auth/auth";
 import { useAuth } from "../auth/authStore";
 import { failure, ORDER_LOST } from "../copy/messages";
@@ -19,7 +19,7 @@ import {
   UniverseIcon,
 } from "../theme/icons";
 import { planetName } from "../screens/parts";
-import { Failure, Notice } from "./Failure";
+import { Failure, Notice, Stale } from "./Failure";
 import { useNavStore } from "./navStore";
 import { FastRules, TopBar } from "./TopBar";
 import { useLayout } from "./useLayout";
@@ -54,36 +54,34 @@ function Gate() {
 /** Logged in: the first `/players/me` joins the game, so nothing else shows until it answers. */
 function Command() {
   const me = useMe();
-  if (me.isPending) {
+  if (me.data) return <Frame me={me.data} stale={<Stale query={me} />} />;
+  if (!me.isError) {
     return (
       <div className="grid min-h-dvh place-items-center">
         <Spinner aria-label="Loading" />
       </div>
     );
   }
-  if (me.isError) {
-    const message = failure(me.error, "page");
-    return (
-      <div className="flex min-h-dvh flex-col">
-        <Bar />
-        <main className="flex flex-1 items-center justify-center p-4">
-          {message.kind === "universe-full" ? (
-            <Notice heading={access.full} copy={message.copy} code={message.code}>
-              <Button className="self-start" variant="secondary" onPress={() => void logout()}>
-                Log out
-              </Button>
-            </Notice>
-          ) : (
-            <Failure error={me.error} onRetry={() => void me.refetch()} />
-          )}
-        </main>
-      </div>
-    );
-  }
-  return <Frame me={me.data} />;
+  const message = failure(me.error, "page");
+  return (
+    <div className="flex min-h-dvh flex-col">
+      <Bar />
+      <main className="flex flex-1 items-center justify-center p-4">
+        {message.kind === "universe-full" ? (
+          <Notice heading={access.full} copy={message.copy} code={message.code}>
+            <Button className="self-start" variant="secondary" onPress={() => void logout()}>
+              Log out
+            </Button>
+          </Notice>
+        ) : (
+          <Failure error={me.error} onRetry={() => void me.refetch()} />
+        )}
+      </main>
+    </div>
+  );
 }
 
-function Frame({ me }: { me: components["schemas"]["PlayerView"] }) {
+function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: ReactNode }) {
   const { homeworld_id: homeworld, planet_ids: planets } = me;
   const layout = useLayout();
   const { desktopOpen, setDesktopOpen } = useNavStore();
@@ -169,6 +167,7 @@ function Frame({ me }: { me: components["schemas"]["PlayerView"] }) {
           }
         />
         <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          {stale}
           <Title />
           <Outlet />
         </main>

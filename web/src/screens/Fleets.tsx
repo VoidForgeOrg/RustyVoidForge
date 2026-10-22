@@ -1,4 +1,4 @@
-import { buttonVariants, Spinner } from "@heroui/react";
+import { buttonVariants } from "@heroui/react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect } from "react";
 import type { components } from "../api/schema";
@@ -6,7 +6,7 @@ import { copy } from "../copy/messages";
 import { empties } from "../copy/voices";
 import { at, duration, mass, mission, missionTo, shipCounts, ships, speed } from "../format";
 import { useFleets, useMe } from "../game/queries";
-import { Failure } from "../shell/Failure";
+import { Read } from "../shell/Failure";
 import { FleetsIcon } from "../theme/icons";
 import { MissionModal } from "./Mission";
 import { Actions, Confirm, OrderButton, Unavailable } from "./Orders";
@@ -26,16 +26,21 @@ export function Fleets() {
   useEffect(() => {
     if (gone) void navigate({ to: "/fleets", replace: true });
   }, [gone, navigate]);
-  if (fleets.isPending) return <Spinner aria-label="Loading fleets" />;
-  if (fleets.isError) return <Failure error={fleets.error} onRetry={() => void fleets.refetch()} />;
-  if (fleets.data.fleets.length === 0) return <p className="text-muted">{empties.fleets}</p>;
   return (
     <>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-4">
-        {fleets.data.fleets.map((f) => (
-          <FleetCard key={f.fleet_id} fleet={f} view={fleets.data} receivedAt={fleets.dataUpdatedAt} />
-        ))}
-      </div>
+      <Read query={fleets} loading="Loading fleets">
+        {(view) =>
+          view.fleets.length === 0 ? (
+            <p className="text-muted">{empties.fleets}</p>
+          ) : (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-4">
+              {view.fleets.map((f) => (
+                <FleetCard key={f.fleet_id} fleet={f} view={view} receivedAt={fleets.dataUpdatedAt} />
+              ))}
+            </div>
+          )
+        }
+      </Read>
       {sending?.state === "stationed" && (
         <MissionModal
           planet={sending.at_planet_id}

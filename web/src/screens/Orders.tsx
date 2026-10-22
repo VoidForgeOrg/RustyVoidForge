@@ -75,7 +75,7 @@ export function Confirm({
       <Button size="sm" variant="danger-soft" onPress={reset}>
         {label}
       </Button>
-      <AlertDialog.Backdrop>
+      <AlertDialog.Backdrop isKeyboardDismissDisabled={false}>
         <AlertDialog.Container>
           <AlertDialog.Dialog>
             {({ close }) => {

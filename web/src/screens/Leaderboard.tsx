@@ -1,17 +1,25 @@
-import { Spinner, Table } from "@heroui/react";
+import { Table } from "@heroui/react";
+import type { components } from "../api/schema";
 import { clock, player, thousands } from "../format";
 import { useLeaderboard, useMe } from "../game/queries";
-import { Failure } from "../shell/Failure";
+import { Read } from "../shell/Failure";
 
 export function Leaderboard() {
   const board = useLeaderboard();
   const me = useMe().data;
-  if (board.isPending || !me) return <Spinner aria-label="Loading standings" />;
-  if (board.isError) return <Failure error={board.error} onRetry={() => void board.refetch()} />;
-  const asOf = Date.parse(board.data.as_of);
+  if (!me) return null;
+  return (
+    <Read query={board} loading="Loading standings">
+      {(view) => <Standings view={view} me={me.player_id} />}
+    </Read>
+  );
+}
+
+function Standings({ view, me }: { view: components["schemas"]["Leaderboard"]; me: string }) {
+  const asOf = Date.parse(view.as_of);
   return (
     <>
-      <p className="mb-3 text-sm text-muted">As of {clock(board.data.as_of, asOf)}</p>
+      <p className="mb-3 text-sm text-muted">As of {clock(view.as_of, asOf)}</p>
       <Table>
         <Table.ScrollContainer>
           <Table.Content aria-label="Imperial standings">
@@ -21,10 +29,10 @@ export function Leaderboard() {
               <Table.Column>Score</Table.Column>
             </Table.Header>
             <Table.Body>
-              {board.data.entries.map((e) => (
-                <Table.Row key={e.player_id} className={e.player_id === me.player_id ? "text-accent" : ""}>
+              {view.entries.map((e) => (
+                <Table.Row key={e.player_id} className={e.player_id === me ? "text-accent" : ""}>
                   <Table.Cell>{e.rank}</Table.Cell>
-                  <Table.Cell>{player(e.player_id, me.player_id)}</Table.Cell>
+                  <Table.Cell>{player(e.player_id, me)}</Table.Cell>
                   <Table.Cell>{thousands(e.score)}</Table.Cell>
                 </Table.Row>
               ))}

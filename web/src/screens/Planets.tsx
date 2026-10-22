@@ -1,4 +1,4 @@
-import { buttonVariants, Spinner } from "@heroui/react";
+import { buttonVariants } from "@heroui/react";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { empties } from "../copy/voices";
@@ -8,7 +8,7 @@ import { grown } from "../game/live";
 import { useFleets, useMe, usePlanet } from "../game/queries";
 import { dueIn } from "../game/refresh";
 import { useNow } from "../game/useNow";
-import { Failure } from "../shell/Failure";
+import { Read } from "../shell/Failure";
 import { useLayout } from "../shell/useLayout";
 import {
   CargoVesselIcon,
@@ -89,16 +89,13 @@ function PlanetCard({
   useEffect(() => {
     if (open) ref.current?.scrollIntoView({ block: "nearest" });
   }, [open]);
-  const body = planet.isPending ? (
-    <Spinner aria-label={`Loading planet ${id.toString()}`} />
-  ) : planet.isError ? (
-    <Failure error={planet.error} fill={{ planet: id }} onRetry={() => void planet.refetch()} />
-  ) : (
-    <Holding view={planet.data} receivedAt={planet.dataUpdatedAt} homeworld={homeworld} me={me} open={open} />
-  );
   return (
     <article ref={ref} className={open ? "col-span-full" : ""} aria-label={planetName(id, homeworld)}>
-      {body}
+      <Read query={planet} fill={{ planet: id }} loading={`Loading planet ${id.toString()}`}>
+        {(view) => (
+          <Holding view={view} receivedAt={planet.dataUpdatedAt} homeworld={homeworld} me={me} open={open} />
+        )}
+      </Read>
     </article>
   );
 }

@@ -183,6 +183,48 @@ test("an irreversible order asks first, and Keep it sends nothing", async () => 
   expect(sent.map((s) => s.body)).toEqual([{ type: "demolish_building", payload: { building_id: 2 } }]);
 });
 
+test("a confirm closes on Esc, sending nothing", async () => {
+  answer({ "/commands": orders() });
+  renderAt("/planets/1/buildings/2");
+  const drawer = await screen.findByRole("dialog", { name: "#1 Home · Drill" });
+  fireEvent.click(await within(drawer).findByRole("button", { name: "Demolish Drill #2" }));
+  const ask = await screen.findByRole("alertdialog", { name: "Demolish Drill #2?" });
+  fireEvent.keyDown(ask, { key: "Escape" });
+  // jsdom never ends the closing animation, so the dialog stays in the tree, exiting.
+  await waitFor(() => {
+    expect(ask.closest("[data-slot=alert-dialog-backdrop]")).toHaveAttribute("data-exiting", "true");
+  });
+  expect(sent).toHaveLength(0);
+});
+
+test("a failed refetch leaves the last good view standing, with the failure above it", async () => {
+  let ordered = false;
+  const view = { ...home, buildings: [...home.buildings, shipyard] };
+  answer({
+    "/planets/1": () => (ordered ? refused(429, "rate_limited") : Response.json(view)),
+    "/commands": orders(() => {
+      ordered = true;
+      return accepted();
+    }),
+  });
+  renderAt("/planets/1/buildings/15");
+  const drawer = await screen.findByRole("dialog", { name: "#1 Home · Shipyard" });
+  fireEvent.click(await within(drawer).findByRole("button", { name: "Queue Colony Ship" }));
+  await screen.findAllByText("A Colony Ship was queued at Shipyard #15.");
+  // The drawer hides the grid from the accessibility tree.
+  const card = screen.getByRole("article", { name: "#1 Home", hidden: true });
+  for (const [view, hidden] of [
+    [card, true],
+    [drawer, false],
+  ] as const) {
+    expect(await within(view).findByRole("alert", { hidden })).toHaveTextContent(
+      /Transmission failed.*rate_limited/,
+    );
+  }
+  expect(within(card).getByRole("list", { name: "Building slots", hidden: true })).toBeInTheDocument();
+  expect(within(drawer).getByRole("button", { name: "Queue Colony Ship" })).toBeInTheDocument();
+});
+
 test("a Shipyard with builds offers no Demolish, and says why", async () => {
   const build = {
     id: 20,
@@ -250,6 +292,12 @@ test("the mission stepper checks its ships and cargo, assembles, and retries onl
   fireEvent.click(next);
 
   expect(await within(stepper).findByRole("radio", { name: /Colonize/ })).toBeEnabled();
+  await within(stepper).findByRole("option", { name: /^#4 / });
+  fireEvent.change(within(stepper).getByRole("textbox", { name: "Target planet #" }), {
+    target: { value: "4" },
+  });
+  expect(within(stepper).getByText(/Planet #4 is already owned/)).toBeInTheDocument();
+  expect(within(stepper).getByRole("button", { name: "Next" })).toBeDisabled();
   fireEvent.click(await within(stepper).findByRole("option", { name: /^#7 · unowned/ }));
   fireEvent.click(within(stepper).getByRole("button", { name: "Next" }));
   fireEvent.click(await within(stepper).findByRole("button", { name: "Send" }));

@@ -27,6 +27,8 @@ export function TopBar({
   menu: ReactNode;
 }) {
   const now = useNow();
+  // Controlled, so following one of the sheet's links closes it.
+  const [more, setMore] = useState(false);
   const fleets = useFleets();
   const board = useLeaderboard();
   const ids = homeworldFirst(me.planet_ids, me.homeworld_id);
@@ -74,11 +76,12 @@ export function TopBar({
     </>
   );
   const nextItem = <NextItem soonest={soonest} partial={partial} now={now} />;
-  const rest = (labels: string) => (
+  const rest = (labels: string, onFollow?: () => void) => (
     <>
       <Link
         to="/planets"
         className={item}
+        onClick={onFollow}
         aria-label={`Holdings: ${me.planet_ids.length.toString()} planets, ${used.toString()} of ${slots.toString()} slots used${partial ? `, ${partial}` : ""}`}
       >
         <PlanetsIcon />
@@ -89,6 +92,7 @@ export function TopBar({
       <Link
         to="/fleets"
         className={item}
+        onClick={onFollow}
         aria-label={`Fleets: ${flying.toString()} in flight, ${stationed.toString()} stationed`}
       >
         <FleetsIcon />
@@ -98,6 +102,7 @@ export function TopBar({
       <Link
         to="/leaderboard"
         className={item}
+        onClick={onFollow}
         aria-label={`Score ${thousands(me.score)}${rank ? `, rank ${rank.toString()}` : ""}`}
       >
         <LeaderboardIcon />
@@ -120,7 +125,7 @@ export function TopBar({
       {layout === "phone" ? (
         <>
           {nextItem}
-          <Drawer>
+          <Drawer isOpen={more} onOpenChange={setMore}>
             <Button variant="ghost" className="ml-auto">
               More
             </Button>
@@ -128,7 +133,9 @@ export function TopBar({
               <Drawer.Content placement="bottom">
                 <Drawer.Dialog aria-label="Empire">
                   <Drawer.Body className="flex flex-col items-start gap-2 p-4">
-                    {rest("text-muted")}
+                    {rest("text-muted", () => {
+                      setMore(false);
+                    })}
                     {ends}
                   </Drawer.Body>
                 </Drawer.Dialog>

@@ -1,5 +1,6 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import type { components } from "../api/schema";
 import { useAuth } from "../auth/authStore";
 import type { Timed } from "./live";
 import { dueIn, refetchDelay } from "./refresh";
@@ -57,6 +58,9 @@ const useNear = (near: string, radius: number, ready: boolean) =>
   );
 
 /** Planets within `radiusDu` of the planet `center`, nearest first. */
+export const nearestFirst = (planets: readonly components["schemas"]["PlanetSummary"][]) =>
+  [...planets].sort((a, b) => a.distance - b.distance || a.planet_id - b.planet_id);
+
 export function useChart(center: number, radiusDu: number) {
   const planet = usePlanet(center);
   const p = planet.data?.position;
@@ -65,10 +69,7 @@ export function useChart(center: number, radiusDu: number) {
     radiusDu,
     p !== undefined,
   );
-  const rows = near.data
-    ? [...near.data.planets].sort((a, b) => a.distance - b.distance || a.planet_id - b.planet_id)
-    : undefined;
-  return { planet, near, rows };
+  return { planet, near, rows: near.data && nearestFirst(near.data.planets) };
 }
 
 export const useLeaderboard = () =>

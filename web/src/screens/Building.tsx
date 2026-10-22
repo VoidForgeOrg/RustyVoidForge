@@ -1,4 +1,4 @@
-import { Drawer, Spinner } from "@heroui/react";
+import { Drawer } from "@heroui/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { components } from "../api/schema";
@@ -7,7 +7,7 @@ import { empties, failures } from "../copy/voices";
 import { at, building, duration, mass, progress, rate, ship, stock } from "../format";
 import { grown } from "../game/live";
 import { useMe, usePlanet, useRules } from "../game/queries";
-import { Failure, Notice } from "../shell/Failure";
+import { Notice, Read } from "../shell/Failure";
 import { useLayout } from "../shell/useLayout";
 import { Actions, Confirm, OrderButton, Unavailable } from "./Orders";
 import {
@@ -52,17 +52,9 @@ function PlanetDrawer({
             <Drawer.CloseTrigger />
           </Drawer.Header>
           <Drawer.Body className="flex flex-col gap-3">
-            {planet.isPending ? (
-              <Spinner aria-label="Loading" />
-            ) : planet.isError ? (
-              <Failure
-                error={planet.error}
-                fill={{ planet: planetId }}
-                onRetry={() => void planet.refetch()}
-              />
-            ) : (
-              children(planet.data, planet.dataUpdatedAt)
-            )}
+            <Read query={planet} fill={{ planet: planetId }} loading="Loading">
+              {(view) => children(view, planet.dataUpdatedAt)}
+            </Read>
           </Drawer.Body>
         </Drawer.Dialog>
       </Drawer.Content>

@@ -107,6 +107,8 @@ function Stepper({
   const [target, setTarget] = useState("");
   const [fleetId, setFleetId] = useState(fleet?.fleet_id ?? null);
   const [shown, setShown] = useState<string | null>(null);
+  const [radius, setRadius] = useState(DEFAULT_RADIUS_U);
+  const { rows } = useChart(view.planet_id, radius * DU_PER_U);
   if (!me || !rules) return <Spinner aria-label="Loading" />;
 
   const roster = view.roster.filter((s) => s.owner === me.player_id);
@@ -140,6 +142,15 @@ function Stepper({
       ? chosenMission
       : (MISSIONS.find((m) => missionCheck(m) === null) ?? "move");
   const targetId = /^\d+$/.test(target.trim()) ? Number(target.trim()) : null;
+  // A target outside the chart is left to the API.
+  const targetCheck =
+    targetId === null
+      ? target.trim() === ""
+        ? null
+        : checks.target
+      : mission === "colonize" && rows?.some((r) => r.planet_id === targetId && r.owner !== null)
+        ? copy("target_owned", "command", { target: targetId })
+        : null;
 
   const assembleOrder = (): Order => ({
     type: "assemble_fleet",
@@ -269,6 +280,9 @@ function Stepper({
             </RadioGroup>
             <Targets
               center={view.planet_id}
+              rows={rows}
+              radius={radius}
+              onRadius={setRadius}
               mission={mission}
               me={me.player_id}
               speed={speed}
@@ -281,9 +295,7 @@ function Stepper({
               <Label>Target planet #</Label>
               <Input inputMode="numeric" />
             </TextField>
-            {targetId === null && target.trim() !== "" && (
-              <p className="text-sm text-warning">{checks.target}</p>
-            )}
+            {targetCheck && <p className="text-sm text-warning">{targetCheck}</p>}
           </>
         )}
 
@@ -360,7 +372,7 @@ function Stepper({
         {step === 2 && (
           <Button
             variant="primary"
-            isDisabled={targetId === null || missionCheck(mission) !== null}
+            isDisabled={targetId === null || targetCheck !== null || missionCheck(mission) !== null}
             onPress={() => {
               setStep(3);
             }}
@@ -385,6 +397,9 @@ function Stepper({
 /** Planets in range, nearest first, with the trip's time; those the mission can't target are disabled. */
 function Targets({
   center,
+  rows,
+  radius,
+  onRadius,
   mission,
   me,
   speed,
@@ -392,15 +407,16 @@ function Targets({
   onSelect,
 }: {
   center: number;
+  rows: S["PlanetSummary"][] | undefined;
+  radius: number;
+  onRadius: (radius: number) => void;
   mission: S["Mission"];
   me: string;
   speed: number;
   selected: number | null;
   onSelect: (id: number) => void;
 }) {
-  const [radius, setRadius] = useState(DEFAULT_RADIUS_U);
-  const { rows } = useChart(center, radius * DU_PER_U);
-  const field = <RadiusField value={radius} onChange={setRadius} />;
+  const field = <RadiusField value={radius} onChange={onRadius} />;
   if (!rows)
     return (
       <>

@@ -1,11 +1,12 @@
-import { Label, ListBox, Select, Spinner, Table } from "@heroui/react";
+import { Label, ListBox, Select, Table } from "@heroui/react";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
+import type { components } from "../api/schema";
 import { empties } from "../copy/voices";
 import { distance, owner, position } from "../format";
 import { homeworldFirst } from "../game/empire";
-import { useChart, useMe } from "../game/queries";
-import { Failure } from "../shell/Failure";
+import { nearestFirst, useChart, useMe } from "../game/queries";
+import { Read } from "../shell/Failure";
 import { DEFAULT_RADIUS_U, DU_PER_U, planetName, RadiusField } from "./parts";
 
 export function Universe() {
@@ -48,11 +49,19 @@ export function Universe() {
 }
 
 function Near({ center, radiusDu, me }: { center: number; radiusDu: number; me: string }) {
-  const { planet, near, rows } = useChart(center, radiusDu);
-  if (planet.isError)
-    return <Failure error={planet.error} fill={{ planet: center }} onRetry={() => void planet.refetch()} />;
-  if (near.isError) return <Failure error={near.error} onRetry={() => void near.refetch()} />;
-  if (!rows) return <Spinner aria-label="Charting" />;
+  const { planet, near } = useChart(center, radiusDu);
+  return (
+    <Read query={planet} fill={{ planet: center }} loading="Charting">
+      {() => (
+        <Read query={near} loading="Charting">
+          {(view) => <Chart rows={nearestFirst(view.planets)} me={me} />}
+        </Read>
+      )}
+    </Read>
+  );
+}
+
+function Chart({ rows, me }: { rows: components["schemas"]["PlanetSummary"][]; me: string }) {
   if (rows.length === 0) return <p className="text-muted">{empties.near}</p>;
   return (
     <Table>
