@@ -13,6 +13,13 @@ web:
   # The browser web app calls the token endpoint and discovery from its own origin (D-066).
   allowedOrigins: ["http://localhost:8081"]
 
+# The login pages in the console's look: our theme and header over dex's stock pages (D-066).
+frontend:
+  dir: /srv/dex/web
+  theme: voidforge
+  issuer: Voidforge
+  logoURL: theme/logo.svg
+
 oauth2:
   skipApprovalScreen: true
   responseTypes: ["code"]

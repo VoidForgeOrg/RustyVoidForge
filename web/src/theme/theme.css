@@ -1,5 +1,6 @@
 /* The console theme (D-066): one dark theme over HeroUI's tokens. Colours are hex, so the contrast
-   test can read them; theme.test.ts holds every text and edge pair to WCAG AA. */
+   test can read them; theme.test.ts holds every text and edge pair to WCAG AA.
+   deploy/dex/web/themes/voidforge/styles.css copies these values for dex's pages; change both. */
 
 .dark {
   color-scheme: dark;

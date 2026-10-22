@@ -1,0 +1,229 @@
+/* The console's look for dex's pages (D-066). The values are copied from
+   web/src/theme/theme.css, which CSS can't import across the two builds; change both together. */
+
+@font-face {
+  font-family: "Chakra Petch";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("chakra-petch-latin-600-normal.woff2") format("woff2");
+}
+
+.theme-body {
+  --background: #05080d;
+  --foreground: #d8e6ee;
+  --surface: #0d1520;
+  --muted: #8ea3b0;
+  --accent: #4fd6e8;
+  --accent-foreground: #031016;
+  --danger: #ff7a6b;
+  --field-background: #0a1018;
+  --field-border: #4f7088;
+  --separator: #1d3040;
+  --focus: #4fd6e8;
+  --radius: 0.25rem;
+  --font-display: "Chakra Petch", ui-sans-serif, system-ui, sans-serif;
+
+  /* The palette dex's shared stylesheet reads. */
+  --dex-fg: var(--foreground);
+  --dex-fg-muted: var(--muted);
+  --dex-border: var(--separator);
+  --dex-accent: var(--accent);
+
+  min-height: 100vh;
+  background: radial-gradient(ellipse at 70% -10%, #0f2a3a 0%, transparent 55%), var(--background);
+  color: var(--foreground);
+  font: 14px/1.45 system-ui, sans-serif;
+}
+
+.theme-navbar {
+  display: flex;
+  align-items: center;
+  height: 52px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--separator);
+}
+
+.theme-navbar__logo-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.theme-navbar__logo {
+  width: 24px;
+  height: 24px;
+}
+
+.theme-navbar__name,
+.theme-heading {
+  font-family: var(--font-display);
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.theme-navbar__name {
+  font-size: 18px;
+}
+
+.dex-container {
+  color: var(--foreground);
+  min-width: 0;
+  margin: 40px auto;
+}
+
+/* A panel with the console's corner brackets. */
+.theme-panel {
+  position: relative;
+  padding: 28px 20px;
+  border: 1px solid var(--separator);
+  background: var(--surface);
+}
+
+.theme-panel::before,
+.theme-panel::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+
+.theme-panel::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.theme-panel::after {
+  right: -1px;
+  bottom: -1px;
+  border-top: 0;
+  border-left: 0;
+}
+
+.theme-heading {
+  margin: 0 0 16px;
+  color: var(--foreground);
+  font-size: 22px;
+}
+
+.theme-form-row {
+  display: block;
+  margin: 16px auto;
+}
+
+.theme-form-label,
+.theme-remember-me {
+  width: 260px;
+  max-width: 100%;
+  margin: 4px auto;
+  color: var(--foreground);
+  text-align: left;
+}
+
+.theme-remember-me {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.theme-form-input {
+  display: block;
+  width: 260px;
+  max-width: 100%;
+  height: 40px;
+  margin: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius);
+  background: var(--field-background);
+  color: var(--foreground);
+  font: inherit;
+}
+
+.theme-form-input::placeholder {
+  color: var(--muted);
+}
+
+.theme-form-input:focus {
+  border-color: var(--focus);
+  outline: none;
+}
+
+.dex-btn {
+  border-radius: var(--radius);
+}
+
+.dex-btn:focus-visible,
+.theme-form-input:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.theme-btn--primary,
+.theme-btn--success {
+  min-width: 200px;
+  max-width: 100%;
+  padding: 8px 16px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 600;
+}
+
+.theme-btn--success {
+  width: 260px;
+}
+
+.theme-btn--primary:hover,
+.theme-btn--success:hover {
+  background: #7fe3f0;
+}
+
+.theme-btn-provider {
+  width: 260px;
+  max-width: 100%;
+  border: 1px solid var(--field-border);
+  background: var(--field-background);
+  color: var(--foreground);
+}
+
+.theme-btn-provider:hover {
+  border-color: var(--accent);
+}
+
+.dex-error-box {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--field-background);
+  color: var(--danger);
+}
+
+.dex-subtle-text,
+.dex-list {
+  color: var(--muted);
+}
+
+.dex-separator {
+  border: 0;
+  border-top: 1px solid var(--separator);
+}
+
+a {
+  color: var(--accent);
+}
+
+.theme-link-back {
+  margin-top: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dex-btn {
+    transition: none;
+  }
+}

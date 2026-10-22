@@ -38,6 +38,8 @@ These values exist only for local runs and CI. They are not secrets, and they mu
 
 The password grant for the static users is enabled only in `dex/config.ci.yaml`. Client credentials are never enabled.
 
+dex's pages (login, device code, errors) wear the console's look: the `voidforge` theme and a `header.html` override in `dex/web/`, which both configs read through `frontend.dir: /srv/dex/web` (D-066). A theme change needs `just up` to rebuild dex.
+
 ## Telemetry
 
 Binaries export traces and metrics when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and only log locally without it ([D-016](../docs/decision-log.md#d-016-telemetry-bootstrap), [D-064](../docs/decision-log.md#d-064-telemetry-a-commands-trace-the-hosts-metrics-and-trace-context-across-http)). Grafana at `http://localhost:3000` shows them in **Explore**, with no dashboard to set up. Undelivered telemetry is an ERROR on stderr and never changes an exit code (only `telemetry-check` fails on it).

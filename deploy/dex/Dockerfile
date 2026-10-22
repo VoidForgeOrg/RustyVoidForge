@@ -4,4 +4,7 @@
 FROM ghcr.io/dexidp/dex:v2.46.0@sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
 ARG DEX_CONFIG=config.yaml
 COPY ${DEX_CONFIG} /etc/dex/config.yaml
+# The voidforge theme and its header beside dex's own web assets, which the configs' frontend.dir
+# points at (D-066).
+COPY web/ /srv/dex/web/
 CMD ["dex", "serve", "/etc/dex/config.yaml"]

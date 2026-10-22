@@ -118,7 +118,7 @@ Pinned in [`web/`](../web/AGENTS.md) ([D-066](decision-log.md#d-066-the-web-fron
 
 | Package | Version | Kind | Used for |
 | --- | --- | --- | --- |
-| @fontsource/chakra-petch | 5.3.0 | runtime | The display face (OFL-1.1), bundled |
+| @fontsource/chakra-petch | 5.3.0 | runtime | The display face (OFL-1.1), bundled; its latin 600 woff2 is copied into dex's theme (`deploy/dex/web/themes/voidforge/`) |
 | @heroui/react | 3.2.6 | runtime | Components |
 | @heroui/styles | 3.2.6 | runtime | HeroUI's theme and component styles |
 | @kedar42/perseus | 0.3.0 (GitHub release tarball) | runtime | The owner's HeroUI components (NavMenu) |
