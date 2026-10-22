@@ -176,8 +176,10 @@ def main():
     check = walk.listeners
 
     def then_taken():
+        # Once: a mutant that calls the check again must meet the same app, not crash on its port.
         found = check()
-        taken.append(StandIn("127.0.0.1", port=port))
+        if not taken:
+            taken.append(StandIn("127.0.0.1", port=port))
         return found
 
     walk.listeners = then_taken
@@ -219,7 +221,8 @@ def main():
 
         def then_v6():
             found = check()
-            late.append(StandIn("::1", socket.AF_INET6, port=port))
+            if not late:
+                late.append(StandIn("::1", socket.AF_INET6, port=port))
             return found
 
         walk.listeners = then_v6
@@ -305,7 +308,8 @@ def main():
 
     def then_foreign():
         found = check()
-        gap.append(StandIn("127.0.0.1", port=port))
+        if not gap:
+            gap.append(StandIn("127.0.0.1", port=port))
         return found
 
     walk.listeners = then_foreign
