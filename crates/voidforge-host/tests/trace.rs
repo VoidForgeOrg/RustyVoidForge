@@ -118,12 +118,29 @@ async fn a_command_s_trace_runs_from_its_caller_through_the_step_and_the_append(
         attr(command, "command.type").as_deref(),
         Some("build_building")
     );
-    assert_eq!(attr(command, "player_id"), Some(ALICE.0.to_string()));
+    // The API's UUID form (QA's N2), as the server writes it.
+    let hex = format!("{:032x}", ALICE.0);
+    let uuid = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    );
+    assert_eq!(attr(command, "player_id"), Some(uuid));
     assert_eq!(attr(command, "seq"), Some(receipt.seq.to_string()));
     assert_eq!(attr(command, "outcome").as_deref(), Some("accepted"));
     assert_eq!(attr(append, "batch.size").as_deref(), Some("1"));
-    // M1: the key never reaches a span, whole or in part.
+    // M1: the key never reaches a span, whole or in part; N1: no span says where it was built.
     for span in &spans {
+        assert!(
+            span.attributes
+                .iter()
+                .all(|kv| !kv.key.as_str().starts_with("code.")),
+            "{} carries a code location",
+            span.name
+        );
         for kv in &span.attributes {
             assert!(
                 !kv.value.to_string().contains(&KEY[..12]),

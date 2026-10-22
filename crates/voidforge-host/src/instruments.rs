@@ -26,6 +26,15 @@ use voidforge_telemetry::metrics::{Histogram, ObservableGauge};
 
 use crate::clock::Clock;
 
+/// The latency histograms' bucket boundaries, in seconds: from 0.1 ms to 10 s, so a step's
+/// sub-millisecond time and an append's few milliseconds each land in buckets of their own, and
+/// a quantile follows them. The SDK's defaults (0 to 10,000) are millisecond-scale: every sample
+/// in seconds fell in one bucket, and every p99 read 4.95 s (QA's F1 on 0acb1e6).
+pub(crate) const LATENCY_BOUNDS_S: [f64; 16] = [
+    0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
+    5.0, 10.0,
+];
+
 /// No value yet: no due entry, or no snapshot known.
 pub(crate) const NONE: i64 = i64::MIN;
 
@@ -120,11 +129,13 @@ impl Instruments {
                 .f64_histogram("voidforge.host.step.duration")
                 .with_unit("s")
                 .with_description("One engine step: a command applied, or time advanced")
+                .with_boundaries(LATENCY_BOUNDS_S.to_vec())
                 .build(),
             append: meter
                 .f64_histogram("voidforge.host.append.duration")
                 .with_unit("s")
                 .with_description("One durable write of a turn's records")
+                .with_boundaries(LATENCY_BOUNDS_S.to_vec())
                 .build(),
             _gauges: [depth, lag],
             _age: age,
@@ -140,6 +151,20 @@ impl Instruments {
     pub(crate) fn append(&self, took: Duration) {
         self.append.record(took.as_secs_f64(), &[]);
     }
+}
+
+/// A player's id as the API shows it: the UUID of its 128 bits, hyphenated (the server's
+/// `Uuid::from_u128(..).hyphenated()`), so a trace can be found from an API response (QA's N2).
+pub(crate) fn player_uuid(id: u128) -> String {
+    let hex = format!("{id:032x}");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
 }
 
 /// A command's type, as the API names it (its wire tag), for the command spans.
@@ -177,6 +202,47 @@ mod tests {
         assert_eq!(snapshot_age_s(5_000, NONE), None);
         assert_eq!(snapshot_age_s(5_000, 2_000), Some(3.0));
         assert_eq!(snapshot_age_s(1_000, 2_000), Some(0.0), "never negative");
+    }
+
+    /// QA's F1 on 0acb1e6, its ready test: 1 ms and 200 ms land in different buckets of both latency
+    /// histograms, whose first boundary is under a millisecond. The SDK's default boundaries put
+    /// every value below 5 s in one bucket, so every p99 read 4.95 s.
+    #[test]
+    fn latency_buckets_tell_milliseconds_apart() {
+        let captured = voidforge_telemetry::testing::capture();
+        let clock = Arc::new(crate::clock::ManualClock::new(0));
+        let instruments = Instruments::new(&Arc::new(Gauges::default()), &clock, 0);
+        for took in [Duration::from_millis(1), Duration::from_millis(200)] {
+            instruments.step(took, true);
+            instruments.append(took);
+        }
+        for name in [
+            "voidforge.host.step.duration",
+            "voidforge.host.append.duration",
+        ] {
+            let buckets = captured.buckets(name);
+            assert!(!buckets.is_empty(), "{name} recorded");
+            for (bounds, counts) in buckets {
+                assert!(
+                    bounds.first().is_some_and(|b| *b <= 0.001),
+                    "{name}: {bounds:?}"
+                );
+                let used = counts.iter().filter(|c| **c > 0).count();
+                assert!(
+                    used >= 2,
+                    "{name}: 1 ms and 200 ms share a bucket: {counts:?} over {bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_player_id_is_the_api_s_uuid() {
+        assert_eq!(
+            player_uuid(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef),
+            "01234567-89ab-cdef-0123-456789abcdef"
+        );
+        assert_eq!(player_uuid(1), "00000000-0000-0000-0000-000000000001");
     }
 
     #[test]

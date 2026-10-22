@@ -45,8 +45,7 @@ pub fn capture() -> &'static Captured {
             .build();
         tracing_subscriber::registry()
             .with(
-                tracing_opentelemetry::layer()
-                    .with_tracer(tracer.tracer("test"))
+                crate::span_layer(tracer.tracer("test"))
                     .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
             )
             .try_init()
@@ -91,6 +90,25 @@ impl Captured {
             for scope in rm.scope_metrics() {
                 for m in scope.metrics().filter(|m| m.name() == name) {
                     push_points(m.data(), &mut out);
+                }
+            }
+        }
+        out
+    }
+}
+
+impl Captured {
+    /// The bucket counts of the histogram `name` now, one list per data point, with its bounds.
+    pub fn buckets(&self, name: &str) -> Vec<(Vec<f64>, Vec<u64>)> {
+        let mut out = Vec::new();
+        for rm in self.read() {
+            for scope in rm.scope_metrics() {
+                for m in scope.metrics().filter(|m| m.name() == name) {
+                    if let AggregatedMetrics::F64(MetricData::Histogram(h)) = m.data() {
+                        for p in h.data_points() {
+                            out.push((p.bounds().collect(), p.bucket_counts().collect()));
+                        }
+                    }
                 }
             }
         }

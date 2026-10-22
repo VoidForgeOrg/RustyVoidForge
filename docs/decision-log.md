@@ -1926,11 +1926,16 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **One command's trace** (M1). The server's `api.request` span (method, the route as declared, never the path or its query, and the status) is the parent of `host.inbox`, open from the submit until the host takes the command (the inbox wait), and of `host.command` (`command.type`, `player_id`, `seq`, `outcome`: accepted, a rejection's code, replayed or key_conflict). `host.step` and `host.append` are the command's children. The `Submission` carries the submitter's span across the inbox.
     - **A turn's one append** shows in every command's trace (T1): one `host.append` per command, all open around the single write, each with `batch.size`. `host.turn` stays a root, linked to the commands it carried. A time-only step is `host.advance`, and a snapshot is `host.snapshot` with its `seq` and state hash.
     - **No secret is an attribute:** no token, no idempotency key, whole or in part, and no query string.
+    - **Round 1:**
+      - spans carry no `code.*` location attributes: a dependency's span would carry the build host's absolute path, the user's home directory in it (QA's N1);
+      - `player_id` is the API's UUID form (`Uuid::from_u128(..).hyphenated()`), so a trace can be found from an API response (QA's N2);
+      - QA's N3, the pre-append key lookup with no span of its own, goes to P5.3's load measurement (D-037).
   - **The host's five metrics** (M2), over OTLP every 10 s, measured in the host (the shell, never the core), listed in `crates/voidforge-host/src/instruments.rs`:
     - `voidforge.host.inbox.depth` (gauge, commands);
     - `voidforge.host.event.lag` (gauge, game-time ms: now minus the oldest queue entry once it's due);
     - `voidforge.host.step.duration` (histogram, s, `kind` = command or advance);
     - `voidforge.host.append.duration` (histogram, s);
+    - both histograms on second-scale buckets, 0.1 ms to 10 s (**round 1, QA's F1:** the SDK's default boundaries are millisecond-scale, so every sample fell below 5 and every p99 read 4.95 s);
     - `voidforge.host.snapshot.age` (gauge, game-time s since the newest snapshot's game time).
 
     Event lag and snapshot age are game time, the host's clock (A2): wall time in the MVP, since the game clock never pauses. **Carry:** if pausing game time during maintenance (Game Design, post-MVP) ever lands, revisit both. The gauges are read against the host's clock on the exporter's schedule, so a stuck host shows a growing lag. With no endpoint every instrument is a no-op.

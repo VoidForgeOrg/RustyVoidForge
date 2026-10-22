@@ -297,9 +297,7 @@ fn build(
         .map(|base| exporter(service_name, base))
         .transpose()?;
     let otel_layer = exporter.as_ref().map(|exporter| {
-        tracing_opentelemetry::layer()
-            .with_tracer(exporter.provider.tracer(service_name))
-            .with_filter(Quieting(quiet))
+        span_layer(exporter.provider.tracer(service_name)).with_filter(Quieting(quiet))
     });
     let subscriber = tracing_subscriber::registry()
         .with(
@@ -309,6 +307,20 @@ fn build(
         )
         .with(otel_layer);
     Ok((subscriber, Telemetry { exporter }))
+}
+
+/// The OpenTelemetry layer every exporting subscriber uses, the tests' capture included. It
+/// records no `code.*` location attributes: a dependency's span would carry the build host's
+/// absolute path, the user's home directory in it (QA's N1 on P5.1).
+fn span_layer<S>(
+    tracer: opentelemetry_sdk::trace::SdkTracer,
+) -> tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::SdkTracer>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    tracing_opentelemetry::layer()
+        .with_tracer(tracer)
+        .with_location(false)
 }
 
 /// How often metrics are sent while the process runs.

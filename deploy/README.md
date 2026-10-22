@@ -45,7 +45,7 @@ Binaries export traces and metrics when `OTEL_EXPORTER_OTLP_ENDPOINT=http://loca
 - **A command's trace** (Explore > Tempo, query type TraceQL):
   - `{ name = "web.act" } && { name = "host.append" }` finds a browser form's trace;
   - `{ name = "host.command" && span.outcome != "accepted" }` finds rejected commands.
-  - A trace runs `web.act` (voidforge-web) → `api.request` (voidforge-server; `http.route`, the status) → `host.inbox` (the wait) and `host.command` (`command.type`, `player_id`, `seq`, `outcome`) → `host.step` and `host.append` (`batch.size`). The bots' commands start under their `e2e` span.
+  - A trace runs `web.act` (voidforge-web) → `api.request` (voidforge-server; `http.route`, the status) → `host.inbox` (the wait) and `host.command` (`command.type`, `player_id` as the API's UUID, `seq`, `outcome`) → `host.step` and `host.append` (`batch.size`). The bots' commands start under their `e2e` span.
 - **The host's metrics** (Explore > Prometheus):
 
   | Metric | Query |

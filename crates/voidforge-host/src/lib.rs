@@ -682,7 +682,7 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                 parent: &caller,
                 "host.command",
                 command.r#type = instruments::action_type(&command.action),
-                player_id = command.player.0,
+                player_id = instruments::player_uuid(command.player.0),
                 seq = tracing::field::Empty,
                 outcome = tracing::field::Empty,
             );
