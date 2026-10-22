@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import near from "../fixtures/planets_near.json";
 import home from "../fixtures/planet_view_alice_home.json";
@@ -45,10 +45,11 @@ afterEach(() => {
   globalThis.fetch = fetchMock;
 });
 
-test("a lone planet opens expanded: its buildings by type and status, then its free slots", async () => {
+test("a planet's panel lists its buildings by type and status, then its free slots", async () => {
   answer();
-  renderAt("/planets");
-  const slots = await screen.findByRole("list", { name: "Building slots" });
+  renderAt("/planets/1");
+  const panel = await screen.findByRole("dialog", { name: "#1 Home" });
+  const slots = await within(panel).findByRole("list", { name: "Building slots" });
   const names = within(slots)
     .getAllByRole("link")
     .map((a) => a.getAttribute("aria-label"));
@@ -104,9 +105,10 @@ test("another player's planet is read-only, with no roster", async () => {
     "/planets/4": Response.json({ ...home, planet_id: 4, owner: near.planets[1]?.owner, roster: [] }),
   });
   renderAt("/planets/4");
-  const card = await screen.findByRole("article", { name: "#4" });
-  expect(await within(card).findByText("player 7c8d9e10")).toBeInTheDocument();
-  expect(within(card).queryByText("Ships here")).not.toBeInTheDocument();
+  const panel = await screen.findByRole("dialog", { name: "#4" });
+  expect(await within(panel).findByText("Owner: player 7c8d9e10")).toBeInTheDocument();
+  expect(within(panel).queryByText("Ships here")).not.toBeInTheDocument();
+  expect(within(panel).queryByRole("link", { name: "Free slot" })).not.toBeInTheDocument();
 });
 
 test("the star charts list planets nearest first and name the unowned", async () => {
@@ -124,7 +126,7 @@ test("the star charts list planets nearest first and name the unowned", async ()
 test("a nav click navigates in the app, keeping what's already read", async () => {
   answer();
   renderAt("/planets");
-  await screen.findByRole("list", { name: "Building slots" });
+  await screen.findByRole("article", { name: "#1 Home" });
   const reads = () =>
     fetchMock.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === "/players/me").length;
   const before = reads();
@@ -145,4 +147,21 @@ test("a planet that doesn't answer leaves the top bar partial, not blank", async
   expect(
     within(bar).getByRole("link", { name: new RegExp(`^Holdings: 2 planets, .*, ${partial}$`) }),
   ).toBeInTheDocument();
+});
+
+test("a card opens its planet's panel, a tile switches it to the building, and Back and Close step out", async () => {
+  answer();
+  renderAt("/planets");
+  const card = await screen.findByRole("article", { name: "#1 Home" });
+  fireEvent.click(await within(card).findByRole("link", { name: /^#1 Home, 3\/8 slots/ }));
+  const panel = await screen.findByRole("dialog", { name: "#1 Home" });
+  fireEvent.click(await within(panel).findByRole("link", { name: "Drill, constructing 0%" }));
+  expect(await screen.findByRole("dialog", { name: "#1 Home · Drill" })).toBe(panel);
+  fireEvent.click(within(panel).getByRole("link", { name: "Back to #1 Home" }));
+  expect(await within(panel).findByRole("list", { name: "Building slots" })).toBeInTheDocument();
+  fireEvent.click(within(panel).getByRole("button", { name: /close/i }));
+  await waitFor(() => {
+    expect(screen.queryByRole("list", { name: "Building slots" })).not.toBeInTheDocument();
+  });
+  expect(screen.getByRole("article", { name: "#1 Home" })).toBeInTheDocument();
 });

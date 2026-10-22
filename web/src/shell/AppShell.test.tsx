@@ -1,4 +1,4 @@
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAuth } from "../auth/authStore";
 import { logIn, renderAt, serve as answer, wideWindow } from "../test-harness";
@@ -43,12 +43,19 @@ test("logged out, the shell is the access panel alone, still naming the fast rul
   expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
 });
 
-test("the nav selects the planet being shown", async () => {
+test("the nav has one Planets item, selected under a planet's panel too", async () => {
   logIn();
-  serve({ "/players/me": Response.json(me), "/players/me/fleets": Response.json({ as_of: me.as_of, valid_until: null, fleets: [] }) });
-  renderAt("/planets/26");
-  expect(await screen.findByRole("link", { name: "#26" })).toHaveAttribute("aria-current", "page");
-  expect(screen.getByRole("link", { name: "#63 Home" })).not.toHaveAttribute("aria-current");
+  serve({
+    "/players/me": Response.json(me),
+    "/players/me/fleets": Response.json({ as_of: me.as_of, valid_until: null, fleets: [] }),
+  });
+  renderAt("/planets/26/build");
+  const nav = await screen.findByRole("navigation", { name: "Command", hidden: true });
+  expect(within(nav).getByRole("link", { name: "Planets", hidden: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  expect(within(nav).queryByRole("link", { name: "#26", hidden: true })).not.toBeInTheDocument();
 });
 
 test("a busy server's read shows the retry frame with its wait", async () => {
@@ -66,7 +73,10 @@ test("a busy server's read shows the retry frame with its wait", async () => {
 
 test("a planet number the API can't take is uncharted, before any call for it", async () => {
   logIn();
-  serve({ "/players/me": Response.json(me), "/players/me/fleets": Response.json({ as_of: me.as_of, valid_until: null, fleets: [] }) });
+  serve({
+    "/players/me": Response.json(me),
+    "/players/me/fleets": Response.json({ as_of: me.as_of, valid_until: null, fleets: [] }),
+  });
   renderAt("/planets/abc");
   expect(await screen.findByRole("heading", { name: "Uncharted coordinates" })).toBeInTheDocument();
   const asked = fetchMock.mock.calls.map(([r]) => new URL((r as Request).url).pathname);

@@ -1,18 +1,41 @@
-import { Drawer } from "@heroui/react";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { buttonVariants, Drawer } from "@heroui/react";
+import { Link, useMatch, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { components } from "../api/schema";
 import { copy } from "../copy/messages";
 import { empties, failures } from "../copy/voices";
-import { at, building, duration, mass, progress, rate, ship, stock } from "../format";
+import {
+  at,
+  building,
+  duration,
+  mass,
+  owner,
+  percent,
+  progress,
+  rate,
+  ship,
+  shipCounts,
+  ships,
+  stock,
+} from "../format";
 import { grown } from "../game/live";
 import { useMe, usePlanet, useRules } from "../game/queries";
 import { Notice, Read } from "../shell/Failure";
 import { useLayout } from "../shell/useLayout";
+import {
+  CargoVesselIcon,
+  ColonyShipIcon,
+  DrillIcon,
+  EmptySlotIcon,
+  RefineryIcon,
+  ShipyardIcon,
+} from "../theme/icons";
+import { MissionModal } from "./Mission";
 import { Actions, Confirm, OrderButton, Unavailable } from "./Orders";
 import {
   type BuildingView,
   flowWords,
+  Meter,
   type PlanetView,
   planetName,
   StatusWord,
@@ -20,40 +43,73 @@ import {
   useLive,
 } from "./parts";
 
+const buildingIcons = { drill: <DrillIcon />, refinery: <RefineryIcon />, shipyard: <ShipyardIcon /> };
+const shipIcons = { colony_ship: <ColonyShipIcon />, cargo_vessel: <CargoVesselIcon /> };
+
 type S = components["schemas"];
 
-/** A drawer over the planet: docked right on wide screens, a bottom sheet on a phone. */
-function PlanetDrawer({
-  what,
-  children,
-}: {
-  what: string;
-  children: (view: PlanetView, receivedAt: number) => ReactNode;
-}) {
+/**
+ * The planet's side panel, on the planet route and its children, which name its state: the planet
+ * itself, one of its buildings, or the build picker. It stays mounted while the state changes, so a
+ * tile or Back switches its body without closing it.
+ */
+export function PlanetPanel() {
   const { planetId } = useParams({ from: "/game/planets/$planetId" });
+  const { mission } = useSearch({ from: "/game/planets/$planetId" });
+  const atBuilding = useMatch({ from: "/game/planets/$planetId/buildings/$buildingId", shouldThrow: false });
+  const atBuild = useMatch({ from: "/game/planets/$planetId/build", shouldThrow: false });
   const navigate = useNavigate();
   const layout = useLayout();
+  const me = useMe().data;
   const planet = usePlanet(planetId);
-  const name = planetName(planetId, useMe().data?.homeworld_id);
-  const close = () => void navigate({ to: "/planets/$planetId", params: { planetId } });
+  const name = planetName(planetId, me?.homeworld_id);
+  const buildingId = atBuilding?.params.buildingId;
+  const type = planet.data?.buildings.find((b) => b.id === buildingId)?.type;
+  const what = buildingId !== undefined ? (type ? building(type) : "Building") : atBuild ? "Free slot" : null;
+  const title = what ? `${name} · ${what}` : name;
+  const toPlanet = () => void navigate({ to: "/planets/$planetId", params: { planetId } });
+  // One dialog at a time: the stepper stands in for the panel, and closing it brings the panel back.
+  if (mission) return <MissionModal planet={planetId} onClose={toPlanet} />;
   return (
     <Drawer.Backdrop
       isOpen
       onOpenChange={(open) => {
-        if (!open) close();
+        if (!open) void navigate({ to: "/planets" });
       }}
     >
       <Drawer.Content placement={layout === "phone" ? "bottom" : "right"}>
-        <Drawer.Dialog aria-label={`${name} · ${what}`}>
+        <Drawer.Dialog aria-label={title} className={layout === "phone" ? "h-dvh" : ""}>
           <Drawer.Header>
-            <Drawer.Heading className="display text-lg">
-              {name} · {what}
-            </Drawer.Heading>
+            {what && (
+              <Link
+                to="/planets/$planetId"
+                params={{ planetId }}
+                className="text-sm text-accent"
+                aria-label={`Back to ${name}`}
+              >
+                ← Back
+              </Link>
+            )}
+            <Drawer.Heading className="display text-lg">{title}</Drawer.Heading>
             <Drawer.CloseTrigger />
           </Drawer.Header>
           <Drawer.Body className="flex flex-col gap-3">
             <Read query={planet} fill={{ planet: planetId }} loading="Loading">
-              {(view) => children(view, planet.dataUpdatedAt)}
+              {(view) => {
+                const receivedAt = planet.dataUpdatedAt;
+                if (buildingId !== undefined) {
+                  const b = view.buildings.find((x) => x.id === buildingId);
+                  return b ? <BuildingBody view={view} receivedAt={receivedAt} b={b} /> : <Uncharted />;
+                }
+                if (atBuild) {
+                  return view.buildings.length < view.slots ? (
+                    <BuildPicker view={view} receivedAt={receivedAt} />
+                  ) : (
+                    <Uncharted />
+                  );
+                }
+                return <PlanetBody view={view} receivedAt={receivedAt} me={me?.player_id} />;
+              }}
             </Read>
           </Drawer.Body>
         </Drawer.Dialog>
@@ -64,33 +120,26 @@ function PlanetDrawer({
 
 const Uncharted = () => <Notice heading={failures.uncharted} copy={failures.unchartedCopy} />;
 
-/** One building's drawer, by id, which stays the building's for its whole life. */
-export function BuildingDrawer() {
-  const { buildingId } = useParams({ from: "/game/planets/$planetId/buildings/$buildingId" });
-  const planet = usePlanet(useParams({ from: "/game/planets/$planetId" }).planetId);
-  const type = planet.data?.buildings.find((b) => b.id === buildingId)?.type;
+/** The planet's own view: its stocks, its building tiles and, on the player's own, its roster. */
+function PlanetBody({
+  view,
+  receivedAt,
+  me,
+}: {
+  view: PlanetView;
+  receivedAt: number;
+  me: string | undefined;
+}) {
+  const { ran } = useLive(view, receivedAt);
+  const mine = view.owner === me;
   return (
-    <PlanetDrawer what={type ? building(type) : "Building"}>
-      {(view, receivedAt) => {
-        const b = view.buildings.find((x) => x.id === buildingId);
-        return b ? <BuildingBody view={view} receivedAt={receivedAt} b={b} /> : <Uncharted />;
-      }}
-    </PlanetDrawer>
-  );
-}
-
-/** A free slot's drawer: what each building costs and takes. Construction draws ingots as it goes. */
-export function BuildDrawer() {
-  return (
-    <PlanetDrawer what="Free slot">
-      {(view, receivedAt) =>
-        view.buildings.length < view.slots ? (
-          <BuildPicker view={view} receivedAt={receivedAt} />
-        ) : (
-          <Uncharted />
-        )
-      }
-    </PlanetDrawer>
+    <>
+      {!mine && me && <p className="text-sm text-muted">Owner: {owner(view.owner, me)}</p>}
+      <Meter name="Iron Ore" stock={view.stocks.iron_ore} ran={ran} tone="ore" />
+      <Meter name="Iron Ingots" stock={view.stocks.iron_ingot} ran={ran} tone="ingot" />
+      <Slots view={view} ran={ran} mine={mine} />
+      {mine && me && <Roster view={view} me={me} />}
+    </>
   );
 }
 
@@ -293,6 +342,92 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
     <div className="flex items-start justify-between gap-4 border-b border-separator py-2">
       <span className="display text-muted">{label}</span>
       <span className="text-right">{children}</span>
+    </div>
+  );
+}
+
+const tile = "relative grid h-19 w-19 place-items-center border bg-field text-2xl";
+
+/**
+ * The buildings in id order, then one "+" per free slot: slots are interchangeable. Only the
+ * player's own free slots open the build picker.
+ */
+function Slots({ view, ran, mine }: { view: PlanetView; ran: number; mine: boolean }) {
+  const buildings = [...view.buildings].sort((a, b) => a.id - b.id);
+  const free = Math.max(0, view.slots - buildings.length);
+  return (
+    <ul className="my-3 grid grid-cols-[repeat(auto-fill,4.75rem)] gap-2.5" aria-label="Building slots">
+      {buildings.map((b) => {
+        const status = statusOf(b, view.ship_builds);
+        const done =
+          b.state === "under_construction"
+            ? ` ${percent(grown(b.delivered_g, b.rate_g_per_h, ran, b.cost_g), b.cost_g).toString()}%`
+            : "";
+        return (
+          <li key={b.id}>
+            <Link
+              to="/planets/$planetId/buildings/$buildingId"
+              params={{ planetId: view.planet_id, buildingId: b.id }}
+              aria-label={`${building(b.type)}, ${status}${done}`}
+              className={`${tile} border-border hover:border-accent`}
+            >
+              {buildingIcons[b.type]}
+              <span className="absolute inset-x-0 bottom-1 text-center text-[10px]">
+                <StatusWord status={status} />
+              </span>
+            </Link>
+          </li>
+        );
+      })}
+      {Array.from({ length: free }, (_, i) => (
+        <li key={`free-${i.toString()}`}>
+          {mine ? (
+            <Link
+              to="/planets/$planetId/build"
+              params={{ planetId: view.planet_id }}
+              aria-label="Free slot"
+              className={`${tile} border-dashed border-border text-muted hover:border-accent`}
+            >
+              <EmptySlotIcon />
+            </Link>
+          ) : (
+            <span
+              role="img"
+              aria-label="Free slot"
+              className={`${tile} border-dashed border-separator text-muted`}
+            >
+              <EmptySlotIcon />
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Roster({ view, me }: { view: PlanetView; me: string }) {
+  const counts = shipCounts(view.roster);
+  const ours = view.roster.some((s) => s.owner === me);
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-separator pt-3">
+      <span className="display text-muted">Ships here</span>
+      {counts.length === 0 && <span className="text-muted">{empties.roster}</span>}
+      {counts.map(([type, n]) => (
+        <span key={type} className="inline-flex items-center gap-1" title={ship(type)}>
+          {shipIcons[type]}
+          {ships(n, type)}
+        </span>
+      ))}
+      {ours && (
+        <Link
+          to="/planets/$planetId"
+          params={{ planetId: view.planet_id }}
+          search={{ mission: true }}
+          className={`ml-auto ${buttonVariants({ variant: "primary", size: "sm" })}`}
+        >
+          New mission
+        </Link>
+      )}
     </div>
   );
 }

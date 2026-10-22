@@ -106,9 +106,10 @@ const planet = createRoute({
   },
   // `?mission=true` opens the New mission stepper over the planet.
   validateSearch: (s): { mission?: true } => (s.mission === true ? { mission: true } : {}),
-  component: lazyRouteComponent(() => import("./screens/Planets"), "Planet"),
+  component: lazyRouteComponent(() => import("./screens/PlanetPanel"), "PlanetPanel"),
 });
 
+// The panel's other states: it reads which one matched, so these render nothing themselves.
 const buildingRoute = createRoute({
   getParentRoute: () => planet,
   path: "buildings/$buildingId",
@@ -116,13 +117,11 @@ const buildingRoute = createRoute({
     parse: (p) => ({ buildingId: number(p.buildingId) }),
     stringify: (p) => ({ buildingId: p.buildingId.toString() }),
   },
-  component: lazyRouteComponent(() => import("./screens/Building"), "BuildingDrawer"),
 });
 
 const build = createRoute({
   getParentRoute: () => planet,
   path: "build",
-  component: lazyRouteComponent(() => import("./screens/Building"), "BuildDrawer"),
 });
 
 const fleets = createRoute({

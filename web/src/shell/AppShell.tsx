@@ -7,7 +7,6 @@ import { useAuth } from "../auth/authStore";
 import { failure, ORDER_LOST } from "../copy/messages";
 import { access } from "../copy/voices";
 import type { components } from "../api/schema";
-import { homeworldFirst } from "../game/empire";
 import { useFleets, useMe } from "../game/queries";
 import {
   FleetsIcon,
@@ -18,7 +17,6 @@ import {
   PlanetsIcon,
   UniverseIcon,
 } from "../theme/icons";
-import { planetName } from "../screens/parts";
 import { Failure, Notice, Stale } from "./Failure";
 import { useNavStore } from "./navStore";
 import { FastRules, TopBar } from "./TopBar";
@@ -82,7 +80,6 @@ function Command() {
 }
 
 function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: ReactNode }) {
-  const { homeworld_id: homeworld, planet_ids: planets } = me;
   const layout = useLayout();
   const { desktopOpen, setDesktopOpen } = useNavStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -102,8 +99,7 @@ function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: 
       <NavMenu
         aria-label="Command"
         mode={modes[layout]}
-        selectedValue={navValue(pathname)}
-        selectedCategoryValue={pathname.split("/")[1] ?? ""}
+        selectedValue={`/${pathname.split("/")[1] ?? ""}`}
         {...open}
       >
         <NavMenu.Header>
@@ -113,16 +109,9 @@ function Frame({ me, stale }: { me: components["schemas"]["PlayerView"]; stale: 
           </NavMenu.App>
         </NavMenu.Header>
         <NavMenu.Content>
-          <NavMenu.Category value="planets" label="Planets" icon={<PlanetsIcon />} defaultExpanded>
-            <NavMenu.Item href="/planets" value="/planets">
-              All holdings
-            </NavMenu.Item>
-            {homeworldFirst(planets, homeworld).map((id) => (
-              <NavMenu.Item key={id} href={`/planets/${id.toString()}`} value={`/planets/${id.toString()}`}>
-                {planetName(id, homeworld)}
-              </NavMenu.Item>
-            ))}
-          </NavMenu.Category>
+          <NavMenu.Item href="/planets" value="/planets" icon={<PlanetsIcon />}>
+            Planets
+          </NavMenu.Item>
           <NavMenu.Item
             href="/fleets"
             value="/fleets"
@@ -194,8 +183,3 @@ function Title() {
   return title ? <h1 className="mb-4 text-2xl">{title}</h1> : null;
 }
 
-/** The nav item a path selects: a planet's own item for anything under it. */
-function navValue(pathname: string): string {
-  const [, section, id] = pathname.split("/");
-  return section === "planets" && id ? `/planets/${id}` : `/${section ?? ""}`;
-}

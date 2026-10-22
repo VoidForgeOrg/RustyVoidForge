@@ -1,53 +1,21 @@
-import { buttonVariants } from "@heroui/react";
-import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
-import { empties } from "../copy/voices";
-import { building as buildingName, duration, owner, percent, ship, shipCounts, ships } from "../format";
-import { homeworldFirst } from "../game/empire";
-import { grown } from "../game/live";
+import { Link, Outlet } from "@tanstack/react-router";
+import { duration } from "../format";
+import { homeworldFirst, next } from "../game/empire";
 import { useFleets, useMe, usePlanet } from "../game/queries";
 import { dueIn } from "../game/refresh";
 import { useNow } from "../game/useNow";
 import { Read } from "../shell/Failure";
-import { useLayout } from "../shell/useLayout";
-import {
-  CargoVesselIcon,
-  ColonyShipIcon,
-  DrillIcon,
-  EmptySlotIcon,
-  RefineryIcon,
-  ShipyardIcon,
-} from "../theme/icons";
-import { MissionModal } from "./Mission";
-import { Meter, Panel, type PlanetView, planetName, StatusWord, statusOf, useLive } from "./parts";
+import { Meter, Panel, type PlanetView, planetName, useLive } from "./parts";
 
-const buildingIcons = { drill: <DrillIcon />, refinery: <RefineryIcon />, shipyard: <ShipyardIcon /> };
-const shipIcons = { colony_ship: <ColonyShipIcon />, cargo_vessel: <CargoVesselIcon /> };
-
-/** The holdings grid. A planet in the URL expands in place; on a phone it takes the screen. */
+/** The holdings grid: one card per planet, each opening its side panel. */
 export function Planets() {
   const me = useMe().data;
-  const { planetId } = useParams({ strict: false });
-  const layout = useLayout();
   if (!me) return null;
-  const owned = homeworldFirst(me.planet_ids, me.homeworld_id);
-  const only = owned[0];
-  if (planetId === undefined && owned.length === 1 && only !== undefined) {
-    return <Navigate to="/planets/$planetId" params={{ planetId: only }} replace />;
-  }
-  const foreign = planetId !== undefined && !owned.includes(planetId);
-  const shown =
-    layout === "phone" && planetId !== undefined ? [planetId] : foreign ? [planetId, ...owned] : owned;
   return (
     <>
-      {layout === "phone" && planetId !== undefined && (
-        <Link to="/planets" className="mb-3 inline-block text-accent">
-          ← All holdings
-        </Link>
-      )}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-4">
-        {shown.map((id) => (
-          <PlanetCard key={id} id={id} homeworld={me.homeworld_id} me={me.player_id} open={id === planetId} />
+        {homeworldFirst(me.planet_ids, me.homeworld_id).map((id) => (
+          <PlanetCard key={id} id={id} homeworld={me.homeworld_id} />
         ))}
       </div>
       <Outlet />
@@ -55,212 +23,75 @@ export function Planets() {
   );
 }
 
-/** The planet route adds only the stepper over it: the grid shows it expanded. */
-export function Planet() {
-  const { planetId } = useParams({ from: "/game/planets/$planetId" });
-  const { mission } = useSearch({ from: "/game/planets/$planetId" });
-  const navigate = useNavigate();
-  return (
-    <>
-      <Outlet />
-      {mission && (
-        <MissionModal
-          planet={planetId}
-          onClose={() => void navigate({ to: "/planets/$planetId", params: { planetId } })}
-        />
-      )}
-    </>
-  );
-}
-
-function PlanetCard({
-  id,
-  homeworld,
-  me,
-  open,
-}: {
-  id: number;
-  homeworld: number;
-  me: string;
-  open: boolean;
-}) {
+function PlanetCard({ id, homeworld }: { id: number; homeworld: number }) {
   const planet = usePlanet(id);
-  const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (open) ref.current?.scrollIntoView({ block: "nearest" });
-  }, [open]);
   return (
-    <article ref={ref} className={open ? "col-span-full" : ""} aria-label={planetName(id, homeworld)}>
+    <article aria-label={planetName(id, homeworld)}>
       <Read query={planet} fill={{ planet: id }} loading={`Loading planet ${id.toString()}`}>
-        {(view) => (
-          <Holding view={view} receivedAt={planet.dataUpdatedAt} homeworld={homeworld} me={me} open={open} />
-        )}
+        {(view) => <Summary view={view} receivedAt={planet.dataUpdatedAt} homeworld={homeworld} />}
       </Read>
     </article>
   );
 }
 
-function Holding({
+/** A planet at a glance: stocks, slots, what's running and what finishes first. */
+function Summary({
   view,
   receivedAt,
   homeworld,
-  me,
-  open,
 }: {
   view: PlanetView;
   receivedAt: number;
   homeworld: number;
-  me: string;
-  open: boolean;
 }) {
   const { ran } = useLive(view, receivedAt);
-  const phone = useLayout() === "phone";
-  // A lone planet always opens expanded, so collapsing it would lead straight back here.
-  const lone = useMe().data?.planet_ids.length === 1;
-  const mine = view.owner === me;
-  const building = view.ship_builds.filter((s) => s.state === "active").length;
-  const waiting = view.ship_builds.length - building;
-  const title = (
-    <h2 className="flex items-baseline gap-2 text-lg">
-      {planetName(view.planet_id, homeworld)}
-      {!mine && <span className="text-sm text-muted">{owner(view.owner, me)}</span>}
-      <span className="ml-auto text-sm text-muted">
-        {view.buildings.length}/{view.slots} slots
-      </span>
-    </h2>
-  );
-  return (
-    <Panel className={open ? "border-accent" : "hover:border-accent"}>
-      {open ? (
-        <div className="flex items-baseline gap-3">
-          <div className="flex-1">{title}</div>
-          {!phone && !lone && (
-            <Link to="/planets" className="text-sm text-accent">
-              Collapse
-            </Link>
-          )}
-        </div>
-      ) : (
-        <Link to="/planets/$planetId" params={{ planetId: view.planet_id }} className="block">
-          {title}
-        </Link>
-      )}
-      <Meter name="Iron Ore" stock={view.stocks.iron_ore} ran={ran} tone="ore" />
-      <Meter name="Iron Ingots" stock={view.stocks.iron_ingot} ran={ran} tone="ingot" />
-      {view.ship_builds.length > 0 && (
-        <p className="text-xs text-muted">
-          Shipyard: {building} building · {waiting} waiting
-        </p>
-      )}
-      <Arrivals planetId={view.planet_id} />
-      {open && <Slots view={view} ran={ran} mine={mine} />}
-      {open && mine && <Roster view={view} me={me} />}
-    </Panel>
-  );
-}
-
-function Arrivals({ planetId }: { planetId: number }) {
-  const fleets = useFleets();
   const now = useNow();
-  if (!fleets.data) return null;
-  const view = fleets.data;
-  return view.fleets.map(
-    (f) =>
-      f.state === "in_transit" &&
-      f.target_planet_id === planetId && (
-        <p key={f.fleet_id} className="text-xs text-muted">
-          Fleet {f.fleet_id} arriving in{" "}
-          {duration(dueIn(view.as_of, Date.parse(f.arrives_at), fleets.dataUpdatedAt, now))}
-        </p>
-      ),
+  const name = planetName(view.planet_id, homeworld);
+  const constructing = view.buildings.filter((b) => b.state === "under_construction").length;
+  const demolishing = view.buildings.filter((b) => b.state === "demolishing").length;
+  const running = [
+    constructing > 0 && `${constructing.toString()} constructing`,
+    demolishing > 0 && `${demolishing.toString()} demolishing`,
+    view.ship_builds.length > 0 && `${view.ship_builds.length.toString()} ship builds`,
+  ].filter((part) => part !== false);
+  const soonest = next([{ view, receivedAt }], null);
+  const fleets = useFleets();
+  const arriving = (fleets.data?.fleets ?? []).flatMap((f) =>
+    f.state === "in_transit" && f.target_planet_id === view.planet_id && fleets.data
+      ? [
+          {
+            id: f.fleet_id,
+            text: `Fleet ${f.fleet_id.toString()} arriving in ${duration(dueIn(fleets.data.as_of, Date.parse(f.arrives_at), fleets.dataUpdatedAt, now))}`,
+          },
+        ]
+      : [],
   );
-}
-
-const tile = "relative grid h-19 w-19 place-items-center border bg-field text-2xl";
-
-/**
- * The buildings in id order, then one "+" per free slot: slots are interchangeable. Only the
- * player's own free slots open the build picker.
- */
-function Slots({ view, ran, mine }: { view: PlanetView; ran: number; mine: boolean }) {
-  const { buildingId: selected } = useParams({ strict: false });
-  const buildings = [...view.buildings].sort((a, b) => a.id - b.id);
-  const free = Math.max(0, view.slots - buildings.length);
+  const slots = `${view.buildings.length.toString()}/${view.slots.toString()} slots`;
+  const finishing = soonest && `${soonest.label} in ${duration(soonest.at - now)}`;
   return (
-    <ul className="my-3 grid grid-cols-[repeat(auto-fill,4.75rem)] gap-2.5" aria-label="Building slots">
-      {buildings.map((b) => {
-        const status = statusOf(b, view.ship_builds);
-        const done =
-          b.state === "under_construction"
-            ? ` ${percent(grown(b.delivered_g, b.rate_g_per_h, ran, b.cost_g), b.cost_g).toString()}%`
-            : "";
-        const current = selected === b.id;
-        return (
-          <li key={b.id}>
-            <Link
-              to="/planets/$planetId/buildings/$buildingId"
-              params={{ planetId: view.planet_id, buildingId: b.id }}
-              aria-label={`${buildingName(b.type)}, ${status}${done}`}
-              aria-current={current ? "true" : undefined}
-              className={`${tile} border-border ${current ? "border-accent ring-2 ring-accent/40" : "hover:border-accent"}`}
-            >
-              {buildingIcons[b.type]}
-              <span className="absolute inset-x-0 bottom-1 text-center text-[10px]">
-                <StatusWord status={status} />
-              </span>
-            </Link>
-          </li>
-        );
-      })}
-      {Array.from({ length: free }, (_, i) => (
-        <li key={`free-${i.toString()}`}>
-          {mine ? (
-            <Link
-              to="/planets/$planetId/build"
-              params={{ planetId: view.planet_id }}
-              aria-label="Free slot"
-              className={`${tile} border-dashed border-border text-muted hover:border-accent`}
-            >
-              <EmptySlotIcon />
-            </Link>
-          ) : (
-            <span
-              role="img"
-              aria-label="Free slot"
-              className={`${tile} border-dashed border-separator text-muted`}
-            >
-              <EmptySlotIcon />
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Roster({ view, me }: { view: PlanetView; me: string }) {
-  const counts = shipCounts(view.roster);
-  const ours = view.roster.some((s) => s.owner === me);
-  return (
-    <div className="flex flex-wrap items-center gap-3 border-t border-separator pt-3">
-      <span className="display text-muted">Ships here</span>
-      {counts.length === 0 && <span className="text-muted">{empties.roster}</span>}
-      {counts.map(([type, n]) => (
-        <span key={type} className="inline-flex items-center gap-1" title={ship(type)}>
-          {shipIcons[type]}
-          {ships(n, type)}
-        </span>
-      ))}
-      {ours && (
-        <Link
-          to="/planets/$planetId"
-          params={{ planetId: view.planet_id }}
-          search={{ mission: true }}
-          className={`ml-auto ${buttonVariants({ variant: "primary", size: "sm" })}`}
-        >
-          New mission
-        </Link>
-      )}
-    </div>
+    <Link
+      to="/planets/$planetId"
+      params={{ planetId: view.planet_id }}
+      aria-label={[name, slots, ...running, finishing, ...arriving.map((a) => a.text)]
+        .filter(Boolean)
+        .join(", ")}
+      className="block"
+    >
+      <Panel className="hover:border-accent">
+        <h2 className="flex items-baseline gap-2 text-lg">
+          {name}
+          <span className="ml-auto text-sm text-muted">{slots}</span>
+        </h2>
+        <Meter name="Iron Ore" stock={view.stocks.iron_ore} ran={ran} tone="ore" />
+        <Meter name="Iron Ingots" stock={view.stocks.iron_ingot} ran={ran} tone="ingot" />
+        {running.length > 0 && <p className="text-xs text-muted">{running.join(" · ")}</p>}
+        {finishing && <p className="text-xs text-muted">Next: {finishing}</p>}
+        {arriving.map((a) => (
+          <p key={a.id} className="text-xs text-muted">
+            {a.text}
+          </p>
+        ))}
+      </Panel>
+    </Link>
   );
 }

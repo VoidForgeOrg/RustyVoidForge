@@ -221,7 +221,7 @@ test("a failed refetch leaves the last good view standing, with the failure abov
       /Transmission failed.*rate_limited/,
     );
   }
-  expect(within(card).getByRole("list", { name: "Building slots", hidden: true })).toBeInTheDocument();
+  expect(within(card).getByRole("meter", { name: "Iron Ore", hidden: true })).toBeInTheDocument();
   expect(within(drawer).getByRole("button", { name: "Queue Colony Ship" })).toBeInTheDocument();
 });
 
