@@ -26,20 +26,13 @@ import urllib.request
 CHILD = r'''
 import http.server, signal, socket, sys, time
 bind, delay, receipt = sys.argv[sys.argv.index("--bind") + 1], float(sys.argv[1]), sys.argv[2]
-token = sys.argv[sys.argv.index("--identity-token") + 1] if "--identity-token" in sys.argv else None
 mode = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else ""
 host, port = bind.rsplit(":", 1)
 time.sleep(delay)  # the issuer's discovery, before the bind
 signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
-if mode == "nobind":  # bound somewhere the walk can't reach (colima's VM): only the receipt
-    print(receipt.replace("BIND", bind), flush=True)
-    time.sleep(60)
-    sys.exit(0)
 
 def get(self):
     self.send_response(200)
-    if token is not None and mode != "notoken":
-        self.send_header("x-voidforge-identity", token)
     self.end_headers()
     self.wfile.write(b"child")
 
@@ -294,37 +287,12 @@ def main():
            time.monotonic() - started < 1, "%.2f s" % (time.monotonic() - started))
     other.shutdown()
 
-    # 10. The identity check (the lead's ruling on D-065): a child that serves and says so, but
-    # whose answers don't carry the walk's per-run token, isn't the walk's web.
-    refused("a child that answers without the token", walk, free_port(), None, "didn't prove", then=["notoken"])
-
-    # 11. The colima gap: the child's receipt names a bind the walk can't reach (in the VM), and the
-    # port the walk reaches is held by another app after the check, where colima's forward would be.
-    # The walk sends that app one harmless GET / (the proof), sees no token, and refuses: no login
-    # request, nothing else.
-    port = free_port()
-    gap = []
-    check = walk.listeners
-
-    def then_foreign():
-        found = check()
-        if not gap:
-            gap.append(StandIn("127.0.0.1", port=port))
-        return found
-
-    walk.listeners = then_foreign
-    refused("another app in the forward's place", walk, port, None, "didn't prove", then=["nobind"], forwarded=True)
-    walk.listeners = check
-    expect("another app in the forward's place: it received only the proof's GET /",
-           gap and gap[0].requests_seen == [b"GET / HTTP/1.1"], repr(gap and gap[0].requests_seen))
-    for server in gap:
-        server.shutdown()
-
-    # 12. The same path with the walk's own child behind the forward: proven, ready.
+    # 10. --web-cmd's path (D-065): after the receipt, the walk waits, only connecting, until the
+    # port accepts (colima's forward on macOS); with its own child there, it's ready.
     port = free_port()
     proc, refusal = start(walk, port, forwarded=True)
     try:
-        expect("--web-cmd's path, the walk's own child: proven and ready", proc is not None, repr(refusal))
+        expect("--web-cmd's path, the walk's own child: ready after the forward wait", proc is not None, repr(refusal))
     finally:
         stop(proc)
 

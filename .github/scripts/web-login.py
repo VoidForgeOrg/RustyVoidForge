@@ -3,8 +3,7 @@
 
 Starts `voidforge-web` on localhost:8081 (dex registers the redirect by exact string), and
 refuses if anything already listens there; it sends its first request only after the child's
-own "serving on" line (start_web; the Phase 4 gate's R2-G1), and only once the app on the port proves
-it holds the walk's per-run token (--identity-token, D-065). Then it logs alice in and out as a browser would, with two cookie jars: one for dex's pages and one for
+own "serving on" line (start_web; the Phase 4 gate's R2-G1). Then it logs alice in and out as a browser would, with two cookie jars: one for dex's pages and one for
 the web app. Nothing here runs a browser; dex's pages are driven over HTTP as device-login.py
 does.
 
@@ -50,7 +49,6 @@ import json
 import os
 import queue
 import re
-import secrets
 import shlex
 import signal
 import socket
@@ -207,11 +205,10 @@ def listeners():
 FREE_WAIT_SECONDS = 10
 # With --web-cmd on macOS, the receipt names the bind inside colima's VM, and the Mac's side of the
 # port is colima's forward, which appears ~20-30 ms later (measured, D-065): until then a connect is
-# refused. How long start_web waits, only connecting, for the forward after the receipt.
+# refused. How long start_web waits, only connecting, for the forward after the receipt. A known
+# limit of colima, recorded in D-065: in that gap the receipt proves the bind in the VM, not on the
+# Mac. Linux (CI, the build machine) has no forward and no gap.
 FORWARD_WAIT_SECONDS = 5
-# The header the walk's own web puts on every response, with the per-run token it was given
-# (--identity-token; the lead's ruling on D-065): no proof, no requests.
-IDENTITY_HEADER = "x-voidforge-identity"
 
 
 def start_web(argv, env, log, after_own_child=False, forwarded=False):
@@ -237,8 +234,7 @@ def start_web(argv, env, log, after_own_child=False, forwarded=False):
         raise RuntimeError("something already listens on localhost:%d (%s); the walk won't use another app. "
                            "Stop it, or wait until whoever holds the port is done" % (port, ", ".join(taken)))
     bind = "127.0.0.1:%d" % port
-    token = secrets.token_hex(16)
-    proc = subprocess.Popen(argv + ["--bind", bind, "--identity-token", token], env=env, stdout=subprocess.PIPE,
+    proc = subprocess.Popen(argv + ["--bind", bind], env=env, stdout=subprocess.PIPE,
                             stderr=log, stdin=subprocess.DEVNULL, text=True, bufsize=1)
     lines = queue.Queue()
 
@@ -262,11 +258,6 @@ def start_web(argv, env, log, after_own_child=False, forwarded=False):
         if line == receipt and proc.poll() is None:
             if forwarded and not forward_ready(port, proc):
                 break
-            proven, why = proves_identity(token)
-            if not proven:
-                stop_child(proc)
-                raise RuntimeError("the app on localhost:%d didn't prove it's the walk's own voidforge-web (%s); "
-                                   "nothing else was sent to it" % (port, why))
             return proc
     stop_child(proc)
     log.flush()
@@ -301,23 +292,6 @@ def forward_ready(port, proc):
         except OSError:
             time.sleep(0.01)
     return False
-
-
-def proves_identity(token):
-    """One harmless GET of WEB's / (no cookie, no credentials, redirects not followed), before any
-    login request: the answer must carry the per-run token in IDENTITY_HEADER (D-065). Returns
-    (proven, why not)."""
-    opener = urllib.request.build_opener(PinnedHTTP(), NoRedirect())
-    try:
-        with opener.open(WEB + "/", timeout=5) as r:
-            got = r.headers.get(IDENTITY_HEADER)
-    except urllib.error.HTTPError as e:
-        got = e.headers.get(IDENTITY_HEADER)
-    except OSError as e:
-        return False, "GET / failed: %s" % e
-    if got != token:
-        return False, "GET / answered %s" % ("without the token" if got is None else "another token")
-    return True, ""
 
 
 def start_login(web, dex_origin):

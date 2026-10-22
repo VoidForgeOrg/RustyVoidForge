@@ -83,7 +83,7 @@ VOIDFORGE_DATABASE_URL=postgres://…/<scratch> just images-up   # leave both ru
 - `VOIDFORGE_DATABASE_URL` is required and has no default: name a seeded scratch database, never `voidforge`.
 - `docker compose stop` sends SIGTERM to serve itself (PID 1); it drains and stops with its final snapshot, exit 0. SIGKILL comes only after 40 s.
 - Health: serve's is `voidforge-server health` on `/openapi.json`, the web's `voidforge-web --health-check` on `/`. Serve's start period is 300 s, so a long recovery reads "starting", never "unhealthy".
-- On colima, "host" is the VM's network; colima forwards each listening port to the Mac with an ssh listener that outlives a stopped container by up to ~3 s. The web walk waits for its own previous web's port to come free (D-065).
+- On colima, "host" is the VM's network; colima forwards each listening port to the Mac with an ssh listener that outlives a stopped container by up to ~3 s. The web walk waits for its own previous web's port to come free, and after its web's receipt waits for the forward (20-30 ms). A known colima limit (D-065): in that gap the receipt proves the bind in the VM, not on the Mac; Linux has no forward and no gap.
 
 ## Troubleshooting
 

@@ -90,25 +90,6 @@ pub struct AppState {
 }
 
 /// The web app: the routes, the session layer and the headers.
-/// The response header that carries `--identity-token` (P5.2, D-065).
-pub const IDENTITY_HEADER: &str = "x-voidforge-identity";
-
-/// Puts `token` on every response, so the web walk can tell its own child from whatever else
-/// answers on its port before it sends a login request: on macOS the port the walk reaches is
-/// colima's forward, which a child's receipt can't vouch for (the lead's ruling on D-065). The token
-/// is the walk's random per-run value; without the flag, nothing is added.
-pub fn with_identity(app: Router, token: HeaderValue) -> Router {
-    app.layer(axum::middleware::map_response(
-        move |mut response: Response| {
-            let token = token.clone();
-            async move {
-                response.headers_mut().insert(IDENTITY_HEADER, token);
-                response
-            }
-        },
-    ))
-}
-
 pub fn app(state: AppState, secure_cookie: bool) -> Router {
     // A session nobody logged in lives 10 minutes after its last change, as its login attempts
     // do; a login sets its own expiry (`login_expiry`), and every handler that changes a

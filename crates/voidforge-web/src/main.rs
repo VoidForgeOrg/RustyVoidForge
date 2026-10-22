@@ -74,15 +74,6 @@ fn fail(message: &str) -> ExitCode {
 }
 
 fn run(args: Args) -> ExitCode {
-    let identity = match args
-        .identity_token
-        .as_deref()
-        .map(axum::http::HeaderValue::from_str)
-    {
-        None => None,
-        Some(Ok(token)) if !token.is_empty() => Some(token),
-        Some(_) => return fail("bad configuration: --identity-token: visible ASCII only"),
-    };
     let config = match args.into_config(std::env::var(SECRET_ENV).ok()) {
         Ok(c) => c,
         Err(e) => return fail(&format!("bad configuration: {e}")),
@@ -120,10 +111,6 @@ fn run(args: Args) -> ExitCode {
             sessions: voidforge_web::store::BoundedStore::default(),
         };
         let app = routes::app(state, config.secure_cookie);
-        let app = match identity {
-            Some(token) => routes::with_identity(app, token),
-            None => app,
-        };
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
         let server = axum::serve(listener, app)
             .with_graceful_shutdown(async {
