@@ -24,6 +24,7 @@ export const empties = {
 export const failures = {
   read: "Transmission failed",
   order: "Order refused",
+  unconfirmed: "Order unconfirmed",
   login: "Access denied",
   uncharted: "Uncharted coordinates",
   unchartedCopy: "No such planet or building is on record. Check the number and try again.",

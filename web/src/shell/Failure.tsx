@@ -53,7 +53,9 @@ export function Failure({
   const message = failure(error, context, fill);
   return (
     <Notice
-      heading={context === "page" ? failures.read : failures.order}
+      heading={
+        context === "page" ? failures.read : message.kind === "retry" ? failures.unconfirmed : failures.order
+      }
       copy={message.copy}
       code={message.code}
       strip={strip}

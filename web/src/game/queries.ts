@@ -37,7 +37,8 @@ export const useFleets = () =>
 
 /**
  * An arrival changes what the fleets view doesn't hold: a colony joins the player's planets and
- * score, and the planet's own view changes. The player's `valid_until` doesn't foresee it.
+ * score, and the planet's own view changes. The player's `valid_until` doesn't foresee it. A
+ * colonizing fleet whose only ship is consumed vanishes rather than turning stationed.
  */
 export function useArrivals() {
   const client = useQueryClient();
@@ -47,10 +48,11 @@ export function useArrivals() {
     const was = before.current;
     before.current = fleets;
     if (!was || !fleets) return;
-    const flying = new Set(was.fleets.filter((f) => f.state === "in_transit").map((f) => f.fleet_id));
-    const arrived = fleets.fleets.flatMap((f) =>
-      f.state === "stationed" && flying.has(f.fleet_id) ? [f.at_planet_id] : [],
-    );
+    const arrived = was.fleets.flatMap((f) => {
+      if (f.state !== "in_transit") return [];
+      const now = fleets.fleets.find((n) => n.fleet_id === f.fleet_id);
+      return now === undefined || now.state === "stationed" ? [f.target_planet_id] : [];
+    });
     if (arrived.length === 0) return;
     void client.invalidateQueries({ queryKey: ["get", "/players/me"] });
     for (const id of arrived) void client.invalidateQueries({ queryKey: planetQuery(id).queryKey });

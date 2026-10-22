@@ -32,8 +32,12 @@ afterEach(() => {
   globalThis.fetch = fetchMock;
 });
 
-test("a fleet's arrival refetches the player, whose valid_until doesn't foresee a new colony", async () => {
-  const [flying] = fleets.fleets;
+const [flying] = fleets.fleets;
+
+test.each([
+  ["stationed", [{ ...flying, state: "stationed", at_planet_id: flying?.target_planet_id }]],
+  ["gone, its only ship consumed by the colony", []],
+])("a fleet's arrival, %s, refetches the player, whose valid_until doesn't foresee it", async (_, after) => {
   const meReads = () =>
     fetchMock.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === "/players/me").length;
   let reads = 0;
@@ -47,11 +51,7 @@ test("a fleet's arrival refetches the player, whose valid_until doesn't foresee 
       return Response.json(
         reads === 1
           ? { ...fleets, valid_until: new Date(Date.parse(fleets.as_of) + 1).toISOString() }
-          : {
-              as_of: fleets.as_of,
-              valid_until: null,
-              fleets: [{ ...flying, state: "stationed", at_planet_id: flying?.target_planet_id }],
-            },
+          : { as_of: fleets.as_of, valid_until: null, fleets: after },
       );
     },
   });
