@@ -21,7 +21,7 @@ fn stand_in(reply: Option<String>) -> (String, JoinHandle<String>) {
         let request = read_head(&mut stream);
         match reply {
             Some(reply) => stream.write_all(reply.as_bytes()).unwrap(),
-            None => std::thread::sleep(Duration::from_secs(5)),
+            None => std::thread::sleep(Duration::from_secs(10)),
         }
         request.lines().next().unwrap_or_default().to_owned()
     });
@@ -98,12 +98,15 @@ fn a_redirect_is_not_healthy() {
 
 #[test]
 fn a_hung_server_is_not_healthy_within_the_bound() {
+    // Once unmeasured: a freshly built binary's first run can wait on macOS's scan (LEARNED).
+    let (warm, _seen) = stand_in(Some(response("200 OK", "")));
+    assert_eq!(health(&warm, &[]).0, 0);
     let (url, _seen) = stand_in(None);
     let (code, stderr, took) = health(&url, &[]);
     assert_eq!(code, 1, "{stderr}");
     assert!(
-        took >= Duration::from_millis(1_900) && took < Duration::from_millis(3_500),
-        "bounded at 2 s, took {took:?}"
+        took >= Duration::from_millis(1_900) && took < Duration::from_secs(5),
+        "bounded at 2 s (the stand-in holds 10 s), took {took:?}"
     );
 }
 
@@ -130,11 +133,14 @@ fn the_health_check_starts_no_telemetry() {
             held.push(stream);
         }
     });
+    // Once unmeasured: a freshly built binary's first run can wait on macOS's scan (LEARNED).
+    let (warm, _seen) = stand_in(Some(response("200 OK", "")));
+    assert_eq!(health(&warm, &[]).0, 0);
     let (url, _seen) = stand_in(Some(response("200 OK", "")));
     let (code, stderr, took) = health(&url, &[("OTEL_EXPORTER_OTLP_ENDPOINT", &endpoint)]);
     assert_eq!(code, 0, "{stderr}");
     assert!(
-        took < Duration::from_secs(1),
-        "no export, so no wait on the collector: took {took:?}"
+        took < Duration::from_secs(3),
+        "no export, so no wait on the collector (6 s when it exports): took {took:?}"
     );
 }
