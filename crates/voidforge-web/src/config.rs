@@ -35,6 +35,11 @@ pub struct Args {
     /// telemetry.
     #[arg(long, hide = true, value_name = "URL")]
     pub health_check: Option<String>,
+    /// For the web walk (P5.2, D-065): put this value on every response, in the
+    /// `x-voidforge-identity` header, so the walk can prove the app on its port is its own child.
+    /// Visible ASCII only.
+    #[arg(long, hide = true, value_name = "TOKEN")]
+    pub identity_token: Option<String>,
     /// The OIDC issuer; the web app reads its endpoints from the issuer's discovery document.
     #[arg(long, env = "VOIDFORGE_WEB_ISSUER", default_value = DEFAULT_ISSUER)]
     pub issuer: String,

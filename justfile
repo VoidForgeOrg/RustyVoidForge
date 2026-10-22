@@ -41,6 +41,7 @@ lint:
     .github/scripts/check-dex-parity.sh
     .github/scripts/test-check-dex-parity.sh
     python3 .github/scripts/test-web-login-ready.py
+    python3 .github/scripts/check-images.py --static
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     python3 tests/guardrails/check_no_floats.py
@@ -133,6 +134,12 @@ images-up:
 images-down:
     VOIDFORGE_DATABASE_URL=unused VOIDFORGE_WEB_CLIENT_SECRET=unused \
         docker compose -f deploy/compose.images.yaml down
+
+# Both images under compose, health-gated, then stopped cleanly and taken down (D-065, the
+# advisor's A1), on a seeded scratch database: the CI images job's step. Needs `just images` and a
+# dex: E2E_ISSUER=http://localhost:5563/dex for a throwaway one. The web binds :8081.
+images-compose:
+    .github/scripts/images-compose.sh
 
 # `just smoke` against the images (D-065): seed from the server image, serve under compose, the
 # web walk against the web image, then `docker compose stop` must end in exit 0. The same needs

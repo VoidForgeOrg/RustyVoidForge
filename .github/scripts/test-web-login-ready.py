@@ -26,18 +26,31 @@ import urllib.request
 CHILD = r'''
 import http.server, signal, socket, sys, time
 bind, delay, receipt = sys.argv[sys.argv.index("--bind") + 1], float(sys.argv[1]), sys.argv[2]
+token = sys.argv[sys.argv.index("--identity-token") + 1] if "--identity-token" in sys.argv else None
+mode = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else ""
 host, port = bind.rsplit(":", 1)
 time.sleep(delay)  # the issuer's discovery, before the bind
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+if mode == "nobind":  # bound somewhere the walk can't reach (colima's VM): only the receipt
+    print(receipt.replace("BIND", bind), flush=True)
+    time.sleep(60)
+    sys.exit(0)
+
+def get(self):
+    self.send_response(200)
+    if token is not None and mode != "notoken":
+        self.send_header("x-voidforge-identity", token)
+    self.end_headers()
+    self.wfile.write(b"child")
+
 try:
     server = http.server.HTTPServer((host, int(port)), type("H", (http.server.BaseHTTPRequestHandler,), {
-        "do_GET": lambda self: (self.send_response(200), self.end_headers(), self.wfile.write(b"child")),
-        "log_message": lambda self, *a: None}))
+        "do_GET": get, "log_message": lambda self, *a: None}))
 except OSError as e:
     print("voidforge-web: listening on %s: %s" % (bind, e), file=sys.stderr)
     sys.exit(1)
-signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
 print(receipt.replace("BIND", bind), flush=True)
-if sys.argv[3:4] == ["exit"]:
+if mode == "exit":
     sys.exit(0)  # serving, then gone at once
 server.serve_forever()
 '''
@@ -102,13 +115,13 @@ with open(child, "w") as f:
 RECEIPT = "voidforge-web: serving on http://BIND"
 
 
-def start(walk, port, delay=0.5, receipt=RECEIPT, then=(), after_own_child=False):
+def start(walk, port, delay=0.5, receipt=RECEIPT, then=(), after_own_child=False, forwarded=False):
     """start_web with the stand-in child; returns (the process or None, the refusal or None)."""
     walk.WEB = "http://localhost:%d" % port
     log = open(os.path.join(work, "web-%d.log" % port), "w")
     try:
         argv = [sys.executable, child, str(delay), receipt, *then]
-        return walk.start_web(argv, dict(os.environ), log, after_own_child=after_own_child), None
+        return walk.start_web(argv, dict(os.environ), log, after_own_child=after_own_child, forwarded=forwarded), None
     except RuntimeError as e:
         return None, str(e)
 
@@ -277,6 +290,39 @@ def main():
     expect("the first start, a listener there: refused at once, without the wait",
            time.monotonic() - started < 1, "%.2f s" % (time.monotonic() - started))
     other.shutdown()
+
+    # 10. The identity check (the lead's ruling on D-065): a child that serves and says so, but
+    # whose answers don't carry the walk's per-run token, isn't the walk's web.
+    refused("a child that answers without the token", walk, free_port(), None, "didn't prove", then=["notoken"])
+
+    # 11. The colima gap: the child's receipt names a bind the walk can't reach (in the VM), and the
+    # port the walk reaches is held by another app after the check, where colima's forward would be.
+    # The walk sends that app one harmless GET / (the proof), sees no token, and refuses: no login
+    # request, nothing else.
+    port = free_port()
+    gap = []
+    check = walk.listeners
+
+    def then_foreign():
+        found = check()
+        gap.append(StandIn("127.0.0.1", port=port))
+        return found
+
+    walk.listeners = then_foreign
+    refused("another app in the forward's place", walk, port, None, "didn't prove", then=["nobind"], forwarded=True)
+    walk.listeners = check
+    expect("another app in the forward's place: it received only the proof's GET /",
+           gap and gap[0].requests_seen == [b"GET / HTTP/1.1"], repr(gap and gap[0].requests_seen))
+    for server in gap:
+        server.shutdown()
+
+    # 12. The same path with the walk's own child behind the forward: proven, ready.
+    port = free_port()
+    proc, refusal = start(walk, port, forwarded=True)
+    try:
+        expect("--web-cmd's path, the walk's own child: proven and ready", proc is not None, repr(refusal))
+    finally:
+        stop(proc)
 
     if failures:
         print("error: %d web-login start case(s) failed" % failures, file=sys.stderr)

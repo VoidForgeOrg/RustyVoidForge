@@ -4,7 +4,8 @@
   --static  (the lint job) dockerfiles/Dockerfile pins every base by digest, its builder is the
             toolchain rust-toolchain.toml names, and deploy/compose.images.yaml is a project of its
             own: named voidforge-images, none of the owner's services (postgres, dex, otel-lgtm),
-            no volumes, no published ports, and VOIDFORGE_DATABASE_URL without a default.
+            no volumes, no published ports, VOIDFORGE_DATABASE_URL without a default, and a server
+            stop grace period that covers a clean stop (40 s).
   --built   (the images job, after `just images`) voidforge-server:local and voidforge-web:local
             run as 65532:65532, are at most MAX_MB each, and hold no shell, no cargo and no
             sources; prints each one's size and user.
@@ -69,6 +70,11 @@ def static(dockerfile=DOCKERFILE, compose=COMPOSE, toolchain="rust-toolchain.tom
         check(not service.get("ports"), "%s publishes no ports" % name)
         check(service.get("network_mode") == "host", "%s uses host networking (the issuer's URL)" % name)
         check(not service.get("volumes"), "%s mounts nothing" % name)
+    # serve's clean stop is bounded by its drain (5 s by default), the 10 s join and the 5 s check
+    # (D-050): SIGKILL must never come before them, with room to spare.
+    grace = services.get("server", {}).get("stop_grace_period", "")
+    seconds = sum(int(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"(\d+)([hms])", grace))
+    check(seconds >= 40, "the server's stop_grace_period covers a clean stop: at least 40 s (%r)" % grace)
     env.pop("VOIDFORGE_DATABASE_URL")
     out = subprocess.run(["docker", "compose", "-f", compose, "config"], env=env, capture_output=True, text=True)
     check(out.returncode != 0 and "VOIDFORGE_DATABASE_URL" in out.stderr,
@@ -76,7 +82,10 @@ def static(dockerfile=DOCKERFILE, compose=COMPOSE, toolchain="rust-toolchain.tom
 
 
 def docker(*args):
-    return subprocess.run(["docker", *args], capture_output=True, text=True)
+    """Runs docker; stdout may be a tar stream (`docker cp ... -`), so it's decoded leniently."""
+    out = subprocess.run(["docker", *args], capture_output=True)
+    return subprocess.CompletedProcess(out.args, out.returncode, out.stdout.decode("utf-8", "replace"),
+                                       out.stderr.decode("utf-8", "replace"))
 
 
 def built():

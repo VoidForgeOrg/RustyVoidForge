@@ -107,10 +107,13 @@ done
 
 # 2. The binaries, checked against .sqlx/ (D-034), never against a database; with --images, the
 # images instead of the server and the web app (the bots still build, for the whole scenario).
-target_dir=$(cargo metadata -q --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-server="$target_dir/debug/voidforge-server"
-bots="$target_dir/debug/voidforge-bots"
-web="$target_dir/debug/voidforge-web"
+# `--images --smoke` builds nothing with cargo, so it needs no toolchain (the CI images job).
+if [ "$images" = 0 ] || [ "$smoke" = 0 ]; then
+    target_dir=$(cargo metadata -q --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+    server="$target_dir/debug/voidforge-server"
+    bots="$target_dir/debug/voidforge-bots"
+    web="$target_dir/debug/voidforge-web"
+fi
 if [ "$images" = 1 ]; then
     for image in voidforge-server:local voidforge-web:local; do
         if ! docker image inspect "$image" > /dev/null 2>&1; then
@@ -200,7 +203,18 @@ for _ in $(seq 1 300); do
     serve_alive || break
     sleep 0.2
 done
-if [ -z "$addr" ] || ! curl -sf -o /dev/null "http://$addr/openapi.json"; then
+# With --images on macOS the ready line names the bind in colima's VM; the Mac's side of the port is
+# colima's forward, ~20-30 ms later (D-065), so the first GET may retry for up to 5 s.
+openapi_ok() {
+    local tries=1
+    [ "$images" = 1 ] && tries=250
+    for _ in $(seq 1 "$tries"); do
+        curl -sf -o /dev/null "http://$addr/openapi.json" && return 0
+        sleep 0.02
+    done
+    return 1
+}
+if [ -z "$addr" ] || ! openapi_ok; then
     say "serve isn't ready; its log:"
     cat "$log_dir/serve.log" >&2
     exit 3

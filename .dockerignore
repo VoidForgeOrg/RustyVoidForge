@@ -1,6 +1,13 @@
-# The build context for dockerfiles/Dockerfile: sources only. target/ alone would be gigabytes.
+# The build context for dockerfiles/Dockerfile: the workspace's sources only, so a change to a script,
+# a document or the compose files never invalidates the build's layers. target/ alone would be
+# gigabytes.
 target/
-.git/
 **/target/
+.git/
+.github/
+deploy/
+dockerfiles/
 docs/
 tests/
+*.md
+!crates/**/*.md
