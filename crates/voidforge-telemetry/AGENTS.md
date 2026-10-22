@@ -17,7 +17,6 @@ Library, delivered in P0.6 ([D-016](../../docs/decision-log.md#d-016-telemetry-b
 - `OTEL_EXPORTER_OTLP_ENDPOINT` decides export. Set (locally `http://localhost:4318`), spans go to `<endpoint>/v1/traces` and metrics to `<endpoint>/v1/metrics` every 10 s. Unset, the binary still runs and logs to stderr, instruments are no-ops, and nothing waits on a collector.
 - Recording never waits on export: spans queue in a bounded batch, and both exporters run on their own threads.
 - An incoming request joins a caller's trace through `traceparent` only: never `tracestate` or baggage from outside (D-064 T3).
-- `init_quieting` drops only the events its `Quiet` list names (the web: tower-sessions' "store is full" ERROR, which it reports itself); every other event at INFO and above passes.
 - `Telemetry::shutdown` flushes the spans, always stops the exporters (even after a failed flush), and reports what it could not deliver as an error. Spans and metrics shut down side by side, so a collector that doesn't answer costs about one 5-second export timeout. Dropping the guard does the same and prints a failure to stderr. Every binary reports that error on stderr without changing its exit code; only `telemetry-check` fails on it (D-064 T2, widened by T6).
 - The core stays free of instrumentation, and the shell records the step statistics the core returns ([Operations and scaling](../../docs/Voidforge%20Architectural%20Design.md#operations-and-scaling)).
 
