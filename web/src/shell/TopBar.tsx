@@ -27,10 +27,10 @@ export function TopBar({
   menu: ReactNode;
 }) {
   const now = useNow();
-  const planetReads = usePlanets(homeworldFirst(me.planet_ids, me.homeworld_id));
   const fleets = useFleets();
   const board = useLeaderboard();
   const ids = homeworldFirst(me.planet_ids, me.homeworld_id);
+  const planetReads = usePlanets(ids);
   const planets: Received<S["PlanetView"]>[] = planetReads.flatMap((q) =>
     q.data ? [{ view: q.data, receivedAt: q.dataUpdatedAt }] : [],
   );
