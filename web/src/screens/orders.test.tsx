@@ -288,8 +288,20 @@ test("a refusal refetches the views it names, so a fleet gone elsewhere stops of
   const disband = await screen.findByRole("button", { name: "Disband" });
   const before = gets("/players/me/fleets");
   fireEvent.click(disband);
-  expect(await screen.findByText(/That fleet no longer exists/)).toBeInTheDocument();
+  expect((await screen.findAllByText(/That fleet no longer exists/)).length).toBeGreaterThan(0);
   await waitFor(() => {
     expect(gets("/players/me/fleets")).toBeGreaterThan(before);
   });
+});
+
+test("a refusal is announced in a toast, so it outlives a form the refetch removes", async () => {
+  answer({ "/commands": orders(() => refused(409, "shipyard_not_operational")) });
+  renderAt("/planets/1/buildings/15");
+  const drawer = await screen.findByRole("dialog", { name: "#1 Home · Shipyard" });
+  fireEvent.click(await within(drawer).findByRole("button", { name: "Queue Colony Ship" }));
+  expect(
+    await screen.findByText(
+      "That Shipyard isn't working: it's under construction or being demolished. (shipyard_not_operational)",
+    ),
+  ).toBeInTheDocument();
 });

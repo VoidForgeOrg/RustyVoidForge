@@ -1,5 +1,6 @@
 import { buttonVariants, Spinner } from "@heroui/react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { useEffect } from "react";
 import type { components } from "../api/schema";
 import { copy } from "../copy/messages";
 import { empties } from "../copy/voices";
@@ -19,10 +20,15 @@ export function Fleets() {
   const fleets = useFleets();
   const { send } = useSearch({ from: "/game/fleets" });
   const navigate = useNavigate();
+  const sending = fleets.data?.fleets.find((f) => f.fleet_id === send);
+  // A fleet gone or flying since the stepper opened takes the stepper, and its URL, with it.
+  const gone = send !== undefined && fleets.data !== undefined && sending?.state !== "stationed";
+  useEffect(() => {
+    if (gone) void navigate({ to: "/fleets", replace: true });
+  }, [gone, navigate]);
   if (fleets.isPending) return <Spinner aria-label="Loading fleets" />;
   if (fleets.isError) return <Failure error={fleets.error} onRetry={() => void fleets.refetch()} />;
   if (fleets.data.fleets.length === 0) return <p className="text-muted">{empties.fleets}</p>;
-  const sending = fleets.data.fleets.find((f) => f.fleet_id === send);
   return (
     <>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-4">

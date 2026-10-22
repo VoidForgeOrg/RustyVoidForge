@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import type { components } from "../api/schema";
 import { failure, type Fill } from "../copy/messages";
 import { doneLine, eventLine } from "../copy/outcomes";
-import { orders } from "../copy/voices";
+import { failures, orders } from "../copy/voices";
 
 type S = components["schemas"];
 type Command = S["CommandRequest"];
@@ -121,8 +121,13 @@ export function useOrder() {
         body: { type: order.type, payload: order.payload } as Command,
       });
     } catch (error) {
-      if (failure(error, "command").kind !== "retry") {
+      const refusal = failure(error, "command", fillOf(order));
+      if (refusal.kind !== "retry") {
         setKey(newKey());
+        // The refetch can remove the form that would show this refusal, so it's announced too.
+        toast.danger(failures.order, {
+          description: refusal.code ? `${refusal.copy} (${refusal.code})` : refusal.copy,
+        });
         await refresh(client, order, []);
       }
       return null;
