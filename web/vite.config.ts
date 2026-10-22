@@ -7,7 +7,7 @@ import { defineConfig } from "vitest/config";
 const server = { host: "localhost", port: 8081, strictPort: true };
 
 /**
- * The built app's Content Security Policy (D-063). Build only: the dev server injects an inline
+ * The built app's Content Security Policy (D-066). Build only: the dev server injects an inline
  * preamble that it would refuse. A meta tag can't carry frame-ancestors.
  */
 function csp(env: Record<string, string>): Plugin {

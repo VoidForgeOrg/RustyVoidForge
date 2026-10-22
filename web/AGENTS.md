@@ -1,6 +1,6 @@
 # web
 
-The browser frontend, so people can test and evaluate the game. A static TypeScript React app built with Vite. It logs players in through dex and calls the public API over HTTP like any other client. It is not part of the cargo workspace ([D-063](../docs/decision-log.md#d-063-the-web-frontend-is-a-static-react-app)). The [Web frontend](../docs/Voidforge%20Technical%20Plan.md#web-frontend) section is the authority, and the [root AGENTS.md](../AGENTS.md) covers repository-wide rules.
+The browser frontend, so people can test and evaluate the game. A static TypeScript React app built with Vite. It logs players in through dex and calls the public API over HTTP like any other client. It is not part of the cargo workspace ([D-066](../docs/decision-log.md#d-066-the-web-frontend-is-a-static-react-app)). The [Web frontend](../docs/Voidforge%20Technical%20Plan.md#web-frontend) section is the authority, and the [root AGENTS.md](../AGENTS.md) covers repository-wide rules.
 
 ## Stack
 
@@ -20,7 +20,7 @@ Every dependency is pinned exactly in `package.json` and locked in `package-lock
 - `src/api/schema.ts` is generated from `../crates/voidforge-api-types/openapi.json` by `npm run gen:api`, and never edited by hand. Regenerate it whenever that file changes; CI fails on a diff.
 - The app names the fast test rules whenever `/rules` says `v0-fast`.
 - Every failed call rejects with `ApiError` from `src/api/client.ts`, and a screen shows it through `src/copy/messages.ts`: §6.1's copy for every `ErrorCode` in a switch whose default takes `never`, with the code beside it. The API's `message` and oidc-client-ts's messages never reach a page. `messages.test.ts` checks the copy against `src/fixtures/copy.json`.
-- In-universe words (titles, headings, empty states) live in `src/copy/voices.ts`; verbs, numbers and §6.1's copy stay plain (D-063).
+- In-universe words (titles, headings, empty states) live in `src/copy/voices.ts`; verbs, numbers and §6.1's copy stay plain (D-066).
 - Every value a screen shows is formatted by `src/format.ts`, on integers only (BigInt inside); a value outside JavaScript's safe integers shows as `—`. Never format a number in a component.
 - Values between reads come from `src/game/live.ts`: a view's `as_of` plus the time since it arrived, at its rates, held at `valid_until`. Never the browser's clock alone.
 - Reads go through the hooks in `src/game/queries.ts`. A view refetches at its `valid_until` (the leaderboard at `as_of` plus 60 s) and on focus, never sooner than `FLOOR_MS` (2 s) after its last answer, and not while the tab is hidden. Nothing retries on its own; a refusal waits its Retry-After (D-054's read budget).

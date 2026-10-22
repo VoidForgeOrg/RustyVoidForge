@@ -26,7 +26,7 @@ Pinned in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) ([D-007](dec
 | taiki-e/install-action | v2.87.27 | `ab6895351a88b908e96a4697860d4ffea5e57dbe` |
 | cargo-nextest | 0.9.148 | `tool: cargo-nextest@0.9.148` |
 | cargo-deny | 0.20.2 | `tool: cargo-deny@0.20.2` ([D-008](decision-log.md#d-008-cargo-deny-policy-and-dependency-allowlist)) |
-| actions/setup-node | v7.1.0 | `949feb2413d6458794dcd2491c4babbbce0c15c1`; Node from `web/.nvmrc` ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)) |
+| actions/setup-node | v7.1.0 | `949feb2413d6458794dcd2491c4babbbce0c15c1`; Node from `web/.nvmrc` ([D-066](decision-log.md#d-066-the-web-frontend-is-a-static-react-app)) |
 | sqlx-cli | 0.9.0 (postgres only, no TLS) | `cargo install sqlx-cli@0.9.0 --locked --no-default-features --features postgres` in the `database` job; no install-action manifest exists ([D-034](decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)) |
 | Postgres service (`database` job) | 18.6, Alpine image | The same digest as the local stack's Postgres, below ([D-034](decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)) |
 
@@ -55,11 +55,20 @@ Pinned in [`deploy/compose.yaml`](../deploy/compose.yaml) and [`deploy/dex/Docke
 | Docker Compose | 5.6.0 verified (needs `up --wait`, Compose 2.17 or later) | Not pinned; installed per machine |
 | just | 1.59.0 verified | Not pinned; installed per machine |
 
+## Images
+
+Pinned in [`dockerfiles/Dockerfile`](../dockerfiles/Dockerfile) by tag and multi-platform digest (an OCI index: amd64 and arm64 both resolve); `.github/scripts/check-images.py --static` refuses a base without a digest, and a builder that isn't the toolchain above ([D-065](decision-log.md#d-065-container-images-serve-as-pid-1-and-the-watched-lock)).
+
+| Item | Version | Pin |
+| --- | --- | --- |
+| Build base | Rust 1.99.1, Debian trixie slim | `rust:1.99.1-slim-trixie@sha256:aab42391a986424e22d6a3ec14f37bc6dd3dacff4d457ca7cccd781e02297cc6` |
+| Runtime base | distroless cc, Debian 13, nonroot (65532:65532) | `gcr.io/distroless/cc-debian13:nonroot@sha256:83b9b50586253821cf63ffcec87d3d94265a093ad30da232039af962dd8f4edf` |
+| cargo-chef | 0.1.78, build stage only | `cargo install cargo-chef --locked --version 0.1.78`; never in a runtime image |
+| Docker | 29.5.2 verified locally (colima; the legacy builder, no buildx); the runner image's Docker in CI | Not pinned; installed per machine |
+
 ## Tools: planned, not introduced
 
-| Tool | Introduced by |
-| --- | --- |
-| cargo-chef | P5.2 |
+None.
 
 ## Crate dependencies
 
@@ -69,9 +78,9 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | --- | --- | --- | --- | --- |
 | tracing | =0.1.44 | telemetry, all four binaries | P0.6 | D-017 |
 | tracing-subscriber | =0.3.23 (std, fmt, registry) | telemetry; server, dev-dependency only (the privacy test's capture, D-047) | P0.6 | D-017 |
-| opentelemetry | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
-| opentelemetry_sdk | =0.33.1 (trace) | telemetry | P0.6 | D-017 |
-| opentelemetry-otlp | =0.33.1 (http-proto, reqwest-blocking-client, trace) | telemetry | P0.6 | D-017 |
+| opentelemetry | =0.33.1 (trace, metrics) | telemetry | P0.6 | D-017, D-064 |
+| opentelemetry_sdk | =0.33.1 (trace, metrics; testing behind telemetry's dev-only `testing` feature) | telemetry | P0.6 | D-017, D-064 |
+| opentelemetry-otlp | =0.33.1 (http-proto, reqwest-blocking-client, trace, metrics) | telemetry | P0.6 | D-017, D-064 |
 | tracing-opentelemetry | =0.34.0 (no default features) | telemetry | P0.6 | D-017 |
 | thiserror | =2.0.21 | telemetry; core from P1.1; rules from P1.2 | P0.6 | D-017, D-018, D-020 |
 | proptest | =1.12.0 (std only, no fork or timeout) | core and testkit, dev-dependency only | P1.1 | D-019, D-024 |
@@ -85,7 +94,7 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | tokio | =1.53.3 (rt, sync, time, macros; default features off) | host, the loop and its runtime; already in the tree through sqlx and reqwest. The server adds net, rt-multi-thread and signal for `serve` (P3.4s, D-050); signal brings one crate, signal-hook-registry 1.4.8 (MIT OR Apache-2.0). The bots use it from P3.6 (D-052), with test-util for paused time in their tests (no new crate) | P2.3 | D-036, D-050, D-052 |
 | clap | =4.6.7 (std, derive, help, usage, error-context, env; default features off, so no color crates) | replay, its command line; the server's from P2.9; the bots' from P3.6 | P2.7 | D-041, D-052 |
 | utoipa | =6.0.0 (macros; default features off) | api-types, the OpenAPI document | P3.1 | D-045 |
-| axum | =0.8.9 (http1, tokio, json, query; default features off) | server: the token extractor, the routes (query since P3.4, D-049); the tests' local servers | P3.2 | D-046, D-049 |
+| axum | =0.8.9 (http1, tokio, json, query, matched-path since P5.1 for the request span's route, D-064; default features off) | server: the token extractor, the routes (query since P3.4, D-049); the tests' local servers | P3.2 | D-046, D-049 |
 | jsonwebtoken | =11.1.0 (aws_lc_rs; default features off, so no PEM) | server, token signatures (RS256) | P3.2 | D-046 |
 | reqwest | =0.13.5 (json; default features off, no TLS until P5) | server, dex's discovery document and keys; already in the tree through telemetry's OTLP exporter. The bots' HTTP client from P3.6: dex's token endpoint and the API | P3.2 | D-046, D-052 |
 | aws-lc-rs | =1.18.2 | server, dev-dependency only: generates the token tests' RSA keys (also jsonwebtoken's backend) | P3.2 | D-046 |
@@ -93,11 +102,11 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 | uuid | =1.28.0 (std, v7; default features off) | server: draws each new player's UUIDv7 | P3.3 | D-047 |
 | insta | =1.46.1 (json; default features off) | server, dev-dependency only: the routes' contract snapshots | P3.4 | D-049, D-060 |
 | log | =0.4.34 (std; default features off) | server, dev-dependency only: the privacy test captures sqlx's `log` events | P3.3 | D-047 |
-| tower-http | =0.6.11 (cors; default features off) | server, CORS for the web app's origin; already in the tree through reqwest, so no new version | P4.6 | D-063 |
+| tower-http | =0.6.11 (cors; default features off) | server, CORS for the web app's origin; already in the tree through reqwest, so no new version | P4.6 | D-066 |
 
 ## Web app
 
-Pinned in [`web/`](../web/AGENTS.md) ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)). Every direct dependency is exact in `package.json`, and `package-lock.json` locks the tree. `package.json` overrides openapi-typescript's TypeScript peer to the project's TypeScript.
+Pinned in [`web/`](../web/AGENTS.md) ([D-066](decision-log.md#d-066-the-web-frontend-is-a-static-react-app)). Every direct dependency is exact in `package.json`, and `package-lock.json` locks the tree. `package.json` overrides openapi-typescript's TypeScript peer to the project's TypeScript.
 
 | Item | Version | Pin |
 | --- | --- | --- |

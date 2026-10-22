@@ -1,4 +1,4 @@
-// The console's own voice (D-063): titles, headings and empty states. Verbs, numbers and §6.1's
+// The console's own voice (D-066): titles, headings and empty states. Verbs, numbers and §6.1's
 // copy stay plain and live elsewhere.
 
 export const titles = {

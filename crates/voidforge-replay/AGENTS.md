@@ -47,7 +47,7 @@ voidforge-replay inspect postgres [--database-url <URL>] [--json]
 
 ## Invariants
 
-- Telemetry: `main` calls `voidforge_telemetry::init` once, first, and `Telemetry::shutdown` before exit, reporting a failed shutdown with a non-zero exit ([D-016](../../docs/decision-log.md#d-016-telemetry-bootstrap)). It never configures its own exporter or subscriber.
+- Telemetry: `main` calls `voidforge_telemetry::init` once, first, and `Telemetry::shutdown` before exit ([D-016](../../docs/decision-log.md#d-016-telemetry-bootstrap)). Telemetry that couldn't be delivered is a loud ERROR on stderr and never changes the exit code, which reports the command itself; only the hidden `telemetry-check`, whose job is delivery, fails on it ([D-064](../../docs/decision-log.md#d-064-telemetry-a-commands-trace-the-hosts-metrics-and-trace-context-across-http), T6). It never configures its own exporter or subscriber.
 - Replay is an offline caller of the core: it rebuilds a world from a snapshot and the log and never touches live state. Every record goes through `voidforge_store::replay::replay_record`, the same function host recovery uses. There's no second path.
 - Replays are pinned to a build and a rules version, and a mismatch is refused (exit 3). The build pin applies to records; snapshot rows decode under their own build.
 - A failure is never turned into a value: a core error (a score out of range, say) is a divergence, and an unreadable golden, or one with its snapshot or records but no manifest, is an input error naming it, never skipped.

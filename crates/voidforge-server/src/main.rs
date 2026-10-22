@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
-use voidforge_server::serve::{self, ServeArgs, ServeExit};
+use voidforge_server::serve::{self, ServeArgs};
 use voidforge_store::BootstrapError;
 use voidforge_store::snapshot::{self, ENGINE_BUILD, EngineBuild};
 use voidforge_store::verify::hex;
@@ -27,6 +27,12 @@ const SERVICE: &str = "voidforge-server";
 const SEED_EXIT_CODES: &str = "Exit codes: 0 seeded, 2 usage error, 3 refused (the database is \
     not empty, before anything is migrated; the universe is too large; or the epoch is out of \
     range), 4 input or database error, 5 telemetry failed.";
+
+const HEALTH_EXIT_CODES: &str = "Exit codes: 0 healthy (a 200 with a JSON body within 2 s), 1 \
+    not healthy, 2 usage error.";
+
+/// How long `health` waits for the whole answer.
+const HEALTH_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
 
 const SERVE_EXIT_CODES: &str = "Exit codes: 0 stopped cleanly (the final snapshot is at the log \
     head), 2 usage error (a setting out of range), 3 refused (no universe, no recorded epoch, an \
@@ -74,6 +80,20 @@ enum Command {
     /// and on SIGINT or SIGTERM drains and stops with a final snapshot.
     #[command(after_help = SERVE_EXIT_CODES)]
     Serve(ServeArgs),
+    /// For a container's healthcheck (P5.2, D-065): GET `--url` (serve's /openapi.json), bounded
+    /// at 2 s; exit 0 only on a 200 whose body is JSON, otherwise 1 with the reason on stderr. It
+    /// starts no telemetry, so a check every few seconds exports nothing and never waits on a
+    /// collector.
+    #[command(after_help = HEALTH_EXIT_CODES)]
+    Health {
+        /// What to GET, for example http://127.0.0.1:8080/openapi.json.
+        #[arg(long)]
+        url: String,
+    },
+    /// For `just trace-check` (D-064): records one `telemetry_check` span, prints `trace_id=<hex>`
+    /// on stdout when exporting, and exits; 5 if the span can't be delivered. Reads nothing else.
+    #[command(hide = true)]
+    TelemetryCheck,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +129,9 @@ struct Seeded {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Command::Health { url } = &cli.command {
+        return health(url);
+    }
     let telemetry = match voidforge_telemetry::init(SERVICE) {
         Ok(telemetry) => telemetry,
         Err(error) => {
@@ -116,6 +139,7 @@ fn main() -> ExitCode {
             return ExitCode::from(Exit::Telemetry as u8);
         }
     };
+    let check = matches!(cli.command, Command::TelemetryCheck);
     let (span, exit) = match cli.command {
         Command::Seed {
             seed,
@@ -136,22 +160,34 @@ fn main() -> ExitCode {
             let exit = span.in_scope(|| serve::run(&args));
             (span, exit as u8)
         }
+        Command::Health { .. } => unreachable!("health returned before telemetry started"),
+        Command::TelemetryCheck => {
+            let span = tracing::info_span!("telemetry_check", binary = SERVICE);
+            span.in_scope(|| tracing::info!("telemetry check"));
+            (span, 0)
+        }
     };
     if let Some(trace_id) = voidforge_telemetry::trace_id(&span) {
-        eprintln!("trace_id={trace_id}");
+        if check {
+            println!("trace_id={trace_id}");
+        } else {
+            eprintln!("trace_id={trace_id}");
+        }
     }
     drop(span);
     match telemetry.shutdown() {
         Ok(()) => ExitCode::from(exit),
-        Err(error) => {
+        // Delivery is telemetry-check's whole job: there it fails (5).
+        Err(error) if check => {
             eprintln!("{SERVICE}: {error}");
-            // A failed shutdown is never a success (D-016); a failure keeps its own code.
-            let code = if exit == Exit::Seeded as u8 || exit == ServeExit::Clean as u8 {
-                Exit::Telemetry as u8
-            } else {
-                exit
-            };
-            ExitCode::from(code)
+            ExitCode::from(Exit::Telemetry as u8)
+        }
+        // Otherwise the exit code reports the command (seeded; for serve D-050's stop, 0 only
+        // with the final snapshot at the log head): undelivered telemetry is loud, never a
+        // failed command (D-064, T2 and T6, amending D-016).
+        Err(error) => {
+            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the command (D-064)");
+            ExitCode::from(exit)
         }
     }
 }
@@ -290,4 +326,37 @@ fn bootstrap(
         })?;
     out.state_hash = Some(state_hash);
     Ok(())
+}
+
+/// `health`: GET `url` once, bounded at [`HEALTH_BOUND`] (P5.2, D-065).
+fn health(url: &str) -> ExitCode {
+    match check_health(url) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(why) => {
+            eprintln!("{SERVICE} health: {url}: {why}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn check_health(url: &str) -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    runtime.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(HEALTH_BOUND)
+            .build()
+            .map_err(|e| e.to_string())?;
+        let response = client.get(url).send().await.map_err(|e| e.to_string())?;
+        let status = response.status();
+        if status != reqwest::StatusCode::OK {
+            return Err(format!("answered {status}"));
+        }
+        let body = response.bytes().await.map_err(|e| e.to_string())?;
+        serde_json::from_slice::<serde::de::IgnoredAny>(&body)
+            .map(|_| ())
+            .map_err(|e| format!("the body isn't JSON: {e}"))
+    })
 }

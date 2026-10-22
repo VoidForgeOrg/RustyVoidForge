@@ -31,6 +31,7 @@
 //! [`HostError::KeyConflict`].
 
 pub mod clock;
+mod instruments;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,6 +39,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
+
+use crate::instruments::{Gauges, Instruments, NONE};
 use voidforge_core::state::EngineError;
 use voidforge_store::log::SnapshotRow;
 use voidforge_store::log::{
@@ -233,6 +236,10 @@ struct Submission {
     command: Command,
     key: Option<IdempotencyKey>,
     reply: oneshot::Sender<Result<Receipt, HostError>>,
+    /// The submitter's span: the command's spans in the host are its children (P5.1).
+    caller: tracing::Span,
+    /// `host.inbox`, open from the submit until the host takes it: the inbox wait.
+    inbox: tracing::Span,
 }
 
 /// The way in: submit commands and read the read model. Clones share one host. The host stops
@@ -242,6 +249,7 @@ pub struct HostHandle {
     inbox: mpsc::Sender<Submission>,
     read: watch::Receiver<Arc<ReadModel>>,
     stats: Arc<HostStats>,
+    gauges: Arc<Gauges>,
 }
 
 impl HostHandle {
@@ -274,16 +282,24 @@ impl HostHandle {
         key: Option<IdempotencyKey>,
     ) -> Result<Receipt, HostError> {
         let (reply, receipt) = oneshot::channel();
-        self.inbox
-            .try_send(Submission {
-                command,
-                key,
-                reply,
-            })
-            .map_err(|e| match e {
+        let caller = tracing::Span::current();
+        let inbox = tracing::info_span!(parent: &caller, "host.inbox");
+        // Counted before the send, so the host's take never sees the depth below zero.
+        self.gauges.depth.fetch_add(1, Ordering::Relaxed);
+        let sent = self.inbox.try_send(Submission {
+            command,
+            key,
+            reply,
+            caller,
+            inbox,
+        });
+        if let Err(e) = sent {
+            self.gauges.depth.fetch_sub(1, Ordering::Relaxed);
+            return Err(match e {
                 mpsc::error::TrySendError::Full(_) => HostError::Busy,
                 mpsc::error::TrySendError::Closed(_) => HostError::Stopped,
-            })?;
+            });
+        }
         receipt.await.map_err(|_| HostError::Stopped)?
     }
 
@@ -361,8 +377,12 @@ pub fn spawn<S: LogStore, C: Clock>(
         rules: rules.clone(),
     }));
     let stats = Arc::new(HostStats::default());
+    let gauges = Arc::new(Gauges::default());
+    let clock = Arc::new(clock);
+    let instruments = Instruments::new(&gauges, &clock, config.epoch_unix_ms);
     let (started, started_rx) = std::sync::mpsc::sync_channel(1);
     let stats_host = stats.clone();
+    let gauges_host = gauges.clone();
     let thread = std::thread::Builder::new()
         .name("voidforge-host".to_owned())
         .spawn(move || {
@@ -382,6 +402,8 @@ pub fn spawn<S: LogStore, C: Clock>(
                         rx,
                         publish,
                         stats: stats_host,
+                        gauges: gauges_host,
+                        instruments,
                         next_seq: 1,
                         keys: HashMap::new(),
                         since_snapshot: 0,
@@ -398,7 +420,15 @@ pub fn spawn<S: LogStore, C: Clock>(
         .map_err(|e| Fatal::Thread(e.to_string()))?;
     let task = HostTask { thread };
     match started_rx.recv() {
-        Ok(Ok(())) => Ok((HostHandle { inbox, read, stats }, task)),
+        Ok(Ok(())) => Ok((
+            HostHandle {
+                inbox,
+                read,
+                stats,
+                gauges,
+            },
+            task,
+        )),
         Ok(Err(fatal)) => {
             let _ = task.thread.join();
             Err(fatal)
@@ -414,11 +444,13 @@ struct Host<S, C> {
     world: World,
     rules: Arc<Rules>,
     store: S,
-    clock: C,
+    clock: Arc<C>,
     config: HostConfig,
     rx: mpsc::Receiver<Submission>,
     publish: watch::Sender<Arc<ReadModel>>,
     stats: Arc<HostStats>,
+    gauges: Arc<Gauges>,
+    instruments: Instruments,
     next_seq: i64,
     last_t: i64,
     /// Cached idempotency keys: the first command and receipt for each (player, key).
@@ -512,7 +544,14 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             }
         }
         match self.store.latest_snapshot(None).await {
-            Ok(row) => self.last_snapshot_seq = row.map(|r| r.seq),
+            Ok(row) => {
+                if let Some(r) = &row {
+                    self.gauges
+                        .snapshot_at
+                        .store(r.game_time, Ordering::Relaxed);
+                }
+                self.last_snapshot_seq = row.map(|r| r.seq);
+            }
             Err(e) => {
                 let _ = started.send(Err(Fatal::Start(e)));
                 return Ok(());
@@ -525,11 +564,14 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             world: Arc::new(self.world.clone()),
             rules: self.rules.clone(),
         }));
+        self.due_changed();
         let _ = started.send(Ok(()));
         let result = self.serve().await;
         // Stopping: refuse what is still queued, so no caller waits forever.
         self.rx.close();
-        while self.rx.try_recv().is_ok() {}
+        while self.rx.try_recv().is_ok() {
+            self.gauges.depth.fetch_sub(1, Ordering::Relaxed);
+        }
         // A clean shutdown leaves a snapshot at the log head (an engine upgrade starts from it).
         if result.is_ok() {
             self.snapshot().await;
@@ -548,7 +590,7 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                     Some(submission) => Some(submission),
                     None => return Ok(()),
                 },
-                () = sleep_until(&self.clock, wake_at) => None,
+                () = sleep_until(&*self.clock, wake_at) => None,
             };
             self.stats.wakes.fetch_add(1, Ordering::Relaxed);
             let mut batch = Vec::new();
@@ -561,8 +603,17 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                     }
                 }
             }
-            let span = tracing::info_span!("host.turn", commands = batch.len());
+            // Taken: each command's inbox wait ends here.
+            for submission in &mut batch {
+                self.gauges.depth.fetch_sub(1, Ordering::Relaxed);
+                submission.inbox = tracing::Span::none();
+            }
+            let span = tracing::info_span!(parent: None, "host.turn", commands = batch.len());
+            for submission in &batch {
+                voidforge_telemetry::link(&span, &submission.caller);
+            }
             self.turn(batch).instrument(span).await?;
+            self.due_changed();
         }
     }
 
@@ -601,7 +652,12 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             let t = self.stamp();
             self.stats.steps.fetch_add(1, Ordering::Relaxed);
             changed = true;
-            match replay::step(&mut self.world, &Step::Advance, t, &self.rules) {
+            let advance = tracing::info_span!("host.advance", t);
+            let started = std::time::Instant::now();
+            let stepped =
+                advance.in_scope(|| replay::step(&mut self.world, &Step::Advance, t, &self.rules));
+            self.instruments.step(started.elapsed(), false);
+            match stepped {
                 // No events: not logged; the read model is still published below.
                 Ok(stepped) if stepped.events.is_empty() => {}
                 Ok(stepped) => {
@@ -610,12 +666,26 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                 Err(e) => failure = Some(e),
             }
         }
+        let batch_size = batch.len();
+        let mut appends = Vec::new();
         for Submission {
             command,
             key,
             reply,
+            caller,
+            inbox: _,
         } in batch
         {
+            // The command's span in its caller's trace: its type, player and, once known, its seq
+            // and outcome. Never its idempotency key (P5.1 M1).
+            let span = tracing::info_span!(
+                parent: &caller,
+                "host.command",
+                command.r#type = instruments::action_type(&command.action),
+                player_id = instruments::player_uuid(command.player.0),
+                seq = tracing::field::Empty,
+                outcome = tracing::field::Empty,
+            );
             if failure.is_some() {
                 // Not applied after a failure: dropping the reply answers Stopped.
                 continue;
@@ -627,8 +697,11 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             {
                 let answer = if known.command == command {
                     self.stats.replays.fetch_add(1, Ordering::Relaxed);
+                    span.record("outcome", "replayed");
+                    span.record("seq", known.receipt.seq);
                     Ok(known.receipt.clone())
                 } else {
+                    span.record("outcome", "key_conflict");
                     Err(HostError::KeyConflict {
                         seq: known.receipt.seq,
                     })
@@ -638,15 +711,19 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             }
             let t = self.stamp();
             // 4. Through the shared record→core function, as replay runs it (D-038).
-            let stepped =
-                match replay::step(&mut self.world, &Step::Command(&command), t, &self.rules) {
-                    Ok(stepped) => stepped,
-                    Err(e) => {
-                        // The poisoning command is not logged; dropping its reply answers Stopped.
-                        failure = Some(e);
-                        continue;
-                    }
-                };
+            let started = std::time::Instant::now();
+            let stepped = tracing::info_span!(parent: &span, "host.step", t).in_scope(|| {
+                replay::step(&mut self.world, &Step::Command(&command), t, &self.rules)
+            });
+            self.instruments.step(started.elapsed(), true);
+            let stepped = match stepped {
+                Ok(stepped) => stepped,
+                Err(e) => {
+                    // The poisoning command is not logged; dropping its reply answers Stopped.
+                    failure = Some(e);
+                    continue;
+                }
+            };
             self.stats.steps.fetch_add(1, Ordering::Relaxed);
             changed = true;
             let record = self.record(
@@ -661,6 +738,15 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                 t,
                 outcome: stepped.result,
             };
+            span.record("seq", record.seq);
+            span.record(
+                "outcome",
+                match &receipt.outcome {
+                    Ok(_) => "accepted",
+                    Err(rejection) => rejection.code(),
+                },
+            );
+            appends.push(span);
             if let Some(key) = key {
                 // Cached now, so a repeat later in this turn gets this receipt, after the append.
                 self.keys.insert(
@@ -679,13 +765,31 @@ impl<S: LogStore, C: Clock> Host<S, C> {
         }
         // 5. One durable write for the turn, before anything is acknowledged.
         if !records.is_empty() {
-            let span = tracing::info_span!("host.append", records = records.len());
-            if let Err(e) = self.store.append(&records).instrument(span).await {
+            // One append for the turn, shown in each command's trace (T1): one `host.append` per
+            // command, all open around the single write, each saying the batch it was part of.
+            let shared: Vec<tracing::Span> = appends
+                .iter()
+                .map(|command| {
+                    tracing::info_span!(parent: command, "host.append", records = records.len(), batch.size = batch_size)
+                })
+                .collect();
+            let span = tracing::info_span!(
+                "host.append",
+                records = records.len(),
+                batch.size = batch_size
+            );
+            let started = std::time::Instant::now();
+            let appended = self.store.append(&records).instrument(span).await;
+            self.instruments.append(started.elapsed());
+            drop(shared);
+            if let Err(e) = appended {
                 tracing::error!(error = %e, "append failed; the host stops");
                 return Err(Fatal::Append(e));
             }
             self.stats.appends.fetch_add(1, Ordering::Relaxed);
         }
+        // The command spans end before their replies, so a caller's trace is whole when it hears.
+        drop(appends);
         // 6. Publish, then reply: every step that happened is durable or needs no record, and a
         // caller that reads after its reply sees its own effect (D-055).
         if failure.is_none() && changed {
@@ -726,16 +830,23 @@ impl<S: LogStore, C: Clock> Host<S, C> {
             self.since_snapshot = 0;
             return;
         }
+        let span = tracing::info_span!("host.snapshot", seq, state_hash = tracing::field::Empty);
         let written = match snapshot::encode(&self.world, &self.config.engine_build) {
-            Ok(snap) => self
-                .store
-                .write_snapshot(&SnapshotRow::new(seq, &snap))
-                .await
-                .map_err(|e| e.to_string()),
+            Ok(snap) => {
+                span.record("state_hash", hex(&snap.header.state_hash));
+                self.store
+                    .write_snapshot(&SnapshotRow::new(seq, &snap))
+                    .instrument(span.clone())
+                    .await
+                    .map_err(|e| e.to_string())
+            }
             Err(e) => Err(e.to_string()),
         };
         match written {
             Ok(()) => {
+                self.gauges
+                    .snapshot_at
+                    .store(self.world.time_ms, Ordering::Relaxed);
                 self.stats.snapshots.fetch_add(1, Ordering::Relaxed);
                 self.last_snapshot_seq = Some(seq);
                 self.since_snapshot = 0;
@@ -745,6 +856,12 @@ impl<S: LogStore, C: Clock> Host<S, C> {
                 tracing::error!(seq, %error, "snapshot failed; the host carries on");
             }
         }
+    }
+
+    /// Publishes the oldest queue entry's game time for the event-lag gauge.
+    fn due_changed(&self) {
+        let due = self.world.queue().first().map_or(NONE, |e| e.at_ms);
+        self.gauges.oldest_due.store(due, Ordering::Relaxed);
     }
 
     /// 3. t = max(wall clock − epoch, last t): stamps never go backwards.
@@ -917,6 +1034,17 @@ pub async fn recover<S: LogStore>(
         snapshot_seq: seq,
         last_seq,
     })
+}
+
+/// Lower-case hex, for the snapshot span's state hash.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 #[cfg(test)]

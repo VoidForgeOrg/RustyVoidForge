@@ -474,7 +474,7 @@ fn the_idempotency_key_is_one_to_128_printable_ascii_bytes() {
     }
 }
 
-/// The six endpoints of the Architectural Design, each with its method, and the security scheme.
+/// The eight endpoints of the Architectural Design, each with its method, and the security scheme.
 #[test]
 fn the_document_has_every_endpoint() {
     let doc = openapi();

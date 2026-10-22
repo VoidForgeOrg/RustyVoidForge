@@ -1513,7 +1513,7 @@ async fn a_panicking_handler_answers_500_internal() {
     assert!(!body.to_string().contains("secret"), "{body}");
 }
 
-/// CORS allows exactly the listed origins (D-063): a listed origin's preflight is answered
+/// CORS allows exactly the listed origins (D-066): a listed origin's preflight is answered
 /// before the fallback, and its refusals carry the allow header and expose Retry-After, so the
 /// browser app can read them; an unlisted origin, or no list at all, gets no CORS headers.
 #[tokio::test]

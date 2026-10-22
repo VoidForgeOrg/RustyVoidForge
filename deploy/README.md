@@ -40,10 +40,28 @@ The password grant for the static users is enabled only in `dex/config.ci.yaml`.
 
 ## Telemetry
 
-Binaries export traces when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and only log locally without it ([D-016](../docs/decision-log.md#d-016-telemetry-bootstrap)). Grafana at `http://localhost:3000` shows them under Explore > Tempo.
+Binaries export traces and metrics when `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` is set, and only log locally without it ([D-016](../docs/decision-log.md#d-016-telemetry-bootstrap), [D-064](../docs/decision-log.md#d-064-telemetry-a-commands-trace-the-hosts-metrics-and-trace-context-across-http)). Grafana at `http://localhost:3000` shows them in **Explore**, with no dashboard to set up. Undelivered telemetry is an ERROR on stderr and never changes an exit code (only `telemetry-check` fails on it).
+
+- **A command's trace** (Explore > Tempo, query type TraceQL):
+  - `{ name = "web.act" } && { name = "host.append" }` finds a browser form's trace;
+  - `{ name = "host.command" && span.outcome != "accepted" }` finds rejected commands.
+  - A trace runs `web.act` (voidforge-web) → `api.request` (voidforge-server; `http.route`, the status) → `host.inbox` (the wait) and `host.command` (`command.type`, `player_id` as the API's UUID, `seq`, `outcome`) → `host.step` and `host.append` (`batch.size`). The bots' commands start under their `e2e` span.
+- **The host's metrics** (Explore > Prometheus):
+
+  | Metric | Query |
+  |---|---|
+  | Inbox depth (commands waiting) | `voidforge_host_inbox_depth` |
+  | Event lag (game-time ms; 0 unless a due event waits) | `voidforge_host_event_lag_milliseconds` |
+  | Step latency, p99 by kind | `histogram_quantile(0.99, sum by (le, kind) (rate(voidforge_host_step_duration_seconds_bucket[5m])))` |
+  | Append latency, p99 | `histogram_quantile(0.99, sum by (le) (rate(voidforge_host_append_duration_seconds_bucket[5m])))` |
+  | Snapshot age (game-time s) | `voidforge_host_snapshot_age_seconds` |
+  | Leaderboard builds failing | `rate(voidforge_leaderboard_failures_total[5m])` (exported once a build fails; the name follows the collector's counter rule, not yet seen live) |
+
+  Event lag and snapshot age are game time, which is wall time while the game clock never pauses.
+- `just trace-check` runs each binary's hidden `telemetry-check` and finds its span in Tempo.
 
 ```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run -p voidforge-server   # prints trace_id=<hex>
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run -p voidforge-server -- telemetry-check   # prints trace_id=<hex>
 just trace-check   # every binary: export, then find its span through Grafana's Tempo datasource
 ```
 
@@ -51,9 +69,25 @@ just trace-check   # every binary: export, then find its span through Grafana's 
 
 The issuer is `http://localhost:5556/dex` everywhere. A container that needs it runs with host networking, so `localhost:5556` reaches dex as it does from the host. It then reaches Postgres and the other services through their `localhost` ports, not compose service names. `just up` proves this with a host-network probe container.
 
+## The images (P5.2)
+
+`dockerfiles/Dockerfile` builds `voidforge-server:local` and `voidforge-web:local`: distroless, no shell, running as 65532:65532. Nothing is pushed. They run under `deploy/compose.images.yaml`, a project of its own (`voidforge-images`) beside this stack, never inside it, so compose never recreates the stack's containers (D-065).
+
+```sh
+just images                                        # build both, then check user, size and contents (`just images 1` for one build job)
+E2E_ISSUER=http://localhost:5563/dex just images-compose   # both up healthy on a scratch database, stopped cleanly, taken down
+E2E_ISSUER=http://localhost:5563/dex just smoke-images     # the smoke test against the images
+VOIDFORGE_DATABASE_URL=postgres://…/<scratch> just images-up   # leave both running; `just images-down` stops them
+```
+
+- `VOIDFORGE_DATABASE_URL` is required and has no default: name a seeded scratch database, never `voidforge`.
+- `docker compose stop` sends SIGTERM to serve itself (PID 1); it drains and stops with its final snapshot, exit 0. SIGKILL comes only after 40 s.
+- Health: serve's is `voidforge-server health` on `/openapi.json`, the web's `voidforge-web --health-check` on `/`. Serve's start period is 300 s, so a long recovery reads "starting", never "unhealthy".
+- On colima, "host" is the VM's network; colima forwards each listening port to the Mac with an ssh listener that outlives a stopped container by up to ~3 s. The web walk waits for its own previous web's port to come free, and after its web's receipt waits for the forward (20-30 ms). A known colima limit (D-065): in that gap the receipt proves the bind in the VM, not on the Mac; Linux has no forward and no gap.
+
 ## Troubleshooting
 
-- **"A host-network container could not reach dex"**: Docker Desktop needs Settings > Resources > Network > "Enable host networking". This stack is verified with colima; Docker on a Linux host supports host networking by design; no container uses it there yet. The CI e2e job (P3.6) runs the server on the host beside compose's Postgres and dex, so the first host-network container on Linux comes with the images (P5).
+- **"A host-network container could not reach dex"**: Docker Desktop needs Settings > Resources > Network > "Enable host networking". This stack is verified with colima; Docker on a Linux host supports host networking by design; the CI images job (P5.2) runs both images that way.
 - **"docker: unknown command: docker compose"**: install the Compose plugin (Compose 2.17 or later for `up --wait`).
 - **A port is already in use**: something else listens on 5432, 5556, 3000, 4317 or 4318. Stop it, or stop the other stack; this stack never stops containers that are not its own.
 - **"Unregistered redirect_uri" after entering a device code**: dex's device callback is the issuer's path plus `/device/callback`, so `voidforge-cli` must register `/dex/device/callback`. A running dex keeps the config it was built with: run `just up` to rebuild it after the config changes (D-053).

@@ -32,21 +32,38 @@
 //! streams once left gaps between and after the phases). Every unclean stop is exit 6, and recovery
 //! then replays the log from the last snapshot: every acknowledged command's record is durable
 //! (D-036).
+//!
+//! As a container's PID 1 (P5.2, D-065; the Phase 3 gate's R1-G4 and the P3.4s QA's I6):
+//! - **Startup is selected against signals too.** A signal while opening, locking or recovering
+//!   stops at once with exit 0: the host hasn't started, so nothing is in the log or the snapshots
+//!   that wasn't there before (migrations only add, each in its own transaction, D-034). A signal
+//!   after recovery, while the host starts and the listener binds, waits for `ready:` and takes
+//!   the clean shutdown above.
+//! - **The lock outlives the host.** Released only once the host is joined; on every other path
+//!   it stays held until the process ends, so no second serve takes the universe while this
+//!   host may still append.
+//! - **A lost lock stops serve at once.** The lock's connection always has a watch in flight
+//!   ([`UniverseLock::watch`]); if it fails, another serve may take the universe, so this one
+//!   exits 6 immediately: no drain, no snapshot, no further append. Recovery replays the log.
 
+use std::future::Future;
 use std::io::Write as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderValue;
 use tokio::signal::unix::{Signal, SignalKind, signal};
-use voidforge_host::{Clock, HostConfig, HostHandle, HostTask, RecoverError, Rules, SystemClock};
+use voidforge_host::{
+    Clock, HostConfig, HostHandle, HostTask, RecoverError, Recovered, Rules, SystemClock,
+};
 use voidforge_store::accounts::PgAccounts;
 use voidforge_store::log::{LogStore, PgLog};
 use voidforge_store::replay::ReplayError;
 use voidforge_store::snapshot::{ENGINE_BUILD, EngineBuild, SnapshotError};
-use voidforge_store::{LockError, OpenError};
+use voidforge_store::{LockError, OpenError, UniverseLock};
 
 use crate::accounts::Players;
 use crate::api::{self, AppState};
@@ -75,6 +92,13 @@ pub const JOIN_BOUND: Duration = Duration::from_secs(10);
 /// How long the final check of the snapshot in Postgres may take (review-r2's MEDIUM: every step
 /// of the shutdown is bounded and watches for a second signal).
 pub const CHECK_BOUND: Duration = Duration::from_secs(5);
+
+/// How long each watch of the lock's connection sleeps on the server (D-065).
+pub const LOCK_WATCH_SECS: f64 = 2.0;
+
+/// How long a watch may take to come back before the lock counts as lost: a silent network never
+/// fails the sleep, so the bound does (D-065).
+pub const LOCK_WATCH_BOUND: Duration = Duration::from_secs(5);
 
 /// What `serve` takes. The database URL is required and has no default, and it is deliberately
 /// not `DATABASE_URL`: a stray one, set for sqlx's tooling, could point here at the owner's
@@ -286,6 +310,80 @@ fn second_signal(name: &str, during: &str) -> ServeExit {
     )
 }
 
+/// A signal before serving (R1-G4, D-065): the host never started, so nothing was written; exit 0.
+fn stopped_before_serving(name: &str, during: &str) -> ServeExit {
+    tracing::info!(
+        signal = name,
+        "stopped {during}, before serving; nothing was written"
+    );
+    eprintln!(
+        "voidforge-server serve: {name} {during}: stopped before serving; nothing was written"
+    );
+    ServeExit::Clean
+}
+
+/// The universe's lock, watched: a future that holds it and resolves only once it is lost (I6,
+/// D-065). Dropped without [`Held::release`], the future is forgotten instead, so the connection,
+/// and the lock, stay until the process ends: on those paths the host may still be running, and no
+/// other serve may take the universe while it can append.
+struct Held(Option<Pin<Box<dyn Future<Output = String>>>>);
+
+impl Held {
+    fn new(lock: UniverseLock) -> Self {
+        Self(Some(Box::pin(watch_lock(lock))))
+    }
+
+    /// Resolves once the lock is lost, with why.
+    async fn lost(&mut self) -> String {
+        match self.0.as_mut() {
+            Some(watch) => watch.await,
+            None => std::future::pending().await,
+        }
+    }
+
+    /// Releases the lock: only once the host is known to have stopped.
+    fn release(mut self) {
+        drop(self.0.take());
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if let Some(watch) = self.0.take() {
+            std::mem::forget(watch);
+        }
+    }
+}
+
+/// Watches the lock's connection until it fails or stops answering.
+async fn watch_lock(mut lock: UniverseLock) -> String {
+    loop {
+        match tokio::time::timeout(LOCK_WATCH_BOUND, lock.watch(LOCK_WATCH_SECS)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return format!("the universe's lock connection failed: {e}"),
+            Err(_) => {
+                return format!(
+                    "the universe's lock connection didn't answer within {} s",
+                    LOCK_WATCH_BOUND.as_secs()
+                );
+            }
+        }
+    }
+}
+
+/// The lock is lost (I6, D-065): another serve may hold the universe now, so this process exits at
+/// once with 6, never appending, draining or snapshotting again. It doesn't return to `main`,
+/// where the telemetry flush could hold the process, and the host thread with it, for seconds.
+fn lock_lost(reason: &str) -> ! {
+    fail(
+        ServeExit::Unclean,
+        &format!(
+            "{reason}: another serve may take the universe now, so this one stops at once, without draining or a snapshot; recovery replays the log"
+        ),
+    );
+    std::process::exit(ServeExit::Unclean as i32)
+}
+
 /// The whole life of `serve`, on the control runtime.
 async fn serve(args: &ServeArgs) -> ServeExit {
     // Signals first: one that arrives while starting is handled once serving starts.
@@ -306,7 +404,12 @@ async fn serve(args: &ServeArgs) -> ServeExit {
         Err(e) => return fail(ServeExit::Input, &format!("{rules_path}: {e}")),
     };
     let url = args.database_url.as_str();
-    let epoch = match voidforge_store::open_universe(url).await {
+    // Opening, locking and recovering are each selected against the signals (R1-G4, D-065).
+    let opened = tokio::select! {
+        opened = voidforge_store::open_universe(url) => opened,
+        name = signals.next() => return stopped_before_serving(name, "while opening the universe"),
+    };
+    let epoch = match opened {
         Ok(epoch) => epoch,
         Err(e @ (OpenError::NoUniverse | OpenError::NoEpoch | OpenError::EpochOutOfRange(_))) => {
             return fail(ServeExit::Refused, &e.to_string());
@@ -317,9 +420,14 @@ async fn serve(args: &ServeArgs) -> ServeExit {
         }
         Err(other) => return fail(ServeExit::Input, &other.to_string()),
     };
-    // One serve per universe, before recovering or binding (QA's I4): held until this returns.
-    let _lock = match voidforge_store::lock_universe(url).await {
-        Ok(lock) => lock,
+    // One serve per universe, before recovering or binding (QA's I4). Held, and watched, until the
+    // host is known to have stopped, or else until the process ends (I6, D-065).
+    let locked = tokio::select! {
+        locked = voidforge_store::lock_universe(url) => locked,
+        name = signals.next() => return stopped_before_serving(name, "while taking the universe"),
+    };
+    let mut held = match locked {
+        Ok(lock) => Held::new(lock),
         Err(e @ LockError::Held) => return fail(ServeExit::Refused, &e.to_string()),
         Err(LockError::Url) => {
             return fail(ServeExit::Input, "--database-url is not a Postgres URL");
@@ -333,9 +441,27 @@ async fn serve(args: &ServeArgs) -> ServeExit {
         Ok(runtime) => ServerRuntime(Some(runtime)),
         Err(e) => return fail(ServeExit::Input, &format!("runtime: {e}")),
     };
+    // Recovery only reads (D-038). A signal during it aborts it: the host never starts.
+    let mut recovering = runtime
+        .handle()
+        .spawn(recover_universe(url.to_owned(), rules));
+    let (rules, recovered) = tokio::select! {
+        recovered = &mut recovering => match recovered {
+            Ok(Ok(recovered)) => recovered,
+            Ok(Err(exit)) => return exit,
+            Err(e) => return fail(ServeExit::Input, &format!("recovering: {e}")),
+        },
+        name = signals.next() => {
+            recovering.abort();
+            return stopped_before_serving(name, "while recovering");
+        }
+        reason = held.lost() => lock_lost(&reason),
+    };
+    // From here the host runs. A signal while it starts and the listener binds is remembered by
+    // the stream and taken at the select after `ready:`: the clean shutdown, with its snapshot.
     let start = runtime
         .handle()
-        .spawn(start(args.clone(), rules, auth, epoch));
+        .spawn(start(args.clone(), rules, recovered, auth, epoch));
     let Started {
         task,
         mut watch,
@@ -361,6 +487,7 @@ async fn serve(args: &ServeArgs) -> ServeExit {
         name = signals.next() => Stop::Signal(name),
         () = host_stopped(&mut watch) => Stop::HostStopped,
         _ = &mut server => Stop::ServerEnded,
+        reason = held.lost() => lock_lost(&reason),
     };
     drop(watch);
     match stop {
@@ -378,6 +505,7 @@ async fn serve(args: &ServeArgs) -> ServeExit {
     let drained = tokio::select! {
         ended = tokio::time::timeout(drain_for, &mut server) => ended.is_ok(),
         name = signals.next() => return second_signal(name, "while draining"),
+        reason = held.lost() => lock_lost(&reason),
     };
     if !drained {
         tracing::error!(
@@ -388,7 +516,9 @@ async fn serve(args: &ServeArgs) -> ServeExit {
     // 2. The server runtime goes, and with it every connection and its host handle.
     drop(server);
     drop(runtime);
-    // 3. The host stops once the last handle is gone, and writes its snapshot.
+    // 3. The host stops once the last handle is gone, and writes its snapshot. Until it is joined,
+    // the lock stays held whatever happens (I6, D-065).
+    let mut held_until_exit = true;
     let joined = tokio::task::spawn_blocking(move || task.join());
     let stopped = tokio::select! {
         joined = tokio::time::timeout(JOIN_BOUND, joined) => match joined {
@@ -397,10 +527,18 @@ async fn serve(args: &ServeArgs) -> ServeExit {
                 "the host did not stop within 10 s: something still holds a host handle",
             ),
             Ok(Err(e)) => fail(ServeExit::Unclean, &format!("the host thread: {e}")),
-            Ok(Ok(Err(fatal))) => fail(ServeExit::Unclean, &format!("the host stopped: {fatal}")),
-            Ok(Ok(Ok(()))) => ServeExit::Clean,
+            Ok(Ok(Err(fatal))) => {
+                // The host's thread has ended, even though its shutdown failed.
+                held_until_exit = false;
+                fail(ServeExit::Unclean, &format!("the host stopped: {fatal}"))
+            }
+            Ok(Ok(Ok(()))) => {
+                held_until_exit = false;
+                ServeExit::Clean
+            }
         },
         name = signals.next() => return second_signal(name, "while the host stops"),
+        reason = held.lost() => lock_lost(&reason),
     };
     // 4. Postgres says whether the final snapshot is durable.
     let stopped = match stopped {
@@ -409,9 +547,14 @@ async fn serve(args: &ServeArgs) -> ServeExit {
                 fail(ServeExit::Unclean, "the final snapshot check did not finish within 5 s")
             }),
             name = signals.next() => return second_signal(name, "while checking the snapshot"),
+            reason = held.lost() => lock_lost(&reason),
         },
         exit => exit,
     };
+    // The host's thread is gone, so the lock may go now. Otherwise it stays until the process ends.
+    if !held_until_exit {
+        held.release();
+    }
     match (stop, drained, stopped) {
         (Stop::Signal(_), true, ServeExit::Clean) => {
             tracing::info!("stopped cleanly; the final snapshot is at the log head");
@@ -429,17 +572,9 @@ async fn serve(args: &ServeArgs) -> ServeExit {
     }
 }
 
-/// On the server runtime: recovers, starts the host, the key refresher and the API.
-async fn start(
-    args: ServeArgs,
-    rules: Rules,
-    auth: crate::auth::AuthConfig,
-    epoch: i64,
-) -> Result<Started, ServeExit> {
-    let limits = args.limits();
-    let url = args.database_url;
-    let bind = args.bind;
-    let leaderboard_every = Duration::from_secs(args.leaderboard_secs);
+/// On the server runtime: recovers the universe (D-038). It only reads, so `serve` can abort it
+/// on a signal (R1-G4, D-065).
+async fn recover_universe(url: String, rules: Rules) -> Result<(Rules, Recovered), ServeExit> {
     let build =
         EngineBuild::new(ENGINE_BUILD).map_err(|e| fail(ServeExit::Input, &e.to_string()))?;
     let mut log = PgLog::lazy_url(&url).map_err(|e| fail(ServeExit::Input, &e.to_string()))?;
@@ -460,11 +595,29 @@ async fn start(
     tracing::info!(
         build = ENGINE_BUILD,
         rules_version = rules.version,
-        epoch_unix_ms = epoch,
         snapshot_seq = recovered.snapshot_seq,
         last_seq = recovered.last_seq,
         "recovered the universe"
     );
+    Ok((rules, recovered))
+}
+
+/// On the server runtime: starts the host over the recovered universe, the key refresher and the
+/// API.
+async fn start(
+    args: ServeArgs,
+    rules: Rules,
+    recovered: Recovered,
+    auth: crate::auth::AuthConfig,
+    epoch: i64,
+) -> Result<Started, ServeExit> {
+    let limits = args.limits();
+    let url = args.database_url;
+    let bind = args.bind;
+    let leaderboard_every = Duration::from_secs(args.leaderboard_secs);
+    let build =
+        EngineBuild::new(ENGINE_BUILD).map_err(|e| fail(ServeExit::Input, &e.to_string()))?;
+    tracing::info!(epoch_unix_ms = epoch, "starting the host");
     // `GET /rules` answers the rules just verified against the universe, built once (D-058).
     let rules_body = crate::rules_view::body(&rules);
     let store_url = url.clone();

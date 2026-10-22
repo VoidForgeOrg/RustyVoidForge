@@ -1397,6 +1397,7 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.5",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -2613,6 +2614,7 @@ dependencies = [
  "tracing",
  "voidforge-core",
  "voidforge-store",
+ "voidforge-telemetry",
  "voidforge-testkit",
 ]
 

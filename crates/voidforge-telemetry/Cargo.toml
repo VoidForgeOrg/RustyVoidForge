@@ -16,5 +16,9 @@ tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 
+[features]
+# In-memory span and metric capture for other crates' tests (P5.1, D-064); never in a binary.
+testing = ["opentelemetry_sdk/testing"]
+
 [lints]
 workspace = true

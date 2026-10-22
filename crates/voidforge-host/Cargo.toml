@@ -10,11 +10,14 @@ repository.workspace = true
 [dependencies]
 voidforge-core.workspace = true
 voidforge-store.workspace = true
+voidforge-telemetry.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# The command trace and the host's metrics, captured in memory (P5.1, D-064).
+voidforge-telemetry = { workspace = true, features = ["testing"] }
 # Harness worlds and command scripts (dev-only), as store uses them (D-035).
 voidforge-testkit.workspace = true
 proptest.workspace = true

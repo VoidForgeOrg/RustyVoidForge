@@ -18,7 +18,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# The browser app's origin through CORS (D-063).
+# The browser app's origin through CORS (D-066).
 tower-http.workspace = true
 # serve (P3.4s, D-050): SIGINT and SIGTERM, and a multi-threaded runtime for the API.
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "signal"] }
@@ -49,6 +49,8 @@ toml.workspace = true
 tracing-subscriber.workspace = true
 voidforge-core.workspace = true
 voidforge-testkit.workspace = true
+# The request span and its traceparent, captured in memory (P5.1, D-064).
+voidforge-telemetry = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

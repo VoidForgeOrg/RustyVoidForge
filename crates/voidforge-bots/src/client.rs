@@ -156,6 +156,11 @@ impl Player {
     ) -> Result<Reply<T>, Failure> {
         let http = |e: &dyn std::fmt::Display| Failure::Http(format!("{}: {what}: {e}", self.name));
         let request = request.bearer_auth(&self.token);
+        // The bot's trace continues in the API (P5.1, D-064).
+        let request = match voidforge_telemetry::traceparent(&tracing::Span::current()) {
+            Some(traceparent) => request.header("traceparent", traceparent),
+            None => request,
+        };
         let mut tries = 0;
         let response = loop {
             let attempt = request
@@ -218,6 +223,46 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    /// P5.1 (D-064): a bot's request carries its span in `traceparent`, so an e2e trace starts
+    /// in the bot and continues in the API.
+    #[tokio::test]
+    async fn a_request_carries_the_bot_s_trace() {
+        use std::io::{BufRead as _, BufReader};
+        voidforge_telemetry::testing::capture();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let api = format!("http://{}", listener.local_addr().unwrap());
+        let got = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut traceparent = None;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("traceparent:") {
+                    traceparent = Some(v.trim().to_owned());
+                }
+            }
+            let reply = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+            std::io::Write::write_all(&mut stream, reply.as_bytes()).unwrap();
+            traceparent
+        });
+        let span = tracing::info_span!("bot.request");
+        let trace = voidforge_telemetry::trace_id(&span).expect("exported");
+        let alice = Player::new("alice", reqwest::Client::new(), &api, "t".to_owned());
+        let answered = tracing::Instrument::instrument(alice.get_json("/x"), span)
+            .await
+            .unwrap();
+        assert!(answered.is_ok());
+        let traceparent = got
+            .join()
+            .unwrap()
+            .expect("the request carries a traceparent");
+        assert!(traceparent.contains(&trace), "{traceparent} names {trace}");
+    }
 
     /// Each request's idempotency key and arrival time.
     type Seen = Arc<Mutex<Vec<(Option<String>, Instant)>>>;

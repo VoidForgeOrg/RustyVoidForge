@@ -1,8 +1,9 @@
 # CI baseline (Technical Plan P0.3), plus the database job (P2.1, D-034) and the e2e job (P3.6,
 # D-052). All six are required checks on main: the ruleset "main: required CI checks" names lint,
 # supply-chain, test, determinism, database and e2e (read 2026-10-21 for P4.5, D-062). The e2e job
-# includes the smoke test (`just smoke`'s web walk, P4.5). The web job (D-063) builds and tests the
-# browser app in web/; making it required is the owner's ruleset change.
+# includes the smoke test (`just smoke`'s web walk, P4.5). The images job (P5.2, D-065) runs on every
+# PR and isn't required yet: adding it to the ruleset is the owner's change. The web job (D-066)
+# builds and tests the browser app in web/; making it required is the owner's ruleset change too.
 # Every command here also runs locally from the repository root; see AGENTS.md, Commands.
 # Action and tool versions are pinned; see docs/versions.md and decision log D-007.
 name: CI
@@ -40,6 +41,10 @@ jobs:
         run: .github/scripts/check-dex-parity.sh
       - name: dex parity check regression cases
         run: .github/scripts/test-check-dex-parity.sh
+      - name: The web walk starts only its own voidforge-web (regression cases)
+        run: python3 .github/scripts/test-web-login-ready.py
+      - name: The images' pins and their compose project (P5.2, D-065)
+        run: python3 .github/scripts/check-images.py --static
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors
@@ -172,7 +177,7 @@ jobs:
   # The end-to-end scenario (Technical Plan P3.6, the Phase 3 gate; decision log D-052): compose's
   # Postgres and dex with the CI dex config (the password grant on), then .github/scripts/e2e.sh,
   # which seeds a fresh universe on the fast rules, runs the serve binary on the host and the
-  # bots against it, then the web walk in Chromium (D-063). Then the token checks against the
+  # bots against it, then the web walk in Chromium (D-066). Then the token checks against the
   # real dex (D-046). `just e2e` and `just dex-test` run the same against the local stack.
   e2e:
     name: e2e
@@ -212,6 +217,51 @@ jobs:
           for f in serve bots device-login web-walk web seed; do
             echo "::group::$f.log"
             cat "$E2E_LOG_DIR/$f.log" 2>/dev/null || echo "(no $f.log)"
+            echo "::endgroup::"
+          done
+          echo "::group::dex and Postgres"
+          docker compose -f deploy/compose.yaml logs --no-color dex postgres
+          echo "::endgroup::"
+
+  # The server and web images (P5.2, D-065), built and pushed nowhere: no registry, no login, no
+  # secrets. Then both under compose, healthy (the advisor's A1), and the smoke test against them
+  # (`just smoke-images`), against compose's Postgres and dex with the CI config, as the e2e job.
+  # It needs no Rust toolchain: everything builds inside the images.
+  images:
+    name: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DEX_CONFIG: config.ci.yaml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build both images (dockerfiles/Dockerfile)
+        run: |
+          docker info --format 'docker {{.ServerVersion}}, storage driver {{.Driver}}, {{.OperatingSystem}}'
+          started=$(date +%s)
+          for target in server web; do
+            docker build -f dockerfiles/Dockerfile --target "$target" --build-arg CARGO_BUILD_JOBS=4 \
+              --build-arg VOIDFORGE_GIT_SHA="${GITHUB_SHA::12}" -t "voidforge-$target:local" .
+          done
+          echo "both images built in $(( $(date +%s) - started )) s"
+      - name: The built images' checks (user, size, nothing but the binary)
+        run: python3 .github/scripts/check-images.py --built
+      - name: Postgres and dex (CI config), healthy
+        run: docker compose -f deploy/compose.yaml up --build --detach --wait --wait-timeout 300 postgres dex
+      - name: Both images under compose, healthy, stopped cleanly
+        run: .github/scripts/images-compose.sh
+        env:
+          E2E_LOG_DIR: ${{ github.workspace }}/target/e2e/images-compose
+      - name: The smoke test against the images
+        run: .github/scripts/e2e.sh --images --smoke
+        env:
+          E2E_LOG_DIR: ${{ github.workspace }}/target/e2e/images-smoke
+      - name: On failure, the logs (compose, serve, the walk, the web, seed, dex, Postgres)
+        if: failure()
+        run: |
+          for f in target/e2e/images-compose/*.log target/e2e/images-smoke/*.log; do
+            echo "::group::$f"
+            cat "$f" 2>/dev/null || echo "(no $f)"
             echo "::endgroup::"
           done
           echo "::group::dex and Postgres"

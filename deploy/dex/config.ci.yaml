@@ -10,7 +10,7 @@ storage:
 
 web:
   http: 0.0.0.0:5556
-  # The browser web app calls the token endpoint and discovery from its own origin (D-063).
+  # The browser web app calls the token endpoint and discovery from its own origin (D-066).
   allowedOrigins: ["http://localhost:8081"]
 
 oauth2:

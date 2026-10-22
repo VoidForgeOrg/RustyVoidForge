@@ -25,9 +25,9 @@ Fourteen choices shape the build, and all of them are agreed. A later change sta
 | 5 | Rules data | Versioned TOML files in `rules/`, loaded at startup | Constants compiled into the core | Agreed |
 | 6 | Identity provider | dex with static users and clients for local runs and CI; real logins later through dex connectors | Keycloak or Zitadel, both heavier to run | Agreed |
 | 7 | API credential | The dex ID token as a bearer token, checked against dex's published signing keys | dex access tokens, or opaque tokens with introspection | Agreed |
-| 8 | Login flows | Web frontend: authorization code with PKCE, as a public client run by the browser. Bots and CLI: device code. CI tests: password grant for test users only | Client credentials for bots, which needs a dex feature flag and yields tokens with no user | Changed: the web frontend was a confidential client holding the token server-side ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)) |
+| 8 | Login flows | Web frontend: authorization code with PKCE, as a public client run by the browser. Bots and CLI: device code. CI tests: password grant for test users only | Client credentials for bots, which needs a dex feature flag and yields tokens with no user | Changed: the web frontend was a confidential client holding the token server-side ([D-066](decision-log.md#d-066-the-web-frontend-is-a-static-react-app)) |
 | 9 | Player accounts | A Postgres `accounts` table maps issuer and subject to a player UUIDv7; the first call creates it and issues Join game | Derive the player ID from the subject | Agreed |
-| 10 | Web frontend | A static TypeScript React app in `web/`, built with Vite, calling the public API over HTTP with a client generated from `/openapi.json` | A server-rendered binary with plain forms and no JavaScript | Changed: it was the `voidforge-web` binary rendering HTML with maud ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)) |
+| 10 | Web frontend | A static TypeScript React app in `web/`, built with Vite, calling the public API over HTTP with a client generated from `/openapi.json` | A server-rendered binary with plain forms and no JavaScript | Changed: it was the `voidforge-web` binary rendering HTML with maud ([D-066](decision-log.md#d-066-the-web-frontend-is-a-static-react-app)) |
 | 11 | Telemetry | tracing with OpenTelemetry over OTLP; locally the all-in-one `grafana/otel-lgtm` container | Jaeger plus Prometheus | Agreed |
 | 12 | CI/CD | GitHub Actions; images are built in CI but pushed nowhere; a registry and CD come later | One staging VM running docker compose | Agreed |
 | 13 | Test tooling | cargo-nextest, proptest and insta | The built-in runner and quickcheck | Agreed |
@@ -52,7 +52,7 @@ Every pick favors widely used, well-documented crates, because agents write most
 | Errors | thiserror in libraries, anyhow in binaries | Library errors stay typed for tests |
 | Configuration | clap reading environment variables | One config struct per binary |
 | Token checks | jsonwebtoken with a cached copy of dex's signing keys | API side |
-| Web frontend | React, Vite and TypeScript; TanStack Router and Query; Zustand; HeroUI with Tailwind; Perseus, the owner's HeroUI components | A static build in `web/`, pinned in `package-lock.json` ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)) |
+| Web frontend | React, Vite and TypeScript; TanStack Router and Query; Zustand; HeroUI with Tailwind; Perseus, the owner's HeroUI components | A static build in `web/`, pinned in `package-lock.json` ([D-066](decision-log.md#d-066-the-web-frontend-is-a-static-react-app)) |
 | Web API client | openapi-typescript, openapi-fetch and openapi-react-query | Types generated from the checked-in `openapi.json` |
 | OIDC client | oidc-client-ts | Browser side: discovery, PKCE, state, nonce and ID token checks |
 | Web toolchain | Node and npm, pinned in `web/.nvmrc` and `web/package.json` | Runs Vite, Vitest and Playwright |
@@ -70,7 +70,7 @@ Eleven crates in three layers keep the deterministic core free of anything that 
 
 ![Workspace layering: 12 crates in 3 layers](Dependecies.png)
 
-The diagram predates the web redesign: it still shows `voidforge-web`, which the static app in `web/` replaced ([D-063](decision-log.md#d-063-the-web-frontend-is-a-static-react-app)).
+The diagram predates the web redesign: it still shows `voidforge-web`, which the static app in `web/` replaced ([D-066](decision-log.md#d-066-the-web-frontend-is-a-static-react-app)).
 
 Only `voidforge-host` changes the live `World`, and only the binaries talk to the outside world. Two offline callers also drive the core's state-changing entry points, never against live state: `voidforge-replay`, which rebuilds a world from a snapshot and the log, and tests. Host recovery and replay map a log record to `advance_to` or `apply` through one shared function, so they cannot drift apart; P2.5 adds it to a crate both may depend on, and P2.7 reuses it.
 
@@ -179,7 +179,7 @@ GitHub Actions runs the same commands as the `justfile`, so any red check reprod
 | Determinism suite | Double run, observation invariance, golden replays and snapshot round trip | Every PR | Yes |
 | Database tests | Migrations, store tests and the sqlx metadata check against a Postgres service | Every PR | Yes |
 | End-to-end | Compose runs Postgres and dex, CI runs the cargo-built server and the built web app beside them, bots play a scripted game through the API on the fast test rules, and Playwright plays the MVP loop through the web app in Chromium | Every PR | Yes |
-| Images | Build the server image; nothing is pushed | Main | No |
+| Images | Build the server and web images, run both under compose until healthy, then the smoke test against them; nothing is pushed (D-065) | Every PR | Not yet: adding it to the ruleset is the owner's change (D-065) |
 | Nightly | Long bot simulation on the fast test rules, crash-and-retry runs and the full golden replay set | Nightly | No; a failure opens an issue |
 
 Once CD exists, rolling back means redeploying the previous image, so migrations only ever add: no destructive change ships in the same release as the code that stops using it.

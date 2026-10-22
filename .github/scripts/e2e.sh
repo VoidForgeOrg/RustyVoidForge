@@ -21,11 +21,18 @@
 # leftover from a killed run is dropped only when the pid in its name is dead; otherwise it's
 # listed with the command that drops it.
 #
+# With --images (P5.2, D-065; `just smoke-images` with --smoke) the server and the web app are the
+# images, voidforge-server:local and voidforge-web:local (`just images`), not cargo builds: seed runs
+# from the server image, serve runs under compose (deploy/compose.images.yaml, as this run's own
+# project voidforge-images-e2e-<pid>), and the web walk starts the web image as its own child with
+# `docker run --rm -i` by image ID. Step 6 is then `docker compose stop`, which must end in exit 0.
+# Both images' IDs are printed, and the serve container is checked to run the server image's ID.
+#
 # E2E_ISSUER (default http://localhost:5556/dex) names the dex to use. The web walk needs web/'s
 # packages and Playwright's Chromium (`npm ci --prefix web`, then `npx --prefix web playwright
 # install chromium`). Logs go to E2E_LOG_DIR (default target/e2e/<run>): serve.log, bots.log,
 # seed.log, device-login.log, web-walk.log and web.log.
-# Usage: e2e.sh [--smoke]
+# Usage: e2e.sh [--smoke] [--images]
 # Exit codes: 0 passed; 1 the scenario failed, or serve didn't stop cleanly; 2 usage;
 # 3 the stack isn't ready (dex without the password grant, Postgres unreachable, serve not ready).
 set -euo pipefail
@@ -45,11 +52,17 @@ psql=(docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -
 sql() { "${psql[@]}" -c "$1" < /dev/null; }
 say() { echo "e2e: $*" >&2; }
 smoke=0
-case "${1:-}" in
-    --smoke) smoke=1 ;;
-    "") ;;
-    *) say "usage: e2e.sh [--smoke]"; exit 2 ;;
-esac
+images=0
+for arg in "$@"; do
+    case "$arg" in
+        --smoke) smoke=1 ;;
+        --images) images=1 ;;
+        *) say "usage: e2e.sh [--smoke] [--images]"; exit 2 ;;
+    esac
+done
+# The images' compose project for this run: never the owner's `voidforge` (D-065).
+images_compose=(docker compose -f deploy/compose.images.yaml -p "voidforge-images-e2e-$$")
+web_secret=voidforge-web-local-test-secret  # TEST-ONLY, from deploy/dex/config*.yaml
 drop_hint() { say "  docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -d postgres -c 'DROP DATABASE \"$1\"'"; }
 
 case "$db" in
@@ -64,18 +77,21 @@ grant=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
     || true)
 if [ "$grant" != 200 ]; then
     say "dex at $issuer doesn't grant alice a token through the password grant (HTTP $grant)."
-    say "Start the stack with the CI dex config: DEX_CONFIG=config.ci.yaml just up"
+    say "Point E2E_ISSUER at a throwaway dex running deploy/dex/config.ci.yaml (its issuer on its own"
+    say "port), for example E2E_ISSUER=http://localhost:5563/dex just smoke. Or, if the stack's dex is"
+    say "yours to reconfigure, start the stack with the CI dex config: DEX_CONFIG=config.ci.yaml just up"
     exit 3
 fi
 if ! sql "SELECT 1" > /dev/null; then
-    say "can't reach the stack's Postgres; start it with: DEX_CONFIG=config.ci.yaml just up"
+    say "can't reach the stack's Postgres; start it with: just up"
     exit 3
 fi
-# Leftovers: drop those whose creating pid is dead; list the rest.
+# Leftovers: drop those whose creating pid is dead; list the rest. `ps -p` sees every user's
+# processes; `kill -0` fails with EPERM for another user's, which would read as dead.
 for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\_e2e\_%' ORDER BY 1"); do
     case "$old" in "$prefix"[0-9]*_[0-9]*) ;; *) say "leftover $old has an unexpected name; not touching it"; continue ;; esac
     pid="${old##*_}"
-    if kill -0 "$pid" 2> /dev/null; then
+    if ps -p "$pid" > /dev/null 2>&1; then
         say "leftover $old: pid $pid is alive (perhaps another run); drop it yourself if it isn't:"
         drop_hint "$old"
     elif out=$(sql "DROP DATABASE IF EXISTS \"$old\"" 2>&1); then
@@ -89,16 +105,35 @@ for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\
     fi
 done
 
-# 2. The binaries, checked against .sqlx/ (D-034), never against a database.
-SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots
-target_dir=$(cargo metadata -q --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-server="$target_dir/debug/voidforge-server"
-bots="$target_dir/debug/voidforge-bots"
-# The web app's one origin: dex's redirect URI and the API's CORS origin (D-063).
+# 2. The binaries, checked against .sqlx/ (D-034), never against a database; with --images, the
+# images instead of the server and the web app (the bots still build, for the whole scenario).
+# `--images --smoke` builds nothing with cargo, so it needs no toolchain (the CI images job).
+if [ "$images" = 0 ] || [ "$smoke" = 0 ]; then
+    target_dir=$(cargo metadata -q --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+    server="$target_dir/debug/voidforge-server"
+    bots="$target_dir/debug/voidforge-bots"
+fi
+if [ "$images" = 1 ]; then
+    for image in voidforge-server:local voidforge-web:local; do
+        if ! docker image inspect "$image" > /dev/null 2>&1; then
+            say "the image $image isn't built; build both with: just images"
+            exit 3
+        fi
+    done
+    server_image=$(docker image inspect -f '{{.Id}}' voidforge-server:local)
+    web_image=$(docker image inspect -f '{{.Id}}' voidforge-web:local)
+    say "images: voidforge-server:local $server_image, voidforge-web:local $web_image"
+    [ "$smoke" = 1 ] || SQLX_OFFLINE=true cargo build -q --locked -p voidforge-bots
+else
+    SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots
+fi
+# The web app's one origin: dex's redirect URI and the API's CORS origin (D-066).
 web_origin=http://localhost:8081
 
 serve_pid=
 web_pid=
+serve_container=
+images_up=0
 cleanup() {
     local code=$?
     if [ -n "$web_pid" ] && kill -0 "$web_pid" 2> /dev/null; then
@@ -108,6 +143,19 @@ cleanup() {
     if [ -n "$serve_pid" ] && kill -0 "$serve_pid" 2> /dev/null; then
         kill -KILL "$serve_pid" 2> /dev/null || true
         wait "$serve_pid" 2> /dev/null || true
+    fi
+    # The walk's web container, if a crash left it running (it holds :8081).
+    if [ "$images" = 1 ] && docker container inspect "voidforge-walk-web-$$" > /dev/null 2>&1; then
+        docker rm -f "voidforge-walk-web-$$" > /dev/null 2>&1 \
+            || say "FAILED to remove the walk's web container; remove it with: docker rm -f voidforge-walk-web-$$"
+    fi
+    # The images' project goes whole, its serve container first killed if it still runs.
+    # Set before `up`, so an `up` that fails partway is torn down too (R1-4).
+    if [ "$images_up" = 1 ]; then
+        "${images_compose[@]}" logs --no-color --no-log-prefix server > "$log_dir/serve.log" 2>&1 || true
+        "${images_compose[@]}" kill server > /dev/null 2>&1 || true
+        "${images_compose[@]}" down --remove-orphans > /dev/null 2>&1 \
+            || say "FAILED to remove the compose project voidforge-images-e2e-$$; remove it with: docker compose -p voidforge-images-e2e-$$ down"
     fi
     # serve is gone, so nothing holds the database: no FORCE. A failed drop is reported, and fails
     # the run: it leaves a database behind.
@@ -125,26 +173,75 @@ trap cleanup EXIT
 # 3. A fresh universe.
 sql "CREATE DATABASE \"$db\""
 say "created $db"
-VOIDFORGE_DATABASE_URL="$url_base/$db" "$server" seed --seed "$seed" --players "$players" --rules "$rules" \
+if [ "$images" = 1 ]; then
+    seed_cmd=(docker run --rm --network host -e VOIDFORGE_DATABASE_URL "$server_image")
+    seed_rules="/etc/voidforge/$rules"
+else
+    seed_cmd=("$server")
+    seed_rules="$rules"
+fi
+VOIDFORGE_DATABASE_URL="$url_base/$db" "${seed_cmd[@]}" seed --seed "$seed" --players "$players" --rules "$seed_rules" \
     > "$log_dir/seed.log" 2>&1 || { say "seed failed:"; cat "$log_dir/seed.log" >&2; exit 1; }
 
-# 4. serve, on a free port, with the board rebuilt every second.
-VOIDFORGE_DATABASE_URL="$url_base/$db" "$server" serve --rules "$rules" --bind 127.0.0.1:0 \
-    --leaderboard-secs 1 --issuer "$issuer" --cors-origin "$web_origin" > "$log_dir/serve.log" 2>&1 &
-serve_pid=$!
+# 4. serve, on a free port, with the board rebuilt every second: a host process, or with --images
+# the server image under compose (host networking, so its port is this host's).
+serve_alive() {
+    if [ "$images" = 1 ]; then
+        [ "$(docker inspect -f '{{.State.Running}}' "$serve_container" 2> /dev/null)" = true ]
+    else
+        kill -0 "$serve_pid" 2> /dev/null
+    fi
+}
+if [ "$images" = 1 ]; then
+    port=$(python3 .github/scripts/free-port.py)
+    # Exported, since compose reads every variable of the file on each command, cleanup's too.
+    export VOIDFORGE_DATABASE_URL="$url_base/$db" VOIDFORGE_PORT="$port" VOIDFORGE_ISSUER="$issuer" \
+        VOIDFORGE_RULES_FILE="${rules#rules/}" VOIDFORGE_LEADERBOARD_SECS=1 VOIDFORGE_WEB_CLIENT_SECRET="$web_secret"
+    images_up=1
+    "${images_compose[@]}" up --detach --no-build server > "$log_dir/compose-up.log" 2>&1 \
+        || { say "compose couldn't start serve:"; cat "$log_dir/compose-up.log" >&2; exit 3; }
+    serve_container=$("${images_compose[@]}" ps -aq server)
+    ran=$(docker inspect -f '{{.Image}}' "$serve_container")
+    if [ "$ran" != "$server_image" ]; then
+        say "FAILED: the serve container runs $ran, not voidforge-server:local ($server_image)"
+        exit 1
+    fi
+else
+    VOIDFORGE_DATABASE_URL="$url_base/$db" "$server" serve --rules "$rules" --bind 127.0.0.1:0 \
+        --leaderboard-secs 1 --issuer "$issuer" --cors-origin "$web_origin" > "$log_dir/serve.log" 2>&1 &
+    serve_pid=$!
+fi
 addr=
 for _ in $(seq 1 300); do
+    if [ "$images" = 1 ]; then
+        "${images_compose[@]}" logs --no-color --no-log-prefix server > "$log_dir/serve.log" 2>&1 || true
+    fi
     addr=$(sed -n 's/^ready: listening on \([^,]*\),.*/\1/p' "$log_dir/serve.log")
     [ -n "$addr" ] && break
-    kill -0 "$serve_pid" 2> /dev/null || break
+    serve_alive || break
     sleep 0.2
 done
-if [ -z "$addr" ] || ! curl -sf -o /dev/null "http://$addr/openapi.json"; then
+# With --images on macOS the ready line names the bind in colima's VM; the Mac's side of the port is
+# colima's forward, ~20-30 ms later (D-065), so the first GET may retry for up to 5 s.
+openapi_ok() {
+    local tries=1
+    [ "$images" = 1 ] && tries=250
+    for _ in $(seq 1 "$tries"); do
+        curl -sf -o /dev/null "http://$addr/openapi.json" && return 0
+        sleep 0.02
+    done
+    return 1
+}
+if [ -z "$addr" ] || ! openapi_ok; then
     say "serve isn't ready; its log:"
     cat "$log_dir/serve.log" >&2
     exit 3
 fi
-say "serve is ready on $addr (pid $serve_pid)"
+if [ "$images" = 1 ]; then
+    say "serve is ready on $addr (container ${serve_container:0:12}, image $server_image)"
+else
+    say "serve is ready on $addr (pid $serve_pid)"
+fi
 
 # 5. The bots (skipped by --smoke).
 set +e
@@ -164,7 +261,7 @@ if [ "$bots_code" = 0 ] && [ "$smoke" = 0 ]; then
         2>&1 | tee "$log_dir/device-login.log"
     device_code=${PIPESTATUS[0]}
 fi
-# 5c. The web walk (D-063): the app built against this serve and served on its one origin, then
+# 5c. The web walk (D-066): the app built against this serve and served on its one origin, then
 # Playwright logs alice in through dex's pages, renders every screen and plays the MVP loop,
 # each step checked against the API's JSON. The build goes to this run's own directory, so a build
 # in web/dist (`just web`, another run) can't swap the app out from under the walk.
@@ -192,27 +289,41 @@ fi
 set -e
 
 # 6. One SIGTERM: serve drains and stops with its final snapshot, exit 0 (D-050). A serve that
-# already exited during the scenario is reported as such, never as a stop.
+# already exited during the scenario is reported as such, never as a stop. With --images it's
+# `docker compose stop`: SIGTERM to serve as PID 1, SIGKILL only after the grace period (40 s).
 stopped_by="one SIGTERM"
-if kill -0 "$serve_pid" 2> /dev/null; then
+if [ "$images" = 1 ]; then
+    if serve_alive; then
+        stopped_by="docker compose stop (one SIGTERM)"
+        stop_started=$(date +%s)
+        "${images_compose[@]}" stop server > /dev/null 2>&1 || true
+        say "docker compose stop took $(( $(date +%s) - stop_started )) s"
+    else
+        stopped_by="nothing: it had already exited during the scenario"
+    fi
+    "${images_compose[@]}" logs --no-color --no-log-prefix server > "$log_dir/serve.log" 2>&1 || true
+    serve_code=$(docker inspect -f '{{.State.ExitCode}}' "$serve_container")
+elif kill -0 "$serve_pid" 2> /dev/null; then
     kill -TERM "$serve_pid"
 else
     stopped_by="nothing: it had already exited during the scenario"
 fi
-for _ in $(seq 1 100); do
-    kill -0 "$serve_pid" 2> /dev/null || break
-    sleep 0.2
-done
-if kill -0 "$serve_pid" 2> /dev/null; then
-    say "serve didn't stop within 20 s of SIGTERM; killing it"
-    kill -KILL "$serve_pid" 2> /dev/null || true
-    wait "$serve_pid" 2> /dev/null || true
-    serve_code=124
-else
-    set +e
-    wait "$serve_pid"
-    serve_code=$?
-    set -e
+if [ "$images" = 0 ]; then
+    for _ in $(seq 1 100); do
+        kill -0 "$serve_pid" 2> /dev/null || break
+        sleep 0.2
+    done
+    if kill -0 "$serve_pid" 2> /dev/null; then
+        say "serve didn't stop within 20 s of SIGTERM; killing it"
+        kill -KILL "$serve_pid" 2> /dev/null || true
+        wait "$serve_pid" 2> /dev/null || true
+        serve_code=124
+    else
+        set +e
+        wait "$serve_pid"
+        serve_code=$?
+        set -e
+    fi
 fi
 # serve has been reaped on every path above, so cleanup has nothing left to kill.
 serve_pid=

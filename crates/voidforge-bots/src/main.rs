@@ -59,6 +59,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// For `just trace-check` (D-064): records one `telemetry_check` span, prints `trace_id=<hex>`
+    /// on stdout when exporting, and exits; 5 if the span can't be delivered.
+    #[command(hide = true)]
+    TelemetryCheck,
     /// The end-to-end scenario: alice and bob log in through dex (the password grant, so the CI
     /// dex config), join, build, race to colonize one planet and transport cargo, checking every
     /// answer. Needs a fresh universe on the fast rules, with no other player.
@@ -219,8 +223,17 @@ fn main() -> ExitCode {
             return ExitCode::from(5);
         }
     };
+    let check = matches!(cli.command, Command::TelemetryCheck);
     let code =
         match cli.command {
+            Command::TelemetryCheck => {
+                let span = tracing::info_span!("telemetry_check", binary = SERVICE);
+                span.in_scope(|| tracing::info!("telemetry check"));
+                if let Some(trace_id) = voidforge_telemetry::trace_id(&span) {
+                    println!("trace_id={trace_id}");
+                }
+                0
+            }
             Command::E2e {
                 api,
                 issuer,
@@ -251,10 +264,16 @@ fn main() -> ExitCode {
         };
     match telemetry.shutdown() {
         Ok(()) => ExitCode::from(code),
-        Err(error) => {
+        // Delivery is telemetry-check's whole job: there it fails (5).
+        Err(error) if check => {
             eprintln!("{SERVICE}: {error}");
-            // A failed shutdown is never a pass (D-016); a failure keeps its own code.
-            ExitCode::from(if code == 0 { 5 } else { code })
+            ExitCode::from(5)
+        }
+        // Otherwise the exit code reports the command; undelivered telemetry is loud, never a
+        // failed scenario (D-064 T6, amending D-016).
+        Err(error) => {
+            eprintln!("{SERVICE}: ERROR: {error}; the exit code still reports the command (D-064)");
+            ExitCode::from(code)
         }
     }
 }
