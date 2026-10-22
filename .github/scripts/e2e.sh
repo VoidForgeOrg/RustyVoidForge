@@ -137,6 +137,11 @@ cleanup() {
         kill -KILL "$serve_pid" 2> /dev/null || true
         wait "$serve_pid" 2> /dev/null || true
     fi
+    # The walk's web container, if a crash left it running (it holds :8081).
+    if [ "$images" = 1 ] && docker container inspect "voidforge-walk-web-$$" > /dev/null 2>&1; then
+        docker rm -f "voidforge-walk-web-$$" > /dev/null 2>&1 \
+            || say "FAILED to remove the walk's web container; remove it with: docker rm -f voidforge-walk-web-$$"
+    fi
     # The images' project goes whole, its serve container first killed if it still runs.
     if [ -n "$serve_container" ]; then
         "${images_compose[@]}" logs --no-color --no-log-prefix server > "$log_dir/serve.log" 2>&1 || true
@@ -251,7 +256,8 @@ fi
 # that relays its stop's SIGTERM and returns the container's exit code (P5.2's spikes, D-065).
 web_code=0
 if [ "$images" = 1 ]; then
-    web_args=(--web-cmd "docker run --rm -i --network host -e VOIDFORGE_WEB_CLIENT_SECRET $web_image")
+    # Named per run, so cleanup can remove one a crash left behind.
+    web_args=(--web-cmd "docker run --rm -i --name voidforge-walk-web-$$ --network host -e VOIDFORGE_WEB_CLIENT_SECRET $web_image")
 else
     web_args=(--web "$web")
 fi

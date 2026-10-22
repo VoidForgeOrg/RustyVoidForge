@@ -264,19 +264,29 @@ def start_web(argv, env, log, after_own_child=False, forwarded=False):
                 break
             proven, why = proves_identity(token)
             if not proven:
-                proc.kill()
-                proc.wait()
+                stop_child(proc)
                 raise RuntimeError("the app on localhost:%d didn't prove it's the walk's own voidforge-web (%s); "
                                    "nothing else was sent to it" % (port, why))
             return proc
-    if proc.poll() is None:
-        proc.kill()
-    proc.wait()
+    stop_child(proc)
     log.flush()
     with open(log.name, encoding="utf-8", errors="replace") as f:
         tail = f.read()[-600:]
     raise RuntimeError("voidforge-web didn't say %r within %d s (exit %s); its log %s ends: %s"
                        % (receipt, READY_SECONDS, proc.returncode, log.name, tail))
+
+
+def stop_child(proc):
+    """Stops a child the walk won't use: SIGTERM first, which `docker run` relays to its container
+    (SIGKILL to the CLI would leave the container running, holding the port: P5.2's table found
+    one), then SIGKILL after 15 s."""
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    proc.wait()
 
 
 def forward_ready(port, proc):
