@@ -197,6 +197,10 @@ if [ "$images" = 1 ]; then
         say "FAILED: the serve container runs $ran, not voidforge-server:local ($server_image)"
         exit 1
     fi
+else
+    VOIDFORGE_DATABASE_URL="$url_base/$db" "$server" serve --rules "$rules" --bind 127.0.0.1:0 \
+        --leaderboard-secs 1 --issuer "$issuer" > "$log_dir/serve.log" 2>&1 &
+    serve_pid=$!
 fi
 addr=
 for _ in $(seq 1 300); do
