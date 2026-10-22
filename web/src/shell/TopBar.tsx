@@ -5,7 +5,7 @@ import type { components } from "../api/schema";
 import { failure } from "../copy/messages";
 import { duration, mass, rate, thousands } from "../format";
 import { homeworldFirst, next, type Received, type Resource, total } from "../game/empire";
-import { useFleets, useLeaderboard, usePlanets, useRules } from "../game/queries";
+import { useArrivals, useFleets, useLeaderboard, usePlanets, useRules } from "../game/queries";
 import { useNow } from "../game/useNow";
 import { FleetsIcon, IngotIcon, LeaderboardIcon, OreIcon, PlanetsIcon, ShipyardIcon } from "../theme/icons";
 import type { Layout } from "./useLayout";
@@ -30,6 +30,7 @@ export function TopBar({
   // Controlled, so following one of the sheet's links closes it.
   const [more, setMore] = useState(false);
   const fleets = useFleets();
+  useArrivals();
   const board = useLeaderboard();
   const ids = homeworldFirst(me.planet_ids, me.homeworld_id);
   const planetReads = usePlanets(ids);

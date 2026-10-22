@@ -1,4 +1,5 @@
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { api } from "../api/client";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/authStore";
@@ -33,6 +34,28 @@ export const useMe = () =>
 
 export const useFleets = () =>
   api.useQuery("get", "/players/me/fleets", {}, { enabled: useLoggedIn(), refetchInterval: atValidUntil });
+
+/**
+ * An arrival changes what the fleets view doesn't hold: a colony joins the player's planets and
+ * score, and the planet's own view changes. The player's `valid_until` doesn't foresee it.
+ */
+export function useArrivals() {
+  const client = useQueryClient();
+  const fleets = useFleets().data;
+  const before = useRef(fleets);
+  useEffect(() => {
+    const was = before.current;
+    before.current = fleets;
+    if (!was || !fleets) return;
+    const flying = new Set(was.fleets.filter((f) => f.state === "in_transit").map((f) => f.fleet_id));
+    const arrived = fleets.fleets.flatMap((f) =>
+      f.state === "stationed" && flying.has(f.fleet_id) ? [f.at_planet_id] : [],
+    );
+    if (arrived.length === 0) return;
+    void client.invalidateQueries({ queryKey: ["get", "/players/me"] });
+    for (const id of arrived) void client.invalidateQueries({ queryKey: planetQuery(id).queryKey });
+  }, [client, fleets]);
+}
 
 const planetQuery = (id: number) =>
   api.queryOptions("get", "/planets/{id}", { params: { path: { id } } }, { refetchInterval: atValidUntil });
