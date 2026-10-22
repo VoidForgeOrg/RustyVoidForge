@@ -7,7 +7,9 @@ import {
   notFound,
   Outlet,
   redirect,
+  useRouter,
 } from "@tanstack/react-router";
+import { RouterProvider } from "react-aria-components";
 import { completeLogin, login } from "./auth/auth";
 import { LOGIN_FAILED } from "./copy/messages";
 import { failures, titles } from "./copy/voices";
@@ -32,7 +34,20 @@ export function number(text: string): number {
 
 const Uncharted = () => <Notice heading={failures.uncharted} copy={failures.unchartedCopy} />;
 
-const root = createRootRoute({ component: Outlet });
+/** HeroUI's and Perseus's links navigate through the router, so a click never reloads the page. */
+function Root() {
+  const router = useRouter();
+  return (
+    <RouterProvider
+      navigate={(href) => void router.navigate({ href })}
+      useHref={(href) => router.buildLocation({ to: href }).href}
+    >
+      <Outlet />
+    </RouterProvider>
+  );
+}
+
+const root = createRootRoute({ component: Root });
 
 const callback = createRoute({
   getParentRoute: () => root,

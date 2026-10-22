@@ -2,6 +2,7 @@ import { Button, Chip, Drawer, Popover } from "@heroui/react";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { components } from "../api/schema";
+import { failure } from "../copy/messages";
 import { duration, mass, rate, thousands } from "../format";
 import { homeworldFirst, next, type Received, type Resource, total } from "../game/empire";
 import { useFleets, useLeaderboard, usePlanets, useRules } from "../game/queries";
@@ -29,10 +30,18 @@ export function TopBar({
   const planetReads = usePlanets(homeworldFirst(me.planet_ids, me.homeworld_id));
   const fleets = useFleets();
   const board = useLeaderboard();
+  const ids = homeworldFirst(me.planet_ids, me.homeworld_id);
   const planets: Received<S["PlanetView"]>[] = planetReads.flatMap((q) =>
     q.data ? [{ view: q.data, receivedAt: q.dataUpdatedAt }] : [],
   );
-  const loaded = planets.length === me.planet_ids.length;
+  // The bar waits for every planet's first answer; after that a failed read leaves its planet
+  // out of the totals and says so, so a blip never blanks the bar.
+  const loaded = planetReads.every((q) => !q.isPending);
+  const missing = ids.flatMap((id, i) => {
+    const q = planetReads[i];
+    return q && !q.data && q.isError ? [{ id, error: q.error }] : [];
+  });
+  const partial = missing.length > 0 ? partialLabel(missing.map((m) => m.id)) : null;
   const flying = fleets.data?.fleets.filter((f) => f.state !== "stationed").length ?? 0;
   const stationed = (fleets.data?.fleets.length ?? 0) - flying;
   const rank = board.data?.entries.find((e) => e.player_id === me.player_id)?.rank;
@@ -44,27 +53,38 @@ export function TopBar({
 
   const resources = loaded && (
     <>
-      <ResourceItem resource="iron_ore" name="Iron Ore" icon={<OreIcon />} planets={planets} now={now} />
+      <ResourceItem
+        resource="iron_ore"
+        name="Iron Ore"
+        icon={<OreIcon />}
+        planets={planets}
+        missing={missing}
+        partial={partial}
+        now={now}
+      />
       <ResourceItem
         resource="iron_ingot"
         name="Iron Ingots"
         icon={<IngotIcon />}
         planets={planets}
+        missing={missing}
+        partial={partial}
         now={now}
       />
     </>
   );
-  const nextItem = <NextItem soonest={soonest} now={now} />;
+  const nextItem = <NextItem soonest={soonest} partial={partial} now={now} />;
   const rest = (labels: string) => (
     <>
       <Link
         to="/planets"
         className={item}
-        aria-label={`Holdings: ${me.planet_ids.length.toString()} planets, ${used.toString()} of ${slots.toString()} slots used`}
+        aria-label={`Holdings: ${me.planet_ids.length.toString()} planets, ${used.toString()} of ${slots.toString()} slots used${partial ? `, ${partial}` : ""}`}
       >
         <PlanetsIcon />
         {me.planet_ids.length} <span className={labels}>planets</span> · {used}/{slots}{" "}
         <span className={labels}>slots</span>
+        <Partial label={partial} />
       </Link>
       <Link
         to="/fleets"
@@ -127,17 +147,39 @@ export function TopBar({
   );
 }
 
+/** "partial: Planet #26 didn't answer", naming the planets a total leaves out. */
+function partialLabel(ids: number[]): string {
+  const names = ids.map((id) => `#${id.toString()}`);
+  const list =
+    names.length === 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1) ?? ""}`;
+  return `partial: Planet${ids.length === 1 ? "" : "s"} ${list} didn't answer`;
+}
+
+/** Marks a figure that leaves out planets whose read failed. */
+function Partial({ label }: { label: string | null }) {
+  return label ? (
+    <span className="text-xs text-warning" title={label}>
+      <span aria-hidden>partial</span>
+      <span className="sr-only">{label}</span>
+    </span>
+  ) : null;
+}
+
 function ResourceItem({
   resource,
   name,
   icon,
   planets,
+  missing,
+  partial,
   now,
 }: {
   resource: Resource;
   name: string;
   icon: ReactNode;
   planets: Received<S["PlanetView"]>[];
+  missing: { id: number; error: unknown }[];
+  partial: string | null;
   now: number;
 }) {
   const t = total(planets, resource, now);
@@ -146,13 +188,14 @@ function ResourceItem({
       <Button
         variant="ghost"
         className={item}
-        aria-label={`${name}: ${mass(t.amountG)} in storage, ${rate(t.rateGPerH)}`}
+        aria-label={`${name}: ${mass(t.amountG)} in storage, ${rate(t.rateGPerH)}${partial ? `, ${partial}` : ""}`}
       >
         {icon}
         {mass(t.amountG)}
         <span className={t.rateGPerH > 0 ? "text-success" : t.rateGPerH < 0 ? "text-danger" : "text-muted"}>
           {rate(t.rateGPerH)}
         </span>
+        <Partial label={partial} />
       </Button>
       <Popover.Content placement="bottom start">
         <Popover.Dialog>
@@ -168,6 +211,13 @@ function ResourceItem({
                 </Link>
               </li>
             ))}
+            {missing.map(({ id, error }) => (
+              <li key={id}>
+                <Link to="/planets/$planetId" params={{ planetId: id }} className={item}>
+                  #{id} <span className="text-warning">{failure(error, "page", { planet: id }).copy}</span>
+                </Link>
+              </li>
+            ))}
           </ul>
         </Popover.Dialog>
       </Popover.Content>
@@ -175,7 +225,15 @@ function ResourceItem({
   );
 }
 
-function NextItem({ soonest, now }: { soonest: ReturnType<typeof next>; now: number }) {
+function NextItem({
+  soonest,
+  partial,
+  now,
+}: {
+  soonest: ReturnType<typeof next>;
+  partial: string | null;
+  now: number;
+}) {
   if (!soonest) {
     return (
       <span className={item}>
@@ -189,6 +247,7 @@ function NextItem({ soonest, now }: { soonest: ReturnType<typeof next>; now: num
       <ShipyardIcon />
       <span className="display text-muted">Next</span> {soonest.label}{" "}
       <span className="text-muted">in {duration(soonest.at - now)}</span>
+      <Partial label={partial} />
     </>
   );
   return soonest.kind === "building" ? (
@@ -200,7 +259,7 @@ function NextItem({ soonest, now }: { soonest: ReturnType<typeof next>; now: num
       {content}
     </Link>
   ) : (
-    <Link to="/fleets" className={item}>
+    <Link to="/fleets" hash={`fleet-${soonest.fleetId.toString()}`} className={item}>
       {content}
     </Link>
   );

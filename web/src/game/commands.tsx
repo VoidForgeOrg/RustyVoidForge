@@ -97,7 +97,20 @@ export function useOrder() {
   const [key, setKey] = useState(newKey);
   const mutation = api.useMutation("post", "/commands");
 
+  // An order is in flight until its views are refetched: a click before then would see the old
+  // views and send again under a fresh key.
+  const [sending, setSending] = useState(false);
+
   async function send(order: Order): Promise<S["CommandAccepted"] | null> {
+    setSending(true);
+    try {
+      return await settle(order);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function settle(order: Order): Promise<S["CommandAccepted"] | null> {
     let accepted: S["CommandAccepted"];
     try {
       accepted = await mutation.mutateAsync({
@@ -123,5 +136,5 @@ export function useOrder() {
     return accepted;
   }
 
-  return { send, pending: mutation.isPending, error: mutation.error, reset: mutation.reset };
+  return { send, pending: sending, error: mutation.error, reset: mutation.reset };
 }

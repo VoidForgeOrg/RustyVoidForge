@@ -18,6 +18,7 @@ import {
   PlanetsIcon,
   UniverseIcon,
 } from "../theme/icons";
+import { planetName } from "../screens/parts";
 import { Failure, Notice } from "./Failure";
 import { useNavStore } from "./navStore";
 import { FastRules, TopBar } from "./TopBar";
@@ -193,9 +194,6 @@ function Title() {
   const title = useMatches({ select: (m) => m.findLast((r) => r.staticData.title)?.staticData.title });
   return title ? <h1 className="mb-4 text-2xl">{title}</h1> : null;
 }
-
-const planetName = (id: number, homeworld: number) =>
-  id === homeworld ? `#${id.toString()} Home` : `#${id.toString()}`;
 
 /** The nav item a path selects: a planet's own item for anything under it. */
 function navValue(pathname: string): string {

@@ -1,4 +1,4 @@
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import near from "../fixtures/planets_near.json";
 import home from "../fixtures/planet_view_alice_home.json";
@@ -119,4 +119,30 @@ test("the star charts list planets nearest first and name the unowned", async ()
     ["#1", "you", "(0.0, 0.0, 0.0)", "0.5 u"],
     ["#4", "player 7c8d9e10", "(1.0, 0.0, 0.0)", "0.5 u"],
   ]);
+});
+
+test("a nav click navigates in the app, keeping what's already read", async () => {
+  answer();
+  renderAt("/planets");
+  await screen.findByRole("list", { name: "Building slots" });
+  const reads = () =>
+    fetchMock.mock.calls.filter(([r]) => new URL((r as Request).url).pathname === "/players/me").length;
+  const before = reads();
+  const nav = screen.getByRole("navigation", { name: "Command" });
+  fireEvent.click(within(nav).getByRole("link", { name: /^Fleets/ }));
+  expect(await screen.findByRole("heading", { name: "Fleet Command" })).toBeInTheDocument();
+  expect(reads()).toBe(before);
+});
+
+test("a planet that doesn't answer leaves the top bar partial, not blank", async () => {
+  answer({ "/players/me": Response.json({ ...me, planet_ids: [1, 26] }) });
+  renderAt("/fleets");
+  const bar = await screen.findByRole("banner");
+  const partial = "partial: Planet #26 didn't answer";
+  expect(
+    await within(bar).findByRole("button", { name: `Iron Ore: 2,000.0 t in storage, +2.0 t/h, ${partial}` }),
+  ).toBeInTheDocument();
+  expect(
+    within(bar).getByRole("link", { name: new RegExp(`^Holdings: 2 planets, .*, ${partial}$`) }),
+  ).toBeInTheDocument();
 });

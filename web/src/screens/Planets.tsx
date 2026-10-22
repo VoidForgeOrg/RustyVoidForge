@@ -118,6 +118,8 @@ function Holding({
 }) {
   const { ran } = useLive(view, receivedAt);
   const phone = useLayout() === "phone";
+  // A lone planet always opens expanded, so collapsing it would lead straight back here.
+  const lone = useMe().data?.planet_ids.length === 1;
   const mine = view.owner === me;
   const building = view.ship_builds.filter((s) => s.state === "active").length;
   const waiting = view.ship_builds.length - building;
@@ -135,7 +137,7 @@ function Holding({
       {open ? (
         <div className="flex items-baseline gap-3">
           <div className="flex-1">{title}</div>
-          {!phone && (
+          {!phone && !lone && (
             <Link to="/planets" className="text-sm text-accent">
               Collapse
             </Link>

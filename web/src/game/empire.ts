@@ -78,16 +78,14 @@ export function next(
       if (s.state === "active" && s.eta) at(`${ship(s.ship_type)} on ${on}`, s.eta, s.shipyard_id);
     }
   }
-  for (const f of fleets?.view.fleets ?? []) {
-    if (!fleets || f.state === "stationed") continue;
-    const to = f.state === "in_transit" ? f.target_planet_id : f.origin_planet_id;
-    const label = `Fleet ${f.fleet_id.toString()} at #${to.toString()}`;
-    all.push({
-      kind: "fleet",
-      label,
-      at: local(f.arrives_at, fleets.view, fleets.receivedAt),
-      fleetId: f.fleet_id,
-    });
+  if (fleets) {
+    for (const f of fleets.view.fleets) {
+      if (f.state === "stationed") continue;
+      const to = f.state === "in_transit" ? f.target_planet_id : f.origin_planet_id;
+      const label = `Fleet ${f.fleet_id.toString()} at #${to.toString()}`;
+      const at = local(f.arrives_at, fleets.view, fleets.receivedAt);
+      all.push({ kind: "fleet", label, at, fleetId: f.fleet_id });
+    }
   }
   return all.reduce<Next | null>((soonest, n) => (soonest === null || n.at < soonest.at ? n : soonest), null);
 }

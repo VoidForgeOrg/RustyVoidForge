@@ -123,13 +123,25 @@ test("an order keeps its key for a retry, and takes a fresh one once the order i
   });
 });
 
-test("an order in flight can't be sent again", async () => {
-  let release = () => undefined as unknown;
+test("an order is in flight until its views are refetched, and can't be sent again meanwhile", async () => {
+  let answerOrder = () => undefined as unknown;
+  let answerRefetch = () => undefined as unknown;
+  let ordered = false;
+  const view = { ...home, buildings: [...home.buildings, shipyard] };
   answer({
+    "/planets/1": () =>
+      ordered
+        ? new Promise<Response>((resolve) => {
+            answerRefetch = () => {
+              resolve(Response.json(view));
+            };
+          })
+        : Response.json(view),
     "/commands": orders(
       () =>
         new Promise<Response>((resolve) => {
-          release = () => {
+          answerOrder = () => {
+            ordered = true;
             resolve(accepted());
           };
         }),
@@ -143,7 +155,13 @@ test("an order in flight can't be sent again", async () => {
     expect(sent).toHaveLength(1);
   });
   fireEvent.click(build);
-  release();
+  answerOrder();
+  // The 200 is in, but the planet's refetch hasn't answered yet.
+  await waitFor(() => {
+    expect(gets("/planets/1")).toBeGreaterThan(1);
+  });
+  fireEvent.click(build);
+  answerRefetch();
   await screen.findByText(/Construction of a Drill started on Planet #1/);
   expect(sent).toHaveLength(1);
 });
