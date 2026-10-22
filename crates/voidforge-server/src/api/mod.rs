@@ -53,6 +53,9 @@ pub const STALE_RETRY_AFTER_SECS: u64 = 1;
 /// The header that names a command's idempotency key (D-037).
 pub const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 
+/// The caller's W3C trace context, the only header `api.request` reads to join a trace (D-064).
+pub const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
+
 /// How long a browser may cache a CORS preflight's answer.
 pub const CORS_MAX_AGE: Duration = Duration::from_secs(600);
 
@@ -157,7 +160,7 @@ async fn traced(
         &span,
         request
             .headers()
-            .get("traceparent")
+            .get(TRACEPARENT)
             .and_then(|v| v.to_str().ok()),
     );
     let response = tracing::Instrument::instrument(next.run(request), span.clone()).await;
@@ -187,7 +190,7 @@ pub fn layered<S: Clone + Send + Sync + 'static>(
         CorsLayer::new()
             .allow_origin(AllowOrigin::list(cors_origins.iter().cloned()))
             .allow_methods([Method::GET, Method::POST])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE, IDEMPOTENCY_KEY])
+            .allow_headers([AUTHORIZATION, CONTENT_TYPE, IDEMPOTENCY_KEY, TRACEPARENT])
             .expose_headers([RETRY_AFTER])
             .max_age(CORS_MAX_AGE),
     )

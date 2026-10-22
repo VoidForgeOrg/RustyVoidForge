@@ -60,13 +60,14 @@ const movesFleets = new Set<Order["type"]>([
 
 /**
  * Refetches every view the order and its events changed, and waits for them. A refusal refetches
- * the same views, since it often means they're stale: the fleet or building is already gone.
+ * the same views, since it often means they're stale: the fleet or building is already gone. A
+ * send moves the player's `valid_until` to the fleet's arrival, so the player is read again.
  */
 async function refresh(client: QueryClient, order: Order, events: S["Event"][]) {
   const planets = new Set<number>();
   const own = planetOf(order);
   if (own !== null) planets.add(own);
-  let me = false;
+  let me = order.type === "send_fleet";
   for (const e of events) {
     if ("planet_id" in e) planets.add(e.planet_id);
     if (e.type === "planet_colonized") me = true;
@@ -90,6 +91,15 @@ function aboard(client: QueryClient, order: Order): S["Cargo"] | null {
 }
 
 const newKey = () => crypto.randomUUID();
+
+const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+/**
+ * A W3C trace context whose trace id is the order's idempotency key, so every attempt of one order
+ * joins one trace at the API. The browser records no spans of its own.
+ */
+const traceparent = (key: string) =>
+  `00-${key.replaceAll("-", "")}-${hex(crypto.getRandomValues(new Uint8Array(8)))}-01`;
 
 /**
  * One form's sender. The form keeps its idempotency key until an answer settles the order (a 200,
@@ -118,6 +128,7 @@ export function useOrder() {
     try {
       accepted = await mutation.mutateAsync({
         params: { header: { "Idempotency-Key": key } },
+        headers: { traceparent: traceparent(key) },
         body: { type: order.type, payload: order.payload } as Command,
       });
     } catch (error) {

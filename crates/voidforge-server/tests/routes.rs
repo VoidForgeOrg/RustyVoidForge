@@ -1514,8 +1514,9 @@ async fn a_panicking_handler_answers_500_internal() {
 }
 
 /// CORS allows exactly the listed origins (D-066): a listed origin's preflight is answered
-/// before the fallback, and its refusals carry the allow header and expose Retry-After, so the
-/// browser app can read them; an unlisted origin, or no list at all, gets no CORS headers.
+/// before the fallback and allows a command's headers, `traceparent` included, and its refusals
+/// carry the allow header and expose Retry-After, so the browser app can read them; an unlisted
+/// origin, or no list at all, gets no CORS headers.
 #[tokio::test]
 async fn cors_allows_exactly_the_listed_origins() {
     let app_origin = "http://localhost:8081";
@@ -1542,7 +1543,7 @@ async fn cors_allows_exactly_the_listed_origins() {
             .header("access-control-request-method", "POST")
             .header(
                 "access-control-request-headers",
-                "authorization,content-type,idempotency-key",
+                "authorization,content-type,idempotency-key,traceparent",
             )
             .send()
     };
@@ -1558,6 +1559,7 @@ async fn cors_allows_exactly_the_listed_origins() {
         .to_str()
         .unwrap();
     assert!(headers.contains("idempotency-key"), "{headers}");
+    assert!(headers.contains("traceparent"), "{headers}");
     assert!(
         r.headers()
             .get("access-control-allow-credentials")
