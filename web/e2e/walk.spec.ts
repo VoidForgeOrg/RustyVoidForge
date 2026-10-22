@@ -229,6 +229,11 @@ test("alice plays the MVP loop through the console", async ({ page, browser }) =
   );
   expect(back.cargo, "the transport unloaded at home").toEqual({ iron_ore_g: 0, iron_ingot_g: 0 });
 
+  // Closing the stepper returned to the colony's panel; Esc closes it back to the grid.
+  await expect(page.getByRole("dialog", { name: `#${colony.toString()}` })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/\/planets$/);
+
   // Logout forgets the login: the next login shows dex's form again.
   await page.getByText("Log out").click();
   await expect(page.getByRole("heading", { name: "Imperial Access" })).toBeVisible();

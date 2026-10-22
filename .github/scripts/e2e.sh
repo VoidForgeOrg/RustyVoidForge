@@ -166,19 +166,22 @@ if [ "$bots_code" = 0 ] && [ "$smoke" = 0 ]; then
 fi
 # 5c. The web walk (D-063): the app built against this serve and served on its one origin, then
 # Playwright logs alice in through dex's pages, renders every screen and plays the MVP loop,
-# each step checked against the API's JSON.
+# each step checked against the API's JSON. The build goes to this run's own directory, so a build
+# in web/dist (`just web`, another run) can't swap the app out from under the walk.
 web_code=0
 if [ "$bots_code" = 0 ]; then
+    run_dir="$(cd "$log_dir" && pwd)"
     {
-        VITE_API_URL="http://$addr" VITE_OIDC_ISSUER="$issuer" npm --prefix web run build \
-            && { (cd web && exec node_modules/.bin/vite preview) > "$log_dir/web.log" 2>&1 & web_pid=$!; } \
+        VITE_API_URL="http://$addr" VITE_OIDC_ISSUER="$issuer" \
+            npm --prefix web run build -- --outDir "$run_dir/dist" --emptyOutDir \
+            && { (cd web && exec node_modules/.bin/vite preview --outDir "$run_dir/dist") > "$log_dir/web.log" 2>&1 & web_pid=$!; } \
             && for _ in $(seq 1 100); do
                 curl -sf -o /dev/null "$web_origin/" && break
                 kill -0 "$web_pid" 2> /dev/null || break
                 sleep 0.2
             done \
             && curl -sf -o /dev/null "$web_origin/" \
-            && WALK_API="http://$addr" WALK_ISSUER="$issuer" npm --prefix web run walk -- --output "$(cd "$log_dir" && pwd)/walk"
+            && WALK_API="http://$addr" WALK_ISSUER="$issuer" npm --prefix web run walk -- --output "$run_dir/walk"
     } > "$log_dir/web-walk.log" 2>&1
     web_code=$?
     tail -n 30 "$log_dir/web-walk.log"
