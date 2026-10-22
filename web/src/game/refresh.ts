@@ -1,6 +1,6 @@
 import { ApiError } from "../api/client";
 
-/** No query refetches sooner than this after its last answer (D14; the read budget is 10/s). */
+/** No query refetches sooner than this after its last answer (the read budget is 10/s, D-054). */
 export const FLOOR_MS = 2_000;
 
 /** How long until a view's due time, measured from the view's own `as_of`, not this clock. */

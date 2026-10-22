@@ -8,7 +8,6 @@ import { useChart, useMe } from "../game/queries";
 import { Failure } from "../shell/Failure";
 import { DEFAULT_RADIUS_U, DU_PER_U, planetName, RadiusField } from "./parts";
 
-/** Star charts: planets near one of the player's own, nearest first. */
 export function Universe() {
   const me = useMe().data;
   const [center, setCenter] = useState<number | null>(null);

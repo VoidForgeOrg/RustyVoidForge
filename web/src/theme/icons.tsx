@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-// One hand-drawn set on a 24 grid with one stroke (D13). Icons are decoration: the word beside
+// One hand-drawn set on a 24 grid with one stroke. Icons are decoration: the word beside
 // each one carries the meaning, so every icon is hidden from assistive tech.
 
 function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {

@@ -16,9 +16,7 @@ export function useLive(view: { as_of: string; valid_until?: string | null }, re
   return { ran: ratedFor(view, receivedAt, now), gameNow: viewNow(view, receivedAt, now) };
 }
 
-/** Distance units in a world unit (D-021). */
 export const DU_PER_U = 1_000;
-/** The default search radius, in world units. */
 export const DEFAULT_RADIUS_U = 50;
 
 /** A search radius in whole world units, for the star charts and the mission's targets. */

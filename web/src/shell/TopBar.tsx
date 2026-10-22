@@ -13,7 +13,7 @@ type S = components["schemas"];
 
 const item = "flex items-center gap-2 rounded px-2 py-1 whitespace-nowrap hover:bg-default";
 
-/** The empire at a glance (D15): every figure comes from reads the screens already make. */
+/** The empire at a glance: every figure comes from reads the screens already make. */
 export function TopBar({
   me,
   email,

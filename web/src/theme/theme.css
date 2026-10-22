@@ -1,4 +1,4 @@
-/* The console theme (D13): one dark theme over HeroUI's tokens. Colours are hex, so the contrast
+/* The console theme (D-063): one dark theme over HeroUI's tokens. Colours are hex, so the contrast
    test can read them; theme.test.ts holds every text and edge pair to WCAG AA. */
 
 .dark {

@@ -9,7 +9,7 @@ import "@fontsource/chakra-petch/latin-500.css";
 import "@fontsource/chakra-petch/latin-600.css";
 import "./app.css";
 
-// No automatic retries: a failure waits for its Retry-After or the player's Try again (D14).
+// No automatic retries: a failure waits for its Retry-After or the player's Try again.
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: FLOOR_MS } },
 });

@@ -2,7 +2,7 @@ import { buttonVariants, Spinner } from "@heroui/react";
 import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { empties } from "../copy/voices";
-import { building as buildingName, duration, owner, percent, ship, ships } from "../format";
+import { building as buildingName, duration, owner, percent, ship, shipCounts, ships } from "../format";
 import { homeworldFirst } from "../game/empire";
 import { grown } from "../game/live";
 import { useFleets, useMe, usePlanet } from "../game/queries";
@@ -160,7 +160,6 @@ function Holding({
   );
 }
 
-/** The player's own fleets on their way here. */
 function Arrivals({ planetId }: { planetId: number }) {
   const fleets = useFleets();
   const now = useNow();
@@ -228,14 +227,13 @@ function Slots({ view, ran }: { view: PlanetView; ran: number }) {
 }
 
 function Roster({ view, me }: { view: PlanetView; me: string }) {
-  const counts = new Map<"colony_ship" | "cargo_vessel", number>();
-  for (const s of view.roster) counts.set(s.ship_type, (counts.get(s.ship_type) ?? 0) + 1);
+  const counts = shipCounts(view.roster);
   const ours = view.roster.some((s) => s.owner === me);
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-separator pt-3">
       <span className="display text-muted">Ships here</span>
-      {counts.size === 0 && <span className="text-muted">{empties.roster}</span>}
-      {[...counts].map(([type, n]) => (
+      {counts.length === 0 && <span className="text-muted">{empties.roster}</span>}
+      {counts.map(([type, n]) => (
         <span key={type} className="inline-flex items-center gap-1" title={ship(type)}>
           {shipIcons[type]}
           {ships(n, type)}

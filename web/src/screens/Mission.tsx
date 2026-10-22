@@ -14,13 +14,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { components } from "../api/schema";
 import { checks, copy } from "../copy/messages";
+import { empties, orders } from "../copy/voices";
 import {
   distance,
   duration,
   mass,
   mission as missionName,
+  missionTo,
   owner,
   parseTonnes,
+  shipCounts,
   ship,
   ships as shipsText,
   travelMs,
@@ -117,7 +120,6 @@ function Stepper({
     : Math.min(...chosen.map((s) => rules.ships[s.ship_type].speed_du_per_h));
   const has = (t: S["ShipType"]) => chosen.some((s) => s.ship_type === t);
 
-  // The step's own checks, and the facts the view already holds that the API would refuse on.
   const shipsCheck = (() => {
     if (chosen.length === 0) return checks.ships;
     if (cargo.iron_ore_g === null || cargo.iron_ingot_g === null) return checks.cargo;
@@ -133,7 +135,6 @@ function Stepper({
       : m === "transport" && !has("cargo_vessel")
         ? copy("no_cargo_vessel", "command")
         : null;
-  // Until the player picks one, the first mission these ships can fly.
   const mission =
     chosenMission !== null && missionCheck(chosenMission) === null
       ? chosenMission
@@ -175,7 +176,7 @@ function Stepper({
       id = assembled() ?? null;
       setFleetId(id);
       if (id === null) {
-        setShown("The fleet was assembled; send it from Fleet Command.");
+        setShown(orders.assembledUnsent);
         return;
       }
     }
@@ -207,7 +208,7 @@ function Stepper({
           <>
             <fieldset className="flex flex-col gap-2">
               <legend className="display mb-1 text-muted">Ships here</legend>
-              {roster.length === 0 && <p className="text-muted">No ships in orbit.</p>}
+              {roster.length === 0 && <p className="text-muted">{empties.roster}</p>}
               {roster.map((s) => (
                 <Checkbox
                   key={s.ship_id}
@@ -289,7 +290,13 @@ function Stepper({
         {step === 3 && targetId !== null && (
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
             <dt className="display text-muted">Ships</dt>
-            <dd>{fleet || fleetId !== null ? `Fleet #${(fleetId ?? 0).toString()}` : count(chosen)}</dd>
+            <dd>
+              {fleet || fleetId !== null
+                ? `Fleet #${(fleetId ?? 0).toString()}`
+                : shipCounts(chosen)
+                    .map(([t, n]) => shipsText(n, t))
+                    .join(", ")}
+            </dd>
             <dt className="display text-muted">Cargo</dt>
             <dd>
               {fleet
@@ -297,15 +304,11 @@ function Stepper({
                 : `${mass(cargo.iron_ore_g ?? 0)} ore, ${mass(cargo.iron_ingot_g ?? 0)} ingots`}
             </dd>
             <dt className="display text-muted">Mission</dt>
-            <dd>
-              {missionName(mission)} Planet #{targetId.toString()}
-            </dd>
+            <dd>{missionTo(mission, targetId)}</dd>
           </dl>
         )}
         {step === 3 && fleetId !== null && !fleet && (
-          <p className="text-sm text-muted">
-            Fleet #{fleetId.toString()} is assembled and stationed at Planet #{view.planet_id.toString()}.
-          </p>
+          <p className="text-sm text-muted">{orders.assembled(fleetId, view.planet_id)}</p>
         )}
         {shown && <p className="text-sm text-warning">{shown}</p>}
         {step === 3 && sendFailed && (
@@ -378,13 +381,6 @@ function Stepper({
     </>
   );
 }
-
-const count = (chosen: Ship[]) =>
-  (["colony_ship", "cargo_vessel"] as const)
-    .map((t) => [t, chosen.filter((s) => s.ship_type === t).length] as const)
-    .filter(([, n]) => n > 0)
-    .map(([t, n]) => shipsText(n, t))
-    .join(", ");
 
 /** Planets in range, nearest first, with the trip's time; those the mission can't target are disabled. */
 function Targets({

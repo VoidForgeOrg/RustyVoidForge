@@ -13,12 +13,12 @@ export interface Received<T> {
 
 export type Resource = "iron_ore" | "iron_ingot";
 
-export interface PlanetStock {
+interface PlanetStock {
   planetId: number;
   stock: Stock;
 }
 
-export interface Total {
+interface Total {
   amountG: number;
   capG: number;
   rateGPerH: number;

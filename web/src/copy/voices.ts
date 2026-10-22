@@ -1,4 +1,4 @@
-// The console's own voice (D13): titles, headings and empty states. Verbs, numbers and §6.1's
+// The console's own voice (D-063): titles, headings and empty states. Verbs, numbers and §6.1's
 // copy stay plain and live elsewhere.
 
 export const titles = {
@@ -31,4 +31,7 @@ export const failures = {
 
 export const orders = {
   done: "Order executed",
+  assembledUnsent: "The fleet was assembled; send it from Fleet Command.",
+  assembled: (fleet: number, planet: number) =>
+    `Fleet #${fleet.toString()} is assembled and stationed at Planet #${planet.toString()}.`,
 };

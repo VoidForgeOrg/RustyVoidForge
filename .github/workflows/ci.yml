@@ -173,8 +173,7 @@ jobs:
   # Postgres and dex with the CI dex config (the password grant on), then .github/scripts/e2e.sh,
   # which seeds a fresh universe on the fast rules, runs the serve binary on the host and the
   # bots against it, then the web walk in Chromium (D-063). Then the token checks against the
-  # real dex (D-046). `just e2e` and
-  # `just dex-test` run the same against the local stack.
+  # real dex (D-046). `just e2e` and `just dex-test` run the same against the local stack.
   e2e:
     name: e2e
     runs-on: ubuntu-24.04

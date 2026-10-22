@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import type { components } from "../api/schema";
 import { copy } from "../copy/messages";
 import { empties } from "../copy/voices";
-import { at, duration, mass, mission, ships, speed } from "../format";
+import { at, duration, mass, mission, missionTo, shipCounts, ships, speed } from "../format";
 import { useFleets, useMe } from "../game/queries";
 import { Failure } from "../shell/Failure";
 import { FleetsIcon } from "../theme/icons";
@@ -51,8 +51,6 @@ function FleetCard({
   receivedAt: number;
 }) {
   const { gameNow } = useLive(view, receivedAt);
-  const counts = new Map<"colony_ship" | "cargo_vessel", number>();
-  for (const s of fleet.ships) counts.set(s.ship_type, (counts.get(s.ship_type) ?? 0) + 1);
   const planet = (id: number) => (
     <Link to="/planets/$planetId" params={{ planetId: id }} className="text-accent">
       #{id}
@@ -66,7 +64,11 @@ function FleetCard({
         Fleet {fleet.fleet_id}
         <span className="ml-auto text-sm text-muted">{stateWords[fleet.state]}</span>
       </h2>
-      <p>{[...counts].map(([type, n]) => ships(n, type)).join(", ")}</p>
+      <p>
+        {shipCounts(fleet.ships)
+          .map(([type, n]) => ships(n, type))
+          .join(", ")}
+      </p>
       <p className="text-sm">
         <span className="text-muted">Cargo</span> {mass(fleet.cargo.iron_ore_g)} ore,{" "}
         {mass(fleet.cargo.iron_ingot_g)} ingots{" "}
@@ -138,9 +140,4 @@ function FleetOrders({ fleet, gameNow }: { fleet: Fleet; gameNow: number }) {
       )}
     </Actions>
   );
-}
-
-function missionTo(m: components["schemas"]["Mission"], target: number): string {
-  const t = `Planet #${target.toString()}`;
-  return m === "colonize" ? `Colonize ${t}` : m === "transport" ? `Transport to ${t}` : `Move to ${t}`;
 }

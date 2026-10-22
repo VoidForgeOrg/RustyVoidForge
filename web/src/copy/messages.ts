@@ -13,9 +13,9 @@ export interface Fill {
 }
 
 /** What the screen does with a failure. */
-export type Kind = "inline" | "retry" | "login" | "universe-full";
+type Kind = "inline" | "retry" | "login" | "universe-full";
 
-export interface Message {
+interface Message {
   copy: string;
   /** The API's code, shown beside the copy; null for the app's own states (§6.2). */
   code: ErrorCode | null;
@@ -78,7 +78,7 @@ function kindOf(code: ErrorCode, context: Context): Kind {
 }
 
 /** "in a moment" names the wait once Retry-After is over 2 s (§5.5). */
-export function withWait(text: string, retryAfter: number | null): string {
+function withWait(text: string, retryAfter: number | null): string {
   return retryAfter !== null && retryAfter > 2
     ? text.replace("in a moment", `in ${retryAfter.toString()} seconds`)
     : text;

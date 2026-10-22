@@ -128,7 +128,6 @@ pub fn routes() -> Vec<Route> {
     ]
 }
 
-/// The API, allowing `cors_origins` through CORS.
 pub fn router(state: AppState, cors_origins: &[HeaderValue]) -> Router {
     layered(
         routes()

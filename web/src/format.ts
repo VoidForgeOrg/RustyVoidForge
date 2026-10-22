@@ -10,8 +10,8 @@ export type ShipType = S["ShipType"];
 export type Mission = S["Mission"];
 export type FlowStatus = S["FlowStatus"];
 
-export const MINUS = "−";
-export const UNKNOWN = "—";
+const MINUS = "−";
+const UNKNOWN = "—";
 
 const G_PER_TENTH_T = 100_000n;
 const DU_PER_TENTH_U = 100n;
@@ -172,7 +172,7 @@ export function progress(deliveredG: number, costG: number): string {
 }
 
 /** The public short form of a player's ID: the UUID's last 8 hex digits. */
-export const shortName = (playerId: string) => `player ${playerId.slice(-8)}`;
+const shortName = (playerId: string) => `player ${playerId.slice(-8)}`;
 
 export const player = (id: string, me: string) => (id === me ? "you" : shortName(id));
 
@@ -200,6 +200,13 @@ export function ship(t: ShipType): string {
 
 export const ships = (n: number, t: ShipType) => `${n.toString()} ${ship(t)}${n === 1 ? "" : "s"}`;
 
+/** How many of each ship type, in the game's order, leaving out a type with none. */
+export function shipCounts(list: readonly { ship_type: ShipType }[]): [ShipType, number][] {
+  return (["colony_ship", "cargo_vessel"] as const)
+    .map((t): [ShipType, number] => [t, list.filter((s) => s.ship_type === t).length])
+    .filter(([, n]) => n > 0);
+}
+
 export function mission(m: Mission): string {
   switch (m) {
     case "colonize":
@@ -209,6 +216,12 @@ export function mission(m: Mission): string {
     case "move":
       return "Move";
   }
+}
+
+/** A mission and its target: `Colonize Planet #12`, `Transport to Planet #12`, `Move to Planet #12`. */
+export function missionTo(m: Mission, target: number): string {
+  const t = `Planet #${target.toString()}`;
+  return m === "colonize" ? `Colonize ${t}` : m === "transport" ? `Transport to ${t}` : `Move to ${t}`;
 }
 
 /** What a flow belongs to, which decides its words. */

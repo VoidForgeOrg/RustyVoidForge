@@ -1,6 +1,6 @@
 import { type Browser, expect, type Locator, type Page, test } from "@playwright/test";
 
-// The web walk (D7, D-062): alice logs in through dex's real pages, every screen renders from the
+// The web walk (D-062, D-063): alice logs in through dex's real pages, every screen renders from the
 // live game, and the MVP loop runs through the console, each step checked against the API's JSON
 // with alice's own token. e2e.sh starts the API, serves the built app and names them here.
 

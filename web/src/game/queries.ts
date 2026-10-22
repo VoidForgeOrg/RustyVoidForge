@@ -11,7 +11,7 @@ interface QueryState<T> {
   state: { data: T | undefined; dataUpdatedAt: number; error: unknown };
 }
 
-/** Refetch at the time `due` names for the view, within D14's limits. */
+/** Refetch at the time `due` names for the view, within the read budget's limits. */
 function refetchAt<T extends Timed>(due: (view: T) => number | null) {
   return ({ state }: QueryState<T>) => {
     const at = state.data ? due(state.data) : null;
