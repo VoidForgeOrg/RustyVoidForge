@@ -30,6 +30,11 @@ pub struct Args {
     /// on stdout when exporting, and exit, reading no other setting.
     #[arg(long, hide = true)]
     pub telemetry_check: bool,
+    /// For a container's healthcheck (P5.2, D-065): GET this URL (the web's own `/`), bounded at
+    /// 2 s, and exit 0 only on a 200, otherwise 1; it reads no other setting and starts no
+    /// telemetry.
+    #[arg(long, hide = true, value_name = "URL")]
+    pub health_check: Option<String>,
     /// The OIDC issuer; the web app reads its endpoints from the issuer's discovery document.
     #[arg(long, env = "VOIDFORGE_WEB_ISSUER", default_value = DEFAULT_ISSUER)]
     pub issuer: String,

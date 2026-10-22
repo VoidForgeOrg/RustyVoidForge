@@ -1,0 +1,6 @@
+# The build context for dockerfiles/Dockerfile: sources only. target/ alone would be gigabytes.
+target/
+.git/
+**/target/
+docs/
+tests/
