@@ -37,17 +37,17 @@ async function refusal(response: Response): Promise<Failure> {
 export const fetchClient = createFetchClient<paths>({ baseUrl: import.meta.env.VITE_API_URL });
 
 // The only place the ID token is read. A 401 means dex's token is no longer accepted, so the
-// login ends and the player is offered a new one.
+// login ends and the player is offered a new one. Every POST is an order.
 fetchClient.use({
   onRequest({ request }) {
     const user = useAuth.getState().user;
-    if (user?.expired) void logout();
+    if (user?.expired) void logout(request.method === "POST");
     else if (user?.id_token) request.headers.set("Authorization", `Bearer ${user.id_token}`);
     return request;
   },
-  async onResponse({ response }) {
+  async onResponse({ request, response }) {
     if (response.ok) return response;
-    if (response.status === 401) void logout();
+    if (response.status === 401) void logout(request.method === "POST");
     throw new ApiError(await refusal(response));
   },
   onError({ error }) {

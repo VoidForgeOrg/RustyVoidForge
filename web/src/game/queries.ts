@@ -45,7 +45,7 @@ export function usePlanets(ids: readonly number[]) {
   return useQueries({ queries: ids.map((id) => ({ ...planetQuery(id), enabled })) });
 }
 
-export const useNear = (near: string, radius: number, ready: boolean) =>
+const useNear = (near: string, radius: number, ready: boolean) =>
   api.useQuery(
     "get",
     "/planets",
@@ -55,6 +55,21 @@ export const useNear = (near: string, radius: number, ready: boolean) =>
       refetchInterval: atValidUntil,
     },
   );
+
+/** Planets within `radiusDu` of the planet `center`, nearest first. */
+export function useChart(center: number, radiusDu: number) {
+  const planet = usePlanet(center);
+  const p = planet.data?.position;
+  const near = useNear(
+    p ? `${p.x.toString()},${p.y.toString()},${p.z.toString()}` : "",
+    radiusDu,
+    p !== undefined,
+  );
+  const rows = near.data
+    ? [...near.data.planets].sort((a, b) => a.distance - b.distance || a.planet_id - b.planet_id)
+    : undefined;
+  return { planet, near, rows };
+}
 
 export const useLeaderboard = () =>
   api.useQuery(

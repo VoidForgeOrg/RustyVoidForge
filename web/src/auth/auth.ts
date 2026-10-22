@@ -14,7 +14,8 @@ const manager = new UserManager({
 });
 
 function show(user: User | null) {
-  useAuth.setState({ user: user && !user.expired ? user : null });
+  const shown = user && !user.expired ? user : null;
+  useAuth.setState(shown ? { user: shown, lostOrder: false } : { user: null });
 }
 
 manager.events.addUserLoaded(show);
@@ -30,7 +31,9 @@ export function login(returnTo: string) {
   return manager.signinRedirect({ state: returnTo });
 }
 
-export function logout() {
+/** Forgets the login; `lostOrder` says it ended on an order that wasn't sent. */
+export function logout(lostOrder = false) {
+  if (lostOrder) useAuth.setState({ lostOrder });
   return manager.removeUser();
 }
 

@@ -1,10 +1,10 @@
-import { Button, Chip, Spinner } from "@heroui/react";
+import { Button, Chip, Spinner, Toast } from "@heroui/react";
 import { NavMenu } from "@kedar42/perseus";
 import { Outlet, useLocation, useMatches } from "@tanstack/react-router";
 import { useState } from "react";
 import { login, logout } from "../auth/auth";
 import { useAuth } from "../auth/authStore";
-import { failure } from "../copy/messages";
+import { failure, ORDER_LOST } from "../copy/messages";
 import { access } from "../copy/voices";
 import type { components } from "../api/schema";
 import { homeworldFirst } from "../game/empire";
@@ -33,13 +33,14 @@ export function AppShell() {
 /** Logged out: the access panel alone, with no navigation. */
 function Gate() {
   const here = useLocation({ select: (l) => l.href });
+  const lostOrder = useAuth((s) => s.lostOrder);
   return (
     <div className="flex min-h-dvh flex-col">
       <Bar />
       <main className="flex flex-1 items-center justify-center p-4">
         <section className="frame flex max-w-md flex-col gap-4 border border-separator bg-surface p-6">
           <h1 className="text-2xl">{access.heading}</h1>
-          <p className="text-muted">{access.prompt}</p>
+          <p className="text-muted">{lostOrder ? ORDER_LOST : access.prompt}</p>
           <Button className="self-start" variant="primary" onPress={() => void login(here)}>
             Log in
           </Button>
@@ -171,6 +172,7 @@ function Frame({ me }: { me: components["schemas"]["PlayerView"] }) {
           <Outlet />
         </main>
       </div>
+      <Toast.Provider placement="bottom end" />
     </div>
   );
 }

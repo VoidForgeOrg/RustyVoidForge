@@ -82,6 +82,8 @@ const planet = createRoute({
     parse: (p) => ({ planetId: number(p.planetId) }),
     stringify: (p) => ({ planetId: p.planetId.toString() }),
   },
+  // `?mission=true` opens the New mission stepper over the planet.
+  validateSearch: (s): { mission?: true } => (s.mission === true ? { mission: true } : {}),
   component: lazyRouteComponent(() => import("./screens/Planets"), "Planet"),
 });
 
@@ -105,6 +107,9 @@ const fleets = createRoute({
   getParentRoute: () => game,
   path: "/fleets",
   staticData: { title: titles.fleets },
+  // `?send=<fleet>` opens the New mission stepper at the target, for a stationed fleet.
+  validateSearch: (s): { send?: number } =>
+    typeof s.send === "number" && Number.isSafeInteger(s.send) ? { send: s.send } : {},
   component: lazyRouteComponent(() => import("./screens/Fleets"), "Fleets"),
 });
 

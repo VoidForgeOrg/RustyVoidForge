@@ -28,3 +28,7 @@ export const failures = {
   uncharted: "Uncharted coordinates",
   unchartedCopy: "No such planet or slot is on record. Check the number and try again.",
 };
+
+export const orders = {
+  done: "Order executed",
+};

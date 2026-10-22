@@ -4,14 +4,14 @@ import { useState } from "react";
 import { empties } from "../copy/voices";
 import { distance, owner, position } from "../format";
 import { homeworldFirst } from "../game/empire";
-import { useMe, useNear, usePlanet } from "../game/queries";
+import { useChart, useMe } from "../game/queries";
 import { Failure } from "../shell/Failure";
 import { planetName } from "./parts";
 
 /** Distance units in a world unit (D-021). */
-const DU_PER_U = 1_000;
+export const DU_PER_U = 1_000;
 /** The default search radius, in world units. */
-const DEFAULT_RADIUS_U = 50;
+export const DEFAULT_RADIUS_U = 50;
 
 /** Star charts: planets near one of the player's own, nearest first. */
 export function Universe() {
@@ -71,18 +71,11 @@ export function Universe() {
 }
 
 function Near({ center, radiusDu, me }: { center: number; radiusDu: number; me: string }) {
-  const planet = usePlanet(center);
-  const p = planet.data?.position;
-  const near = useNear(
-    p ? `${p.x.toString()},${p.y.toString()},${p.z.toString()}` : "",
-    radiusDu,
-    p !== undefined,
-  );
+  const { planet, near, rows } = useChart(center, radiusDu);
   if (planet.isError)
     return <Failure error={planet.error} fill={{ planet: center }} onRetry={() => void planet.refetch()} />;
   if (near.isError) return <Failure error={near.error} onRetry={() => void near.refetch()} />;
-  if (!near.data) return <Spinner aria-label="Charting" />;
-  const rows = [...near.data.planets].sort((a, b) => a.distance - b.distance || a.planet_id - b.planet_id);
+  if (!rows) return <Spinner aria-label="Charting" />;
   if (rows.length === 0) return <p className="text-muted">{empties.near}</p>;
   return (
     <Table>

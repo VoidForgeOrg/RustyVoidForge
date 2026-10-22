@@ -131,6 +131,32 @@ export function at(t: string, nowMs: number): string {
   return `${shown} (in ${duration(secs * 1_000)})`;
 }
 
+const G_PER_T = 1_000_000n;
+const MS_PER_H = 3_600_000n;
+
+/**
+ * Tonnes typed into a cargo field, as grams, exactly: digits and up to six decimals (`250`,
+ * `12.5`, `.5`). A blank field reads 0. Null for a sign, a separator, a seventh decimal, or past a
+ * safe integer.
+ */
+export function parseTonnes(text: string): number | null {
+  const t = text.trim();
+  if (t === "") return 0;
+  const m = /^(\d*)(?:\.(\d{1,6}))?$/.exec(t);
+  if (!m || (m[1] === "" && m[2] === undefined)) return null;
+  const g = BigInt(m[1] || "0") * G_PER_T + BigInt((m[2] ?? "").padEnd(6, "0"));
+  return g <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(g) : null;
+}
+
+/** How long a trip takes at a speed, in milliseconds, rounded up. */
+export function travelMs(distanceDu: number, speedDuPerH: number): number | null {
+  const d = big(distanceDu);
+  const v = big(speedDuPerH);
+  if (d === null || v === null || v <= 0n || d < 0n) return null;
+  const ms = (d * MS_PER_H + v - 1n) / v;
+  return ms <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(ms) : null;
+}
+
 /** Percent of a cost delivered, rounded down, so it says 100 only when done. */
 export function percent(deliveredG: number, costG: number): number {
   const d = big(deliveredG);
@@ -150,8 +176,7 @@ export const shortName = (playerId: string) => `player ${playerId.slice(-8)}`;
 
 export const player = (id: string, me: string) => (id === me ? "you" : shortName(id));
 
-export const owner = (id: string | null | undefined, me: string) =>
-  id ? player(id, me) : "unowned";
+export const owner = (id: string | null | undefined, me: string) => (id ? player(id, me) : "unowned");
 
 export function building(t: BuildingType): string {
   switch (t) {

@@ -136,3 +136,38 @@ test("flow words are §3's table", () => {
   ];
   for (const [status, of, want] of table) expect(f.flow(status, of)).toBe(want);
 });
+
+test("cargo tonnes parse exactly", () => {
+  for (const [text, g] of [
+    ["", 0],
+    ["  ", 0],
+    ["0", 0],
+    ["250", 250_000_000],
+    ["12.5", 12_500_000],
+    ["0.000001", 1],
+    [".5", 500_000],
+    [" 7 ", 7_000_000],
+    ["9007199254.740991", MAX],
+  ] as const)
+    expect(f.parseTonnes(text), text).toBe(g);
+  for (const text of [
+    "-1",
+    "−1",
+    "+1",
+    "1,500",
+    "12.",
+    ".",
+    "1.0000001",
+    "1e3",
+    "abc",
+    "1 2",
+    "9007199254.740992",
+  ])
+    expect(f.parseTonnes(text), text).toBeNull();
+});
+
+test("a trip's time rounds up to the millisecond", () => {
+  expect(f.travelMs(10_000, 10_000)).toBe(3_600_000);
+  expect(f.travelMs(1, 3_600_001)).toBe(1);
+  expect(f.travelMs(1, 0)).toBeNull();
+});

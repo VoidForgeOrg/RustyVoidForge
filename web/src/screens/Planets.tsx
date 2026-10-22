@@ -1,5 +1,5 @@
-import { Spinner } from "@heroui/react";
-import { Link, Navigate, Outlet, useParams } from "@tanstack/react-router";
+import { buttonVariants, Spinner } from "@heroui/react";
+import { Link, Navigate, Outlet, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { empties } from "../copy/voices";
 import { building as buildingName, duration, owner, percent, ship, ships } from "../format";
@@ -18,6 +18,7 @@ import {
   RefineryIcon,
   ShipyardIcon,
 } from "../theme/icons";
+import { MissionModal } from "./Mission";
 import { Meter, Panel, type PlanetView, planetName, StatusWord, statusOf, useLive } from "./parts";
 
 const buildingIcons = { drill: <DrillIcon />, refinery: <RefineryIcon />, shipyard: <ShipyardIcon /> };
@@ -54,8 +55,23 @@ export function Planets() {
   );
 }
 
-/** The planet route itself renders nothing more: the grid shows it expanded. */
-export const Planet = () => <Outlet />;
+/** The planet route adds only the stepper over it: the grid shows it expanded. */
+export function Planet() {
+  const { planetId } = useParams({ from: "/game/planets/$planetId" });
+  const { mission } = useSearch({ from: "/game/planets/$planetId" });
+  const navigate = useNavigate();
+  return (
+    <>
+      <Outlet />
+      {mission && (
+        <MissionModal
+          planet={planetId}
+          onClose={() => void navigate({ to: "/planets/$planetId", params: { planetId } })}
+        />
+      )}
+    </>
+  );
+}
 
 function PlanetCard({
   id,
@@ -139,7 +155,7 @@ function Holding({
       )}
       <Arrivals planetId={view.planet_id} />
       {open && <Slots view={view} ran={ran} />}
-      {open && mine && <Roster view={view} />}
+      {open && mine && <Roster view={view} me={me} />}
     </Panel>
   );
 }
@@ -211,9 +227,10 @@ function Slots({ view, ran }: { view: PlanetView; ran: number }) {
   );
 }
 
-function Roster({ view }: { view: PlanetView }) {
+function Roster({ view, me }: { view: PlanetView; me: string }) {
   const counts = new Map<"colony_ship" | "cargo_vessel", number>();
   for (const s of view.roster) counts.set(s.ship_type, (counts.get(s.ship_type) ?? 0) + 1);
+  const ours = view.roster.some((s) => s.owner === me);
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-separator pt-3">
       <span className="display text-muted">Ships here</span>
@@ -224,6 +241,16 @@ function Roster({ view }: { view: PlanetView }) {
           {ships(n, type)}
         </span>
       ))}
+      {ours && (
+        <Link
+          to="/planets/$planetId"
+          params={{ planetId: view.planet_id }}
+          search={{ mission: true }}
+          className={`ml-auto ${buttonVariants({ variant: "primary", size: "sm" })}`}
+        >
+          New mission
+        </Link>
+      )}
     </div>
   );
 }

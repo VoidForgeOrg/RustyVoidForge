@@ -2,12 +2,14 @@ import { Drawer, Spinner } from "@heroui/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { components } from "../api/schema";
+import { copy } from "../copy/messages";
 import { empties, failures } from "../copy/voices";
-import { at, building, duration, mass, progress, ship } from "../format";
+import { at, building, duration, mass, progress, rate, ship, stock } from "../format";
 import { grown } from "../game/live";
 import { useMe, usePlanet, useRules } from "../game/queries";
 import { Failure, Notice } from "../shell/Failure";
 import { useLayout } from "../shell/useLayout";
+import { Actions, Confirm, OrderButton, Unavailable } from "./Orders";
 import {
   type BuildingView,
   flowWords,
@@ -89,7 +91,13 @@ export function BuildingDrawer() {
 export function BuildDrawer() {
   return (
     <PlanetDrawer what="Free slot">
-      {(view) => (view.buildings.length < view.slots ? <BuildPicker /> : <Uncharted />)}
+      {(view, receivedAt) =>
+        view.buildings.length < view.slots ? (
+          <BuildPicker view={view} receivedAt={receivedAt} />
+        ) : (
+          <Uncharted />
+        )
+      }
     </PlanetDrawer>
   );
 }
@@ -97,6 +105,8 @@ export function BuildDrawer() {
 function BuildingBody({ view, receivedAt, b }: { view: PlanetView; receivedAt: number; b: BuildingView }) {
   const live = useLive(view, receivedAt);
   const status = statusOf(b, view.ship_builds);
+  const mine = view.owner === useMe().data?.player_id;
+  const builds = view.ship_builds.filter((s) => s.shipyard_id === b.id);
   return (
     <>
       <Row label="Status">
@@ -114,18 +124,84 @@ function BuildingBody({ view, receivedAt, b }: { view: PlanetView; receivedAt: n
       {b.state === "demolishing" && <Row label="Slot frees">{at(b.demolition_ends_at, live.gameNow)}</Row>}
       {b.type === "shipyard" && b.state === "operational" && (
         <ShipBuilds
-          builds={view.ship_builds.filter((s) => s.shipyard_id === b.id)}
+          shipyard={b.id}
+          builds={builds}
           ran={live.ran}
           now={live.gameNow}
+          planet={mine ? view.planet_id : null}
         />
       )}
+      {mine && <BuildingOrders planet={view.planet_id} b={b} hasBuilds={builds.length > 0} />}
     </>
   );
 }
 
-function ShipBuilds({ builds, ran, now }: { builds: S["ShipBuildView"][]; ran: number; now: number }) {
+/** Cancel construction or Demolish, each behind its confirm. */
+function BuildingOrders({ planet, b, hasBuilds }: { planet: number; b: BuildingView; hasBuilds: boolean }) {
+  const rules = useRules().data;
+  const name = `${building(b.type)} #${b.id.toString()}`;
+  const ref = { building_id: b.id };
+  if (b.state === "under_construction") {
+    return (
+      <Actions>
+        <Confirm
+          order={{ type: "cancel_construction", payload: ref, planet, building: b.type }}
+          label={`Cancel construction of ${name}`}
+          question={`Cancel construction of ${name}?`}
+          consequence={`Planet #${planet.toString()}. The ${mass(b.delivered_g)} of ingots delivered so far are lost, and the slot frees now.`}
+        />
+      </Actions>
+    );
+  }
+  if (b.state !== "operational") return null;
+  if (hasBuilds) {
+    return (
+      <Actions>
+        <Unavailable reason={copy("shipyard_has_builds", "command") ?? ""}>Demolish {name}</Unavailable>
+      </Actions>
+    );
+  }
+  const frees = rules
+    ? `The slot frees in ${duration(rules.buildings[b.type].demolition_time_ms)}, when demolition ends.`
+    : "The slot frees when demolition ends.";
+  return (
+    <Actions>
+      <Confirm
+        order={{ type: "demolish_building", payload: ref, planet, building: b.type }}
+        label={`Demolish ${name}`}
+        question={`Demolish ${name}?`}
+        consequence={`Planet #${planet.toString()}. It stops working now, and nothing is refunded. ${frees}`}
+      />
+    </Actions>
+  );
+}
+
+/** A Shipyard's lanes and queue; on the player's own planet, with Queue and Cancel. */
+function ShipBuilds({
+  shipyard,
+  builds,
+  ran,
+  now,
+  planet,
+}: {
+  shipyard: number;
+  builds: S["ShipBuildView"][];
+  ran: number;
+  now: number;
+  planet: number | null;
+}) {
+  const rules = useRules().data;
   const active = builds.filter((s) => s.state === "active");
   const waiting = builds.filter((s) => s.state === "waiting");
+  const cancel = (s: S["ShipBuildView"]) =>
+    planet !== null && (
+      <Confirm
+        order={{ type: "cancel_ship_build", payload: { ship_build_id: s.id }, planet }}
+        label={`Cancel build #${s.id.toString()}`}
+        question={`Cancel build #${s.id.toString()} (${ship(s.ship_type)}) at Shipyard #${s.shipyard_id.toString()}?`}
+        consequence={`Planet #${planet.toString()}. The ${mass(s.delivered_g)} of ingots delivered so far are lost.`}
+      />
+    );
   return (
     <>
       <h3 className="display mt-2 text-muted">Build lanes</h3>
@@ -134,31 +210,72 @@ function ShipBuilds({ builds, ran, now }: { builds: S["ShipBuildView"][]; ran: n
         <Row key={s.id} label={ship(s.ship_type)}>
           {progress(grown(s.delivered_g, s.rate_g_per_h, ran, s.cost_g), s.cost_g)}
           {s.eta && <span className="block text-xs text-muted">done {at(s.eta, now)}</span>}
+          {cancel(s)}
         </Row>
       ))}
       {waiting.length > 0 && (
         <>
           <h3 className="display mt-2 text-muted">Queue</h3>
-          <ol className="list-decimal pl-5 text-sm">
-            {waiting.map((s) => (
-              <li key={s.id}>{ship(s.ship_type)}</li>
-            ))}
-          </ol>
+          {waiting.map((s) => (
+            <Row key={s.id} label={ship(s.ship_type)}>
+              {cancel(s)}
+            </Row>
+          ))}
+        </>
+      )}
+      {planet !== null && rules && (
+        <>
+          <h3 className="display mt-2 text-muted">Queue a ship</h3>
+          {(["colony_ship", "cargo_vessel"] as const).map((type) => (
+            <Row key={type} label={ship(type)}>
+              {mass(rules.ships[type].cost_g)} · {duration(rules.ships[type].build_time_ms)}
+              <span className="mt-1 block">
+                <OrderButton
+                  order={{ type: "queue_ship", payload: { shipyard_id: shipyard, ship_type: type }, planet }}
+                >
+                  Queue {ship(type)}
+                </OrderButton>
+              </span>
+            </Row>
+          ))}
         </>
       )}
     </>
   );
 }
 
-function BuildPicker() {
+function BuildPicker({ view, receivedAt }: { view: PlanetView; receivedAt: number }) {
   const rules = useRules().data;
+  const navigate = useNavigate();
+  const { ran } = useLive(view, receivedAt);
+  const planet = view.planet_id;
+  const mine = useMe().data?.planet_ids.includes(planet) ?? false;
+  const ingots = view.stocks.iron_ingot;
   return (
     <>
       <p className="text-muted">{empties.slot}</p>
+      <Row label="Ingots in storage">
+        {stock(grown(ingots.amount_g, ingots.rate_g_per_h, ran, ingots.cap_g), ingots.cap_g)} ·{" "}
+        {rate(ingots.rate_g_per_h)}
+      </Row>
+      <p className="text-sm text-muted">
+        Ingots are drawn as it builds; construction halts when they run out.
+      </p>
       {rules &&
         (["drill", "refinery", "shipyard"] as const).map((type) => (
           <Row key={type} label={building(type)}>
             {mass(rules.buildings[type].cost_g)} · {duration(rules.buildings[type].build_time_ms)}
+            {mine && (
+              <span className="mt-1 block">
+                <OrderButton
+                  variant="primary"
+                  order={{ type: "build_building", payload: { planet_id: planet, building_type: type } }}
+                  onDone={() => void navigate({ to: "/planets/$planetId", params: { planetId: planet } })}
+                >
+                  Build {building(type)}
+                </OrderButton>
+              </span>
+            )}
           </Row>
         ))}
     </>

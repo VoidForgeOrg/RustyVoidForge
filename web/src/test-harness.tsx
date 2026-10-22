@@ -8,14 +8,16 @@ import { routeTree } from "./router";
 
 // Test-only: the app at a path against canned API answers, in a wide window.
 
-type Answer = Response | (() => Response);
+type Answer = Response | ((request: Request) => Response | Promise<Response>);
 
 /** Answers each request by path, and 404 `not_found` for anything else. */
 export function serve(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, answers: Record<string, Answer>) {
   fetchMock.mockImplementation((input) => {
-    const path = new URL((input as Request).url).pathname;
-    const answer = answers[path] ?? Response.json({ code: "not_found", message: "" }, { status: 404 });
-    return Promise.resolve(typeof answer === "function" ? answer() : answer.clone());
+    const request = input as Request;
+    const answer =
+      answers[new URL(request.url).pathname] ??
+      Response.json({ code: "not_found", message: "" }, { status: 404 });
+    return Promise.resolve(typeof answer === "function" ? answer(request) : answer.clone());
   });
 }
 

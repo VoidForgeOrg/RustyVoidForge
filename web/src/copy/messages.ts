@@ -36,6 +36,16 @@ const UNEXPECTED = {
 
 export const LOGIN_FAILED = "The login didn't complete. Log in again.";
 
+/** The app's own checks before an order is sent (§6.3). */
+export const checks = {
+  ships: "Pick at least one ship.",
+  cargo: "Enter cargo in tonnes, like 250 or 12.5.",
+  target: "Enter a planet number, like 12.",
+};
+
+export const ORDER_LOST =
+  "Your login expired, so that order wasn't sent. Log in again, then submit it again.";
+
 /**
  * The message for a failed call; anything but an ApiError (an unreadable success body) is an
  * unexpected answer. The API's own `message` is never shown.

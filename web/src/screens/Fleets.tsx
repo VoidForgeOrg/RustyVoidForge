@@ -1,11 +1,14 @@
-import { Spinner } from "@heroui/react";
-import { Link } from "@tanstack/react-router";
+import { buttonVariants, Spinner } from "@heroui/react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import type { components } from "../api/schema";
+import { copy } from "../copy/messages";
 import { empties } from "../copy/voices";
-import { at, mass, mission, ships, speed } from "../format";
-import { useFleets } from "../game/queries";
+import { at, duration, mass, mission, ships, speed } from "../format";
+import { useFleets, useMe } from "../game/queries";
 import { Failure } from "../shell/Failure";
 import { FleetsIcon } from "../theme/icons";
+import { MissionModal } from "./Mission";
+import { Actions, Confirm, OrderButton, Unavailable } from "./Orders";
 import { Panel, useLive } from "./parts";
 
 type Fleet = components["schemas"]["FleetView"];
@@ -14,15 +17,27 @@ const stateWords = { stationed: "stationed", in_transit: "in flight", returning:
 
 export function Fleets() {
   const fleets = useFleets();
+  const { send } = useSearch({ from: "/game/fleets" });
+  const navigate = useNavigate();
   if (fleets.isPending) return <Spinner aria-label="Loading fleets" />;
   if (fleets.isError) return <Failure error={fleets.error} onRetry={() => void fleets.refetch()} />;
   if (fleets.data.fleets.length === 0) return <p className="text-muted">{empties.fleets}</p>;
+  const sending = fleets.data.fleets.find((f) => f.fleet_id === send);
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-4">
-      {fleets.data.fleets.map((f) => (
-        <FleetCard key={f.fleet_id} fleet={f} view={fleets.data} receivedAt={fleets.dataUpdatedAt} />
-      ))}
-    </div>
+    <>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-4">
+        {fleets.data.fleets.map((f) => (
+          <FleetCard key={f.fleet_id} fleet={f} view={fleets.data} receivedAt={fleets.dataUpdatedAt} />
+        ))}
+      </div>
+      {sending?.state === "stationed" && (
+        <MissionModal
+          planet={sending.at_planet_id}
+          fleet={sending}
+          onClose={() => void navigate({ to: "/fleets" })}
+        />
+      )}
+    </>
   );
 }
 
@@ -74,6 +89,58 @@ function FleetCard({
         )}
       </p>
       <p className="text-xs text-muted">Speed {speed(fleet.speed_du_per_h)}</p>
+      <FleetOrders fleet={fleet} gameNow={gameNow} />
     </Panel>
   );
+}
+
+/** What the fleet can do in its state: Send, Unload and Disband at a planet; Turn back in flight. */
+function FleetOrders({ fleet, gameNow }: { fleet: Fleet; gameNow: number }) {
+  const owned = useMe().data?.planet_ids ?? [];
+  const f = fleet.fleet_id;
+  const name = `Fleet #${f.toString()}`;
+  if (fleet.state === "returning") return null;
+  if (fleet.state === "in_transit") {
+    const flown = (Math.floor(gameNow / 1_000) - Math.floor(Date.parse(fleet.departed_at) / 1_000)) * 1_000;
+    return (
+      <Actions>
+        <Confirm
+          order={{ type: "recall_fleet", payload: { fleet_id: f }, origin: fleet.origin_planet_id }}
+          label={`Turn ${name} back`}
+          question={`Turn ${name} back?`}
+          consequence={`It has flown ${duration(Math.max(0, flown))}, so it returns to Planet #${fleet.origin_planet_id.toString()} in about that long, and can't be turned again. Its mission (${missionTo(fleet.mission, fleet.target_planet_id)}) is abandoned.`}
+          keep="Keep flying"
+        />
+      </Actions>
+    );
+  }
+  const planet = fleet.at_planet_id;
+  const loaded = fleet.cargo.iron_ore_g + fleet.cargo.iron_ingot_g > 0;
+  return (
+    <Actions>
+      <Link to="/fleets" search={{ send: f }} className={buttonVariants({ variant: "primary", size: "sm" })}>
+        Send
+      </Link>
+      {loaded &&
+        (owned.includes(planet) ? (
+          <OrderButton
+            order={{ type: "trigger_unload", payload: { fleet_id: f }, planet, shown: fleet.cargo }}
+          >
+            Unload
+          </OrderButton>
+        ) : (
+          <Unavailable reason={copy("planet_not_owned", "command") ?? ""}>Unload</Unavailable>
+        ))}
+      {loaded ? (
+        <Unavailable reason={copy("cargo_aboard", "command") ?? ""}>Disband</Unavailable>
+      ) : (
+        <OrderButton order={{ type: "disband_fleet", payload: { fleet_id: f }, planet }}>Disband</OrderButton>
+      )}
+    </Actions>
+  );
+}
+
+function missionTo(m: components["schemas"]["Mission"], target: number): string {
+  const t = `Planet #${target.toString()}`;
+  return m === "colonize" ? `Colonize ${t}` : m === "transport" ? `Transport to ${t}` : `Move to ${t}`;
 }
