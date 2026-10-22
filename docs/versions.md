@@ -79,7 +79,7 @@ The first external crates arrived with P0.6. `deny.toml` allowlists every crate 
 
 | Crate | Version | Used by | Added in | Decision |
 | --- | --- | --- | --- | --- |
-| tracing | =0.1.44 | telemetry, all four binaries | P0.6 | D-017 |
+| tracing | =0.1.44 | telemetry, all three binaries | P0.6 | D-017 |
 | tracing-subscriber | =0.3.23 (std, fmt, registry) | telemetry; server, dev-dependency only (the privacy test's capture, D-047) | P0.6 | D-017 |
 | opentelemetry | =0.33.1 (trace, metrics) | telemetry | P0.6 | D-017, D-064 |
 | opentelemetry_sdk | =0.33.1 (trace, metrics; testing behind telemetry's dev-only `testing` feature) | telemetry | P0.6 | D-017, D-064 |

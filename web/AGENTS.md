@@ -45,5 +45,5 @@ npm run lint
 npm test
 npm run build
 npm run preview      # serves dist/ on http://localhost:8081
-npm run walk         # the Playwright walk; .github/scripts/e2e.sh runs it with the API, dex and preview up
+npm run walk         # the Playwright walk; .github/scripts/web-walk.py serves the app and runs it, called by e2e.sh
 ```

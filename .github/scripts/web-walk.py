@@ -15,6 +15,7 @@
   5. stop the child, and exit with the walk's code.
 
 Usage: web-walk.py (--dist DIR | --image ID --name NAME) --api URL --issuer URL --output DIR --log FILE
+       web-walk.py --check-port PORT   (only the pre-check, for another port e2e.sh is about to use)
 Exit codes: the walk's; 2 the app couldn't be served (the port is taken, or no receipt).
 """
 import argparse
@@ -49,15 +50,22 @@ def listeners(port=None):
     return sorted(set(found))
 
 
+def refusal(port):
+    """Why the port can't be used, or None when nothing listens on it."""
+    taken = listeners(port)
+    if not taken:
+        return None
+    return "something already listens on localhost:%d (%s); stop it, then run again" % (port, ", ".join(taken))
+
+
 def start_web(argv, cwd, log, port=None, receipt=VITE, forwarded=False):
     """Starts the child once the port is free, and returns it once it says it serves on
     127.0.0.1:PORT (and, forwarded, once the port accepts here); raises RuntimeError otherwise, with
     the child stopped."""
     port = PORT if port is None else port
-    taken = listeners(port)
+    taken = refusal(port)
     if taken:
-        raise RuntimeError("something already listens on localhost:%d (%s); stop it, then run the walk"
-                           % (port, ", ".join(taken)))
+        raise RuntimeError(taken)
     # Both streams: static-web-server logs its receipt on stderr, vite on stdout.
     child = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              universal_newlines=True)
@@ -116,12 +124,24 @@ def main():
     where = p.add_mutually_exclusive_group(required=True)
     where.add_argument("--dist")
     where.add_argument("--image")
+    where.add_argument("--check-port", type=int)
     p.add_argument("--name", help="the walk's web container's name, with --image")
-    p.add_argument("--api", required=True)
-    p.add_argument("--issuer", required=True)
-    p.add_argument("--output", required=True)
-    p.add_argument("--log", required=True)
+    p.add_argument("--api")
+    p.add_argument("--issuer")
+    p.add_argument("--output")
+    p.add_argument("--log")
     args = p.parse_args()
+    if args.check_port is not None:
+        taken = refusal(args.check_port)
+        if taken:
+            print("web-walk: " + taken, file=sys.stderr)
+            return 2
+        return 0
+    if args.image and not args.name:
+        p.error("--image needs --name, so a container a crash leaves behind can be found and removed")
+    missing = [f"--{a}" for a in ("api", "issuer", "output", "log") if getattr(args, a) is None]
+    if missing:
+        p.error("the walk needs " + ", ".join(missing))
     web = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "web")
     if args.image:
         argv = ["docker", "run", "--rm", "-i", "--network", "host", "--name", args.name, args.image]

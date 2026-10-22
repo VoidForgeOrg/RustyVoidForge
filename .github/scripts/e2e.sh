@@ -8,11 +8,12 @@
 #   2. builds voidforge-server and voidforge-bots;
 #   3. creates this run's own database, voidforge_e2e_<time>_<pid>, and seeds it on the fast rules;
 #   4. starts the serve binary as a host process (never through just or cargo run: D-050 I5) on a
-#      free port, with the web app's origin allowed, and waits for its ready line and GET
-#      /openapi.json;
+#      free port (with --images, under compose on VOIDFORGE_PORT), with the web app's origin
+#      allowed, and waits for its ready line and GET /openapi.json;
 #   5. runs `voidforge-bots e2e`, then the terminal login check (.github/scripts/device-login.py),
-#      then the web walk: it builds web/ against this serve, serves it with `vite preview` on
-#      localhost:8081 (which must be free), and runs Playwright's walk (web/e2e) in Chromium;
+#      then the web walk: .github/scripts/web-walk.py serves the app on localhost:8081 (which must
+#      be free) as its own child, `vite preview` on a build against this serve or, with --images,
+#      the web image, and runs Playwright's walk (web/e2e) in Chromium;
 #   6. stops serve with one SIGTERM and requires exit 0 (the final snapshot at the log head);
 #   7. drops this run's database, on every exit.
 #
@@ -131,6 +132,14 @@ if [ "$images" = 1 ]; then
         say "  VOIDFORGE_PORT=$port just images"
         exit 3
     fi
+    built_issuer=$(docker image inspect -f '{{index .Config.Labels "org.voidforge.issuer"}}' voidforge-web:local)
+    if [ "$built_issuer" != "$issuer" ]; then
+        say "voidforge-web:local logs in through $built_issuer, not $issuer; rebuild it with"
+        say "  E2E_ISSUER=$issuer VOIDFORGE_PORT=$port just images"
+        exit 3
+    fi
+    # serve binds this port under host networking; another app there would get the walk's calls.
+    python3 .github/scripts/web-walk.py --check-port "$port" || exit 3
     [ "$smoke" = 1 ] || SQLX_OFFLINE=true cargo build -q --locked -p voidforge-bots
 else
     SQLX_OFFLINE=true cargo build -q --locked -p voidforge-server -p voidforge-bots

@@ -130,7 +130,8 @@ images jobs="2":
     for target in server web; do \
         docker build -f dockerfiles/Dockerfile --target "$target" --build-arg CARGO_BUILD_JOBS={{jobs}} \
             --build-arg VOIDFORGE_GIT_SHA="$(git rev-parse --short=12 HEAD)" \
-            --build-arg VITE_API_URL="http://localhost:${VOIDFORGE_PORT:-8080}" -t "voidforge-$target:local" . ; \
+            --build-arg VITE_API_URL="http://localhost:${VOIDFORGE_PORT:-8080}" \
+            --build-arg VITE_OIDC_ISSUER="${E2E_ISSUER:-http://localhost:5556/dex}" -t "voidforge-$target:local" . ; \
     done
     python3 .github/scripts/check-images.py --built
 
