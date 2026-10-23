@@ -955,18 +955,21 @@ fn knob(name: &str, default: u64) -> u64 {
         .map_or(default, |v| v.parse().expect("a number"))
 }
 
-/// Whose scratch directories: the per-PR runs' or the nightly's (P5.3, D-066). Separate prefixes,
-/// so a nightly run never reuses or removes a per-PR seed's directory, whatever its seed base.
+/// Whose scratch directories: the per-PR runs', the nightly's, or the per-PR one-seed night's
+/// (P5.3, D-066). Separate prefixes, so no run reuses or removes another's seed directory, whatever
+/// its seed base: a local `just test` beside `just nightly-crash` can't spoil either (R1-1).
 #[derive(Clone, Copy)]
 enum Run {
     PerPr,
     Nightly,
+    PerPrNight,
 }
 
 fn scratch_name(run: Run, seed: u64) -> String {
     match run {
         Run::PerPr => format!("file-{seed}"),
         Run::Nightly => format!("nightly-file-{seed}"),
+        Run::PerPrNight => format!("pr-nightly-file-{seed}"),
     }
 }
 
@@ -1001,13 +1004,20 @@ async fn every_retried_command_ends_with_exactly_one_outcome_on_the_file_store()
 
 #[test]
 fn the_nightly_never_shares_a_scratch_directory_with_the_per_pr_runs() {
-    for seed in [0, 11, 1_000] {
-        assert_ne!(
-            scratch_name(Run::Nightly, seed),
-            scratch_name(Run::PerPr, seed)
-        );
-        assert!(!scratch_name(Run::Nightly, seed).starts_with("file-"));
-    }
+    let runs = [Run::PerPr, Run::Nightly, Run::PerPrNight];
+    let names: std::collections::HashSet<_> = runs
+        .iter()
+        .flat_map(|&run| {
+            (0..12)
+                .chain([1_000])
+                .map(move |seed| scratch_name(run, seed))
+        })
+        .collect();
+    assert_eq!(
+        names.len(),
+        runs.len() * 13,
+        "every run's directories are its own"
+    );
 }
 
 /// Every kill point was reached, or the run proves less than it says. It's asserted on the cores
@@ -1062,15 +1072,15 @@ fn summary(store: &str, base: u64, seeds: u64, core: &Seen, seen: &Seen, points:
 async fn crash_nightly() {
     let base = knob("VOIDFORGE_CRASH_SEED_BASE", 1_000);
     let n = knob("VOIDFORGE_CRASH_SEEDS", 200);
-    let (core, seen) = night(base, n, knob("VOIDFORGE_CRASH_COMMANDS", 60)).await;
+    let (core, seen) = night(Run::Nightly, base, n, knob("VOIDFORGE_CRASH_COMMANDS", 60)).await;
     summary("file", base, n, &core, &seen, &FILE_POINTS);
 }
 
 /// A night on the file store: the core (asserted), then the range (each seed checked; coverage
 /// reported).
-async fn night(base: u64, n: u64, commands: u64) -> (Seen, Seen) {
-    let core = file_core(Run::Nightly).await;
-    let seen = file_seeds(Run::Nightly, base..base + n, commands).await;
+async fn night(run: Run, base: u64, n: u64, commands: u64) -> (Seen, Seen) {
+    let core = file_core(run).await;
+    let seen = file_seeds(run, base..base + n, commands).await;
     (core, seen)
 }
 
@@ -1078,7 +1088,7 @@ async fn night(base: u64, n: u64, commands: u64) -> (Seen, Seen) {
 /// reaches, because the core always runs and covers every point; the seed's own reach is reported.
 #[tokio::test]
 async fn a_one_seed_night_passes_on_coverage_and_reports_the_range() {
-    let (core, seen) = night(1_000, 1, 60).await;
+    let (core, seen) = night(Run::PerPrNight, 1_000, 1, 60).await;
     assert_covered(&core, &FILE_POINTS);
     assert!(core.mid_turn > 0);
     assert_eq!(seen.lives, 1, "seed 1000 runs its script in one life");
