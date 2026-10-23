@@ -87,6 +87,10 @@ jobs:
         env:
           SIM_MINUTES: ${{ inputs.sim_minutes || '30' }}
           SIM_SEED: ${{ github.run_number }}
+          # p99 bounds in seconds (the lead's T3, D-066): ~10x the measured p99, with a floor. The
+          # step's measured p99 is the histograms' lowest bucket edge, so it guards large regressions only.
+          SIM_STEP_P99_MAX: "0.05"
+          SIM_APPEND_P99_MAX: "0.25"
         run: |
           echo "started=1" >> "$GITHUB_OUTPUT"
           status=0
