@@ -20,6 +20,9 @@ set -uo pipefail
 export VOIDFORGE_CRASH_SEED_BASE="${VOIDFORGE_CRASH_SEED_BASE:-1000}"
 export VOIDFORGE_CRASH_SEEDS="${VOIDFORGE_CRASH_SEEDS:-1000}"
 export VOIDFORGE_CRASH_PG_SEEDS="${VOIDFORGE_CRASH_PG_SEEDS:-100}"
+# DATABASE_URL is set for the database stage, so cargo would compile sqlx's macros against
+# voidforge_test, which has no tables: the queries build from the committed offline metadata.
+export SQLX_OFFLINE=true
 : "${DATABASE_URL:?set DATABASE_URL to the voidforge_test database (see database.sh)}"
 : "${PSQL:?set PSQL to a psql command for the same server (see database.sh)}"
 read -r -a psql <<< "$PSQL"
