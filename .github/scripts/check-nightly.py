@@ -8,6 +8,8 @@ job. A finding is an error with the rule it breaks.
 - A forced failure happens only on a manual dispatch: every step that reads `force_fail` is
   guarded by `github.event_name == 'workflow_dispatch'`.
 - Every job has a timeout, and every action is pinned to a full commit SHA.
+- Every run that reports shares one concurrency group, whatever its ref (R2-4): the group is a
+  pull request's own, or else exactly 'nightly'.
 
 Usage: check-nightly.py [workflow]   (default .github/workflows/nightly.yml)
        check-nightly.py --self-test  (each rule refuses a planted break)
@@ -30,6 +32,9 @@ def findings(doc):
     out = []
     if doc.get("permissions") != {"contents": "read"}:
         out.append("the workflow's permissions must be exactly contents: read")
+    group = str((doc.get("concurrency") or {}).get("group", ""))
+    if not group.endswith("|| 'nightly' }}") or "github.event_name == 'pull_request' &&" not in group:
+        out.append("the concurrency group must be 'nightly' for every run but a pull request's")
     jobs = doc.get("jobs") or {}
     if "report" not in jobs:
         out.append("no report job")
@@ -75,6 +80,7 @@ def self_test(doc):
         "no timeout": lambda d: first_job(d).pop("timeout-minutes"),
         "an unpinned action": lambda d: first_job(d)["steps"][0].__setitem__("uses", "actions/checkout@v7"),
         "forced outside a dispatch": lambda d: forced_step(d).__setitem__("if", "inputs.force_fail == 'crash'"),
+        "a per-ref group": lambda d: d["concurrency"].__setitem__("group", "nightly-${{ github.ref }}"),
     }
     failed = 0
     if findings(doc):

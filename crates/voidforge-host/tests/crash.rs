@@ -979,17 +979,24 @@ async fn file_seeds(run: Run, seeds: std::ops::Range<u64>, commands: u64) -> See
     all
 }
 
-/// Per PR: 12 fixed seeds on the file store; every kill point is reached, and a kill lands inside
-/// a multi-command turn. With the turn gate, the counts are the same on every run (OPR.42). A
-/// multi-command turn needs a group of three commands (the gate's second turn carries all but the
-/// first), so the seeds run 60 commands: at 40 they have groups of one and two only.
+/// The file store's core: 12 fixed seeds that reach every kill point and a kill inside a
+/// multi-command turn by construction, not by luck. With the turn gate, a seed's run is the same
+/// every time (OPR.42), so these counts are too. A multi-command turn needs a group of three
+/// commands (the gate's second turn carries all but the first), so the seeds run 60 commands: at
+/// 40 they have groups of one and two only. Per PR, and in every night (P5.3, D-066: a night's own
+/// range can miss a point, as R2-1's base 2461000 does on Postgres).
+async fn file_core(run: Run) -> Seen {
+    let seen = file_seeds(run, 0..12, 60).await;
+    assert_covered(&seen, &FILE_POINTS);
+    assert!(seen.mid_turn > 0, "a kill inside a multi-command turn");
+    seen
+}
+
+/// Per PR: the file store's core.
 #[tokio::test]
 async fn every_retried_command_ends_with_exactly_one_outcome_on_the_file_store() {
-    let seen = file_seeds(Run::PerPr, 0..12, 60).await;
+    let seen = file_core(Run::PerPr).await;
     eprintln!("file store, 12 seeds: {seen:?}");
-    let want: BTreeSet<String> = FILE_POINTS.iter().map(|p| (*p).to_owned()).collect();
-    assert_eq!(seen.points(), want, "every kill point is hit");
-    assert!(seen.mid_turn > 0, "a kill inside a multi-command turn");
 }
 
 #[test]
@@ -1003,11 +1010,11 @@ fn the_nightly_never_shares_a_scratch_directory_with_the_per_pr_runs() {
     }
 }
 
-/// The night's coverage over all its seeds (P5.3, D-066): every kill point was reached, or the
-/// night proves less than it says. Each seed's own checks (exactly one outcome per command) already
-/// ran in `run_seed`. A kill inside a multi-command turn is reported, not required: its rate varies
-/// too much between seed ranges (28 in seeds 1000..2000, 1 in 31000..32000) to bound, and a red
-/// night must mean a defect. The per-PR test requires one on its fixed seeds.
+/// Every kill point was reached, or the run proves less than it says. It's asserted on the cores
+/// only, whose fixed seeds reach every point by construction (P5.3, D-066). A night's own range is
+/// reported, never asserted: whether a range reaches a point depends on its seeds (R2-1: no seed in
+/// 2461000..2461100 can reach Postgres's `recover.during`), and a red night must mean a defect.
+/// Each seed's own checks (exactly one outcome per command) ran in `run_seed`, for every seed.
 fn assert_covered(seen: &Seen, points: &[&str]) {
     let want: BTreeSet<String> = points.iter().map(|p| (*p).to_owned()).collect();
     let reached = seen.points();
@@ -1027,29 +1034,59 @@ fn a_night_that_misses_a_kill_point_fails() {
     assert_covered(&seen, &FILE_POINTS);
 }
 
+/// The kill points a range never reached: reported, not asserted.
+fn missed(seen: &Seen, points: &[&str]) -> Vec<String> {
+    let reached = seen.points();
+    points
+        .iter()
+        .map(|p| (*p).to_owned())
+        .filter(|p| !reached.contains(p))
+        .collect()
+}
+
 /// The night's numbers for the job summary: one line, `@nightly-crash <json>`.
-fn summary(store: &str, base: u64, seeds: u64, seen: &Seen) {
-    let line =
-        serde_json::json!({ "store": store, "seed_base": base, "seeds": seeds, "seen": seen });
+fn summary(store: &str, base: u64, seeds: u64, core: &Seen, seen: &Seen, points: &[&str]) {
+    let line = serde_json::json!({
+        "store": store, "seed_base": base, "seeds": seeds, "core": core, "seen": seen,
+        "range_missed": missed(seen, points),
+    });
     eprintln!("@nightly-crash {line}");
 }
 
-/// The nightly shape (P5.3, D-066): seeds from VOIDFORGE_CRASH_SEED_BASE, VOIDFORGE_CRASH_SEEDS of
-/// them, VOIDFORGE_CRASH_COMMANDS each, in the nightly's own scratch directories. A failure names
-/// its seed; then the night must have reached every kill point.
+/// The nightly shape (P5.3, D-066): the file store's core (every kill point, by construction),
+/// then seeds from VOIDFORGE_CRASH_SEED_BASE, VOIDFORGE_CRASH_SEEDS of them,
+/// VOIDFORGE_CRASH_COMMANDS each, all in the nightly's own scratch directories. A failure names its
+/// seed. The range's coverage is reported; any range size passes on coverage, one seed included.
 #[tokio::test]
 #[ignore = "nightly: VOIDFORGE_CRASH_SEED_BASE, VOIDFORGE_CRASH_SEEDS, VOIDFORGE_CRASH_COMMANDS"]
 async fn crash_nightly() {
     let base = knob("VOIDFORGE_CRASH_SEED_BASE", 1_000);
     let n = knob("VOIDFORGE_CRASH_SEEDS", 200);
-    let seen = file_seeds(
-        Run::Nightly,
-        base..base + n,
-        knob("VOIDFORGE_CRASH_COMMANDS", 60),
-    )
-    .await;
-    summary("file", base, n, &seen);
-    assert_covered(&seen, &FILE_POINTS);
+    let (core, seen) = night(base, n, knob("VOIDFORGE_CRASH_COMMANDS", 60)).await;
+    summary("file", base, n, &core, &seen, &FILE_POINTS);
+}
+
+/// A night on the file store: the core (asserted), then the range (each seed checked; coverage
+/// reported).
+async fn night(base: u64, n: u64, commands: u64) -> (Seen, Seen) {
+    let core = file_core(Run::Nightly).await;
+    let seen = file_seeds(Run::Nightly, base..base + n, commands).await;
+    (core, seen)
+}
+
+/// QA's F1, R2-1: the documented rerun of one red seed passes on coverage, whatever that seed
+/// reaches, because the core always runs and covers every point; the seed's own reach is reported.
+#[tokio::test]
+async fn a_one_seed_night_passes_on_coverage_and_reports_the_range() {
+    let (core, seen) = night(1_000, 1, 60).await;
+    assert_covered(&core, &FILE_POINTS);
+    assert!(core.mid_turn > 0);
+    assert_eq!(seen.lives, 1, "seed 1000 runs its script in one life");
+    assert_eq!(
+        missed(&seen, &FILE_POINTS).len(),
+        FILE_POINTS.len(),
+        "and reaches no point"
+    );
 }
 
 /// The test database's URL: the stage's `DATABASE_URL` with this test's database.
@@ -1080,8 +1117,9 @@ CREATE TRIGGER crash_hold AFTER INSERT ON log_records FOR EACH ROW EXECUTE FUNCT
 ";
 
 /// `seeds` on one test database, each from an empty log.
+/// `seeds` on one test database, each from an empty log; the hold trigger is set once per
+/// database ([`hold`]).
 async fn pg_seeds(pool: &sqlx::PgPool, seeds: std::ops::Range<u64>, commands: u64) -> Seen {
-    sqlx::raw_sql(HOLD).execute(pool).await.unwrap();
     let url = pg_url(pool);
     let mut all = Seen::default();
     for seed in seeds {
@@ -1094,32 +1132,45 @@ async fn pg_seeds(pool: &sqlx::PgPool, seeds: std::ops::Range<u64>, commands: u6
     all
 }
 
-/// Per PR, the Phase 2 gate's "against Postgres": 4 fixed seeds; every Postgres kill point is
-/// reached, including a death inside PgLog's open transaction.
+async fn hold(pool: &sqlx::PgPool) {
+    sqlx::raw_sql(HOLD).execute(pool).await.unwrap();
+}
+
+/// Postgres's core: 4 fixed seeds that reach every Postgres kill point by construction, including
+/// a death inside PgLog's open transaction. Per PR (the Phase 2 gate's "against Postgres"), and in
+/// every night.
+async fn pg_core(pool: &sqlx::PgPool) -> Seen {
+    let seen = pg_seeds(pool, 0..4, 30).await;
+    assert_covered(&seen, &PG_POINTS);
+    seen
+}
+
+/// Per PR: Postgres's core.
 #[sqlx::test(migrator = "voidforge_store::MIGRATOR")]
 #[ignore = "needs Postgres: just db-test"]
 async fn every_retried_command_ends_with_exactly_one_outcome_on_postgres(pool: sqlx::PgPool) {
-    let all = pg_seeds(&pool, 0..4, 30).await;
+    hold(&pool).await;
+    let all = pg_core(&pool).await;
     eprintln!("Postgres, 4 seeds: {all:?}");
-    let want: BTreeSet<String> = PG_POINTS.iter().map(|p| (*p).to_owned()).collect();
-    assert_eq!(all.points(), want, "every Postgres kill point is hit");
 }
 
 /// The nightly's Postgres seeds (P5.3, D-066): VOIDFORGE_CRASH_PG_SEEDS of them (default 100) from
 /// VOIDFORGE_CRASH_SEED_BASE, VOIDFORGE_CRASH_PG_COMMANDS each (default 30), through the database
 /// stage (`database.sh --nightly-crash`), so its database is a `_sqlx_test_*` one beside
-/// voidforge_test, as every Postgres test's is. Every Postgres kill point must be reached.
+/// voidforge_test, as every Postgres test's is. Postgres's core runs first, so every Postgres kill
+/// point is reached whatever the range; the range's own coverage is reported.
 #[sqlx::test(migrator = "voidforge_store::MIGRATOR")]
 #[ignore = "nightly, needs Postgres: just nightly-crash"]
 async fn crash_nightly_postgres(pool: sqlx::PgPool) {
     let base = knob("VOIDFORGE_CRASH_SEED_BASE", 1_000);
     let n = knob("VOIDFORGE_CRASH_PG_SEEDS", 100);
+    hold(&pool).await;
+    let core = pg_core(&pool).await;
     let seen = pg_seeds(
         &pool,
         base..base + n,
         knob("VOIDFORGE_CRASH_PG_COMMANDS", 30),
     )
     .await;
-    summary("postgres", base, n, &seen);
-    assert_covered(&seen, &PG_POINTS);
+    summary("postgres", base, n, &core, &seen, &PG_POINTS);
 }

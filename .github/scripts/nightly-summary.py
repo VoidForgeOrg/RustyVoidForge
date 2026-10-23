@@ -34,12 +34,33 @@ def crash(outcome, logs):
             pass
     out = [f"## Crash and retry: {HEADLINE[outcome]}", ""]
     out.append("Checked: the host killed at seeded points; every command retried with its key ends "
-               "with exactly one outcome; every kill point was reached. Kills inside a "
-               "multi-command turn are counted, not required.")
+               "with exactly one outcome. Each store's core of fixed seeds reaches every kill point "
+               "by construction, asserted; the night's own range explores further, and its coverage "
+               "is reported. Kills inside a multi-command turn are required of the file core only.")
     out.append("")
     if not nights:
         out.append("No run reported its numbers (see the log).")
         return out
+    out.append("| Store | Seeds | Commands | Lives | Kills inside a multi-command turn | Kills per point |")
+    out.append("| --- | --- | --- | --- | --- | --- |")
+    logs = 0
+    for n in nights:
+        for label, seen, seeds in (("core", n.get("core"), "fixed"),
+                                   ("range", n["seen"], f'{n["seed_base"]}..{n["seed_base"] + n["seeds"]}')):
+            if not seen:
+                continue
+            kills = ", ".join(f"{p} {k}" for p, k in sorted(seen["kills"].items())) or "none"
+            out.append(f'| {n["store"]}, {label} | {seeds} | {seen["commands"]} | {seen["lives"]} | '
+                       f'{seen["mid_turn"]} | {kills} |')
+        logs += n["seeds"] + (12 if n["store"] == "file" else 4)
+    out.append("")
+    for n in nights:
+        if n.get("range_missed"):
+            out.append(f'Not reached by the {n["store"]} range (its core reached them): '
+                       f'{", ".join(n["range_missed"])}.')
+    out.append(f"Self-consistency replays: each seed's surviving log was verified on exit "
+               f"({logs} logs).")
+    return out
     out.append("| Store | Seeds | Commands | Lives | Kills inside a multi-command turn | Kills per point |")
     out.append("| --- | --- | --- | --- | --- | --- |")
     for n in nights:

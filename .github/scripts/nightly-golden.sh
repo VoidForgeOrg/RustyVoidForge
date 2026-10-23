@@ -31,7 +31,7 @@ cargo run -q --release -p voidforge-replay --locked -- golden tests/golden --jso
 
 changed=$(git status --porcelain -- tests/golden)
 if [ -n "$changed" ]; then
-    say "tests/golden changed during the run (the nightly never blesses): $changed"
+    say "tests/golden is dirty after the run (the nightly never blesses; was it dirty before?): $changed"
     status=1
 fi
 

@@ -31,8 +31,11 @@ on:
 permissions:
   contents: read
 
+# One group for every run that reports (the schedule and dispatches, on any ref), so two reports
+# never race on the same issue title (R2-4). A pull request's run never reports, so it has its own
+# group and can't displace a queued night (GitHub cancels an older pending run in a group).
 concurrency:
-  group: nightly-${{ github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('nightly-pr-{0}', github.ref) || 'nightly' }}
   cancel-in-progress: false
 
 env:
@@ -147,21 +150,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          FORCED: ${{ github.event_name == 'workflow_dispatch' && inputs.force_fail != 'none' }}
+          # Only the kind a dispatch forced is a forced test; the others report to their real issues.
+          FORCE_FAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.force_fail || 'none' }}
           CRASH: ${{ needs.crash.result }} ${{ needs.crash.outputs.started || '-' }} ${{ needs.crash.outputs.outcome || '-' }}
           GOLDEN: ${{ needs.golden.result }} ${{ needs.golden.outputs.started || '-' }} ${{ needs.golden.outputs.outcome || '-' }}
-        run: |
-          forced=()
-          [ "$FORCED" = true ] && forced=(--forced)
-          status=0
-          for kind in crash golden; do
-            var=${kind^^}
-            read -r result started verdict <<< "${!var}"
-            [ "$started" = - ] && started=""
-            [ "$verdict" = - ] && verdict=""
-            outcome=$(.github/scripts/nightly-outcome.sh "$result" "$started" "$verdict")
-            echo "$kind: $outcome ($result)" | tee -a "$GITHUB_STEP_SUMMARY"
-            [ "$outcome" = skip ] && continue
-            .github/scripts/nightly-issue.sh "${forced[@]}" "$kind" "$outcome" "$RUN_URL" || status=1
-          done
-          exit "$status"
+        run: .github/scripts/nightly-report.sh crash golden

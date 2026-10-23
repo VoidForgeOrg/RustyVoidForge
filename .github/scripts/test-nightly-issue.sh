@@ -89,6 +89,41 @@ for bad in "nope failed $run_url" "crash broken $run_url" "crash failed"; do
     if [ "$status" = 2 ]; then echo "pass: usage refused ($bad)"; else echo "FAIL: usage ($bad) exit $status"; failures=$((failures + 1)); fi
 done
 
+# nightly-report.sh: a dispatch that forces one kind reports only that kind as a forced test (R2-3).
+report="$(cd "$(dirname "$0")" && pwd)/nightly-report.sh"
+report_case() {
+    local name=$1 issues=$2 want=$3
+    shift 3
+    : > "$STUB_CALLS"
+    local status=0
+    env "$@" STUB_ISSUES="$issues" RUN_URL="$run_url" GITHUB_STEP_SUMMARY=/dev/null \
+        "$report" crash golden > /dev/null 2>&1 || status=$?
+    local got
+    got=$(grep -E '^issue (create|comment)' "$STUB_CALLS" | sed 's/ --body .*//; s/ --label .*//; s/ *$//' || true)
+    if [ "$got" = "$want" ] && [ "$status" = 0 ]; then
+        echo "pass: $name"
+    else
+        echo "FAIL: $name (exit $status)"
+        echo "  want: $(echo "$want" | tr '\n' '|')"
+        echo "  got:  $(echo "$got" | tr '\n' '|')"
+        failures=$((failures + 1))
+    fi
+}
+report_case "forcing crash leaves golden's real failure on its real issue" "$none" \
+    "issue create --title Nightly (forced test): crash failed
+issue create --title Nightly: golden failed" \
+    FORCE_FAIL=crash CRASH="failure 1 failed" GOLDEN="failure 1 failed"
+report_case "forcing crash still says green again on golden's real issue" "$open_golden" \
+    "issue create --title Nightly (forced test): crash failed
+issue comment 8" \
+    FORCE_FAIL=crash CRASH="failure 1 failed" GOLDEN="success 1 passed"
+report_case "a dispatch that forces nothing reports every kind for real" "$none" \
+    "issue create --title Nightly: crash failed
+issue create --title Nightly: golden infrastructure not ready" \
+    FORCE_FAIL=none CRASH="failure 1 failed" GOLDEN="failure - -"
+report_case "a skipped kind reports nothing" "$none" "" \
+    FORCE_FAIL=none CRASH="skipped - -" GOLDEN="success 1 passed"
+
 # nightly-outcome.sh: what the report makes of each job.
 outcome="$(cd "$(dirname "$0")" && pwd)/nightly-outcome.sh"
 while read -r result started verdict want; do
