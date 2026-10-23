@@ -171,7 +171,7 @@ GitHub Actions runs the same commands as the `justfile`, so any red check reprod
 | Database tests | Migrations, store tests and the sqlx metadata check against a Postgres service | Every PR | Yes |
 | End-to-end | Compose runs Postgres and dex, CI runs the server and web app as cargo-built binaries beside them, and bots play a scripted game through the API on the fast test rules | Every PR | Yes |
 | Images | Build the server and web images, run both under compose until healthy, then the smoke test against them; nothing is pushed (D-065) | Every PR | Not yet: adding it to the ruleset is the owner's change (D-065) |
-| Nightly | Long bot simulation on the fast test rules, crash-and-retry runs and the full golden replay set | Nightly | No; a failure opens an issue |
+| Nightly | Long bot simulation on the fast test rules, crash-and-retry runs and the full golden replay set (D-066) | Nightly | No; a failure opens an issue, or comments on the open one |
 
 Once CD exists, rolling back means redeploying the previous image, so migrations only ever add: no destructive change ships in the same release as the code that stops using it.
 

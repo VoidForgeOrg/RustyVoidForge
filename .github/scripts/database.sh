@@ -25,14 +25,26 @@
 #   cargo nextest against voidforge_test), and after the run leaves one in use with a warning.
 # Test database names are fixed per test path, so concurrent runs of the same test collide even
 # without this script: the later one fails. Run Postgres tests through `just db-test`.
+#
+# Usage: database.sh [--nightly-crash]
+# --nightly-crash runs only the nightly's Postgres crash seeds (P5.3, D-066: crash_nightly_postgres,
+# with VOIDFORGE_CRASH_SEED_BASE, VOIDFORGE_CRASH_PG_SEEDS and VOIDFORGE_CRASH_PG_COMMANDS), under the
+# same guard, lock and cleanup, instead of the stage's migrations, metadata check and tests.
 set -euo pipefail
 
 fail() { echo "error: $*" >&2; exit 2; }
 
+nightly_crash=0
+case "${1-}" in
+    "") ;;
+    --nightly-crash) nightly_crash=1 ;;
+    *) fail "usage: database.sh [--nightly-crash]" ;;
+esac
+
 : "${DATABASE_URL:?set DATABASE_URL to the voidforge_test database}"
 : "${PSQL:?set PSQL to a psql command for the same server}"
 read -r -a psql <<< "$PSQL"
-command -v sqlx > /dev/null || fail "sqlx-cli not found (docs/versions.md)"
+[ "$nightly_crash" = 1 ] || command -v sqlx > /dev/null || fail "sqlx-cli not found (docs/versions.md)"
 command -v cargo-nextest > /dev/null || fail "cargo-nextest not found (docs/versions.md)"
 
 # Everything up to the last slash is the server; the rest is the database name, without a query.
@@ -86,6 +98,13 @@ lock_acquire
 cleanup before
 trap 'status=$?; cleanup after || { echo "error: cleanup failed" >&2; status=2; }
       lock_release || { echo "error: releasing $lock_db failed" >&2; status=2; }; exit $status' EXIT
+
+if [ "$nightly_crash" = 1 ]; then
+    echo "--- the nightly's Postgres crash seeds"
+    SQLX_OFFLINE=true cargo nextest run -p voidforge-host --test crash --run-ignored only --locked \
+        --no-capture -E 'test(=crash_nightly_postgres)'
+    exit 0
+fi
 
 echo "--- migrations on an empty database, then a second run"
 sql "CREATE DATABASE \"$cli_db\""

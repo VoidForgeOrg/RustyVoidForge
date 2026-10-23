@@ -1,0 +1,157 @@
+# The nightly runs (Technical Plan P5.3; decision log D-066): crash-and-retry and the golden replays
+# in a release build, each with a job summary; then `report`, which opens or comments on one issue
+# per failing run kind (nightly-issue.sh). Not a required check: a red night opens an issue.
+# Every run also runs locally: `just nightly-crash`, `just nightly-golden`.
+# PR A of P5.3: no schedule yet, and no bot simulation (PR B adds both, so the gate's week starts
+# with the whole nightly). A pull request that changes the nightly's own files runs it on its head;
+# only a schedule or a manual dispatch ever reports to issues.
+# Action and tool versions are pinned; see docs/versions.md and decision log D-007.
+name: Nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      crash_seeds:
+        description: File-store crash seeds (Postgres runs VOIDFORGE_CRASH_PG_SEEDS, default 100)
+        default: "1000"
+      force_fail:
+        description: Fail one run on purpose, to prove the issue path (its issue title says so)
+        type: choice
+        default: none
+        options: [none, crash, golden]
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/nightly.yml
+      - .github/scripts/nightly-*
+      - .github/scripts/test-nightly-issue.sh
+      - .github/scripts/check-nightly.py
+      - crates/voidforge-host/tests/crash.rs
+
+permissions:
+  contents: read
+
+# One group for every run that reports (the schedule and dispatches, on any ref), so two reports
+# never race on the same issue title (R2-4). A pull request's run never reports, so it has its own
+# group and can't displace a queued night (GitHub cancels an older pending run in a group).
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('nightly-pr-{0}', github.ref) || 'nightly' }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The host killed at seeded points, retries converging to one outcome per command: the file
+  # store's seeds, then Postgres's through the database stage (voidforge_test and _sqlx_test_* only).
+  # Each night starts at a new seed base; a red seed reruns locally from the summary's numbers.
+  crash:
+    name: crash
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      started: ${{ steps.run.outputs.started || steps.forced.outputs.started }}
+      outcome: ${{ steps.run.outputs.outcome || steps.forced.outputs.outcome }}
+    services:
+      postgres:
+        image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: voidforge
+          POSTGRES_PASSWORD: voidforge-local-test-password
+          POSTGRES_DB: voidforge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --host=127.0.0.1 --username=voidforge --dbname=voidforge_test"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_URL: postgres://voidforge:voidforge-local-test-password@localhost:5432/voidforge_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: forced failure (workflow_dispatch input)
+        id: forced
+        if: github.event_name == 'workflow_dispatch' && inputs.force_fail == 'crash'
+        run: |
+          echo "started=1" >> "$GITHUB_OUTPUT"
+          echo "outcome=failed" >> "$GITHUB_OUTPUT"
+          echo "::error::forced failure: workflow_dispatch's force_fail is crash"
+          exit 1
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Crash and retry (file store, then Postgres)
+        id: run
+        env:
+          # The job context (the service container's ID) is available to steps, not to job-level env.
+          PSQL: docker exec -i ${{ job.services.postgres.id }} psql -U voidforge
+          VOIDFORGE_CRASH_SEEDS: ${{ inputs.crash_seeds || '1000' }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          echo "started=1" >> "$GITHUB_OUTPUT"
+          export VOIDFORGE_CRASH_SEED_BASE=$(( 1000 + RUN_NUMBER * 10000 ))
+          status=0
+          .github/scripts/nightly-crash.sh || status=$?
+          case "$status" in 0) outcome=passed ;; 3) outcome=infra ;; *) outcome=failed ;; esac
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+  # The three golden checks every PR runs in debug, in a release build; never blesses.
+  golden:
+    name: golden
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      started: ${{ steps.run.outputs.started || steps.forced.outputs.started }}
+      outcome: ${{ steps.run.outputs.outcome || steps.forced.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: forced failure (workflow_dispatch input)
+        id: forced
+        if: github.event_name == 'workflow_dispatch' && inputs.force_fail == 'golden'
+        run: |
+          echo "started=1" >> "$GITHUB_OUTPUT"
+          echo "outcome=failed" >> "$GITHUB_OUTPUT"
+          echo "::error::forced failure: workflow_dispatch's force_fail is golden"
+          exit 1
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Golden replays, release build
+        id: run
+        run: |
+          echo "started=1" >> "$GITHUB_OUTPUT"
+          status=0
+          .github/scripts/nightly-golden.sh || status=$?
+          case "$status" in 0) outcome=passed ;; 3) outcome=infra ;; *) outcome=failed ;; esac
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+  # One issue per failing run kind: opened, or commented on; "green again" on a pass; never closed.
+  # Never for a pull request. The only job that may write issues.
+  report:
+    name: report
+    needs: [crash, golden]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Open or comment on the issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Only the kind a dispatch forced is a forced test; the others report to their real issues.
+          FORCE_FAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.force_fail || 'none' }}
+          CRASH: ${{ needs.crash.result }} ${{ needs.crash.outputs.started || '-' }} ${{ needs.crash.outputs.outcome || '-' }}
+          GOLDEN: ${{ needs.golden.result }} ${{ needs.golden.outputs.started || '-' }} ${{ needs.golden.outputs.outcome || '-' }}
+        run: .github/scripts/nightly-report.sh crash golden

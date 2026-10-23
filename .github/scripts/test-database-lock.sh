@@ -10,11 +10,22 @@
 #   5. two runs of this script at once both pass: each has its own scratch lock, so concurrent
 #      `just db-test` runs reach the real lock instead of breaking each other's self-test (phase 2
 #      gate round 3). A nested run (LOCK_TEST_NESTED set) skips this case.
+#   6. the sweep (P5.3, D-066; Phase 3 gate R1-G5): a SIGKILLed run never reaches its EXIT trap and
+#      leaves its voidforge_test_lock_selftest_<pid> behind. Liveness is the server's, never `ps`
+#      (seats run in separate PID namespaces, so an absent pid proves nothing: R2-2): every run
+#      first opens a holder session whose application_name is its lock database's name, and ends
+#      it on exit. The sweep drops a leftover only when no session holds it or is connected to it
+#      (and DROP without FORCE refuses one that gains a connection meanwhile), lists a held one with
+#      its drop command, and never touches a name of another shape. Planted: a leftover named
+#      after a pid that is dead here but held (kept: the pid isn't evidence), an unheld one
+#      (dropped), an odd name (kept); then two sweeps at once over fresh ones, which must agree.
+#      A nested run skips this case.
 # Every worker runs under a hard timeout (LOCK_TEST_TIMEOUT seconds, default 60), so a lock that
 # deadlocks or never returns fails its case by timeout, never hangs the run (a mutant that let a
 # second worker in once deadlocked an earlier version of this test).
 # Environment: PSQL, a psql command for the server (as for database.sh). The CI database job and
-# just db-test run this before database.sh. It touches only its own voidforge_test_lock_selftest_*.
+# just db-test run this before database.sh. It touches only voidforge_test_lock_selftest_* databases:
+# its own, and the sweep's unheld leftovers.
 set -euo pipefail
 limit=${LOCK_TEST_TIMEOUT:-60}
 # A live holder must never be waited for here: case 2 checks the wait's end with no wait at all.
@@ -67,8 +78,53 @@ fi
 sql() { real_sql "$1"; }
 # shellcheck source=database-lock.sh
 . "$(dirname "$0")/database-lock.sh"
+
+# A run's holder: a session named after its lock database, alive while the run is. A run that's
+# killed outright (no EXIT trap) can leave the session sleeping inside the server's container, so
+# it ends by itself after HOLD_SECS; until then its leftover is kept, never dropped too early.
+hold_secs=900
+start_holder() {
+    "${psql[@]}" -X -q -d "dbname=postgres application_name=$1" -c "SELECT pg_sleep($hold_secs)" \
+        < /dev/null > /dev/null 2>&1 &
+    echo $!
+}
+held() {
+    real_sql "SELECT count(*) FROM pg_stat_activity WHERE application_name = '$1' OR datname = '$1'"
+}
+# A predicate await can call again: its query runs on every try (an argument like
+# "$(held …)" would be read once, before the first).
+holding() { [ "$(held "$1")" != 0 ]; }
+end_holder() {
+    real_sql "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE application_name = '$1'" > /dev/null || true
+    kill "$2" 2> /dev/null || true
+}
+
+# Leftovers of runs that never reached their EXIT trap: drop those no session holds or uses, list
+# those held, and leave any other name alone. Never this run's own.
+sweep() {
+    local old out
+    for old in $(real_sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\_test\_lock\_selftest\_%' ORDER BY 1"); do
+        [ "$old" = "$lock_db" ] && continue
+        if ! [[ $old =~ ^voidforge_test_lock_selftest_[0-9]+$ ]]; then
+            echo "sweep: $old has an unexpected name; not touching it"
+            continue
+        fi
+        if [ "$(held "$old")" != 0 ]; then
+            echo "sweep: $old is held by a live run's session; if that run is gone, drop it with:"
+            echo "  $PSQL -d postgres -c 'DROP DATABASE \"$old\"'"
+        elif out=$(real_sql "DROP DATABASE IF EXISTS \"$old\"" 2>&1); then
+            echo "sweep: dropped $old (no session holds it)"
+        else
+            echo "sweep: couldn't drop $old (in use?): $out"
+        fi
+    done
+}
+own_holder=$(start_holder "$lock_db")
+await holding "$lock_db" || fail "this run's holder session never appeared"
+sweep
+
 scratch=$(mktemp -d)
-trap 'real_sql "DROP DATABASE IF EXISTS $lock_db" > /dev/null; rm -rf "$scratch"' EXIT
+trap 'real_sql "DROP DATABASE IF EXISTS $lock_db" > /dev/null; end_holder "$lock_db" "$own_holder"; rm -rf "$scratch"' EXIT
 real_sql "DROP DATABASE IF EXISTS $lock_db"
 bad=0
 check() {
@@ -143,6 +199,40 @@ if [ -z "${LOCK_TEST_NESTED:-}" ]; then
     wait "$n2" && c2=0 || c2=$?
     check "both exit 0" "$c1 $c2" "0 0"
     [ "$c1 $c2" = "0 0" ] || grep -h FAIL "$scratch/n1.log" "$scratch/n2.log" || true
+fi
+
+if [ -z "${LOCK_TEST_NESTED:-}" ]; then
+    echo "--- 6. the sweep: liveness from the server, not ps; two sweeps at once agree"
+    gone() { real_sql "SELECT count(*) FROM pg_database WHERE datname = '$1'"; }
+    dead_pid() { sh -c 'exit 0' & local p=$!; wait "$p"; echo "$p"; }
+    # A leftover named after a pid that is dead in this namespace, held by a live session: the
+    # namespace repro of R2-2. It must be kept.
+    held_db=voidforge_test_lock_selftest_$(dead_pid)
+    unheld_db=voidforge_test_lock_selftest_$(dead_pid)
+    odd_db=voidforge_test_lock_selftest_${$}odd
+    planted=("$held_db" "$unheld_db" "$odd_db")
+    for db in "${planted[@]}"; do real_sql "CREATE DATABASE \"$db\""; done
+    holder=$(start_holder "$held_db")
+    await holding "$held_db" || fail "the planted holder never appeared"
+    sweep > "$scratch/sweep.log"
+    check "an unheld leftover is dropped" "$(gone "$unheld_db")" 0
+    check "a held one is kept, though ps says its pid is dead" "$(gone "$held_db")" 1
+    check "and listed with its drop command" "$(grep -c "DROP DATABASE \\\"$held_db" "$scratch/sweep.log")" 1
+    check "an odd name is left alone" "$(gone "$odd_db")" 1
+    # Two sweeps at once (two runs starting together): each leftover's fate is the same whichever
+    # sweep reaches it, and neither fails. A third planted set, so nothing above is reused.
+    unheld2=voidforge_test_lock_selftest_$(dead_pid)
+    real_sql "CREATE DATABASE \"$unheld2\""
+    sweep > "$scratch/sweep-a.log" 2>&1 & sa=$!
+    sweep > "$scratch/sweep-b.log" 2>&1 & sb=$!
+    wait "$sa" && ca=0 || ca=$?
+    wait "$sb" && cb=0 || cb=$?
+    check "two sweeps at once both finish" "$ca $cb" "0 0"
+    check "the unheld leftover is gone once" "$(gone "$unheld2")" 0
+    check "the held one is still kept" "$(gone "$held_db")" 1
+    check "the odd name is still there" "$(gone "$odd_db")" 1
+    end_holder "$held_db" "$holder"
+    for db in "${planted[@]}" "$unheld2"; do real_sql "DROP DATABASE IF EXISTS \"$db\""; done
 fi
 
 [ "$bad" -eq 0 ] && echo "ok: every database-lock case passed"

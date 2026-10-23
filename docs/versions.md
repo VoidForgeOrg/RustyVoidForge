@@ -29,6 +29,14 @@ Pinned in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) ([D-007](dec
 | sqlx-cli | 0.9.0 (postgres only, no TLS) | `cargo install sqlx-cli@0.9.0 --locked --no-default-features --features postgres` in the `database` job; no install-action manifest exists ([D-034](decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)) |
 | Postgres service (`database` job) | 18.6, Alpine image | The same digest as the local stack's Postgres, below ([D-034](decision-log.md#d-034-schema-and-migrations-sqlx-and-the-database-tests-stage)) |
 
+## Security updates to locked dependencies
+
+A transitive crate moved in `Cargo.lock` alone, for an advisory `cargo deny check` reports. No manifest names it; `cargo tree -i <crate> --locked` shows its path.
+
+| Crate | Version | Why | Decision |
+| --- | --- | --- | --- |
+| ctutils | 0.4.5 (was 0.4.3), through digest and sqlx-postgres | RUSTSEC-2026-0385: non-constant-time mask generation and `u128` comparisons, fixed in 0.4.4 | [D-066](decision-log.md#d-066-the-nightly-runs) |
+
 ## Guardrail fixtures
 
 Used only by `tests/guardrails/run_fixtures.py`, inside a temporary copy of the workspace ([D-012](decision-log.md#d-012-guardrail-fixtures)). They are not workspace dependencies.
