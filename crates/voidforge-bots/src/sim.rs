@@ -486,6 +486,8 @@ struct Bot {
     /// Planets other players own, and planets no one owns, from the last search.
     others: Vec<PlanetId>,
     free: Vec<PlanetId>,
+    /// The homeworld as last seen: logged at the end, so a thin night shows what held it back.
+    home: Option<PlanetView>,
 }
 
 impl Bot {
@@ -543,6 +545,7 @@ impl Bot {
                 .map(|s| s.planet_id)
                 .collect();
         }
+        self.home = planets.first().cloned();
         Ok(Seen {
             me,
             planets,
@@ -552,7 +555,7 @@ impl Bot {
 
     /// One valid command the state allows, if any, by weight: what moves the game forward (a
     /// Shipyard first, ships, fleets and their missions) far more often than what undoes it
-    /// (cancels and demolitions, which never take a planet's only Shipyard).
+    /// (cancels and demolitions, which never take a planet's last building of a type).
     fn valid(&mut self, seen: &Seen) -> Option<CommandRequest> {
         let mut options: Vec<(u64, CommandRequest)> = Vec::new();
         let rng = &mut self.rng;
@@ -611,10 +614,19 @@ impl Bot {
                             }),
                         ));
                     }
+                    // Never a planet's last working one of a type: its only refinery gone, the
+                    // ingots to build another never come (the first long runs deadlocked so).
                     BuildingView::Operational {
                         id, building_type, ..
                     } if p.buildings.len() >= 4
-                        && (*building_type != BuildingType::Shipyard || shipyards > 1) =>
+                        && p.buildings
+                            .iter()
+                            .filter(|o| {
+                                matches!(o, BuildingView::Operational { .. })
+                                    && kind(o) == *building_type
+                            })
+                            .count()
+                            > 1 =>
                     {
                         options.push((
                             2,
@@ -921,6 +933,7 @@ pub async fn run(
             tally: Tally::default(),
             others: Vec::new(),
             free: Vec::new(),
+            home: None,
         });
     }
     tracing::info!(
@@ -951,6 +964,13 @@ pub async fn run(
     while let Some(done) = tasks.join_next().await {
         let bot = done.map_err(|e| fail("sim", format!("a bot's task failed: {e}")))??;
         tally.add(&bot.tally);
+        if let Some(home) = &bot.home {
+            tracing::info!(
+                "sim: {}'s homeworld at the end: {}",
+                bot.player.name,
+                serde_json::to_string(home).unwrap_or_default()
+            );
+        }
         tally.rate_limited += bot.player.rate_limited();
     }
     tally.wall_seconds = started.elapsed().as_secs_f64();

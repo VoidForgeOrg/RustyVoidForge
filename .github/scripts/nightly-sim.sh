@@ -50,7 +50,8 @@ why=""
 
 summary() {
     if [ -n "${GITHUB_STEP_SUMMARY-}" ]; then
-        python3 "$here/nightly-summary.py" sim "$outcome" "$log_dir" "$why" >> "$GITHUB_STEP_SUMMARY"
+        # Into the job log too: a step summary has no API to read it back from.
+        python3 "$here/nightly-summary.py" sim "$outcome" "$log_dir" "$why" | tee -a "$GITHUB_STEP_SUMMARY"
     else
         python3 "$here/nightly-summary.py" sim "$outcome" "$log_dir" "$why"
     fi
