@@ -5,6 +5,9 @@
 //! server over HTTP alone, through `voidforge-api-types`. Telemetry is initialized the shared way
 //! (D-016).
 //!
+//! P5.3 adds `sim`, the nightly bot simulation (D-066): eight bots play valid and invalid commands
+//! for a set wall time and print what they did as one `@nightly-sim <json>` line.
+//!
 //! P3.7 adds the terminal (D-053): `login` through dex's device code flow, `logout`, and `me`,
 //! `get` and `command` with the saved login.
 //!
@@ -17,6 +20,7 @@ mod client;
 mod login;
 mod scenario;
 mod session;
+mod sim;
 mod terminal;
 mod wait;
 
@@ -85,6 +89,32 @@ enum Command {
         /// The whole scenario's deadline, in seconds (1 to 3,600).
         #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=3_600))]
         deadline_secs: u64,
+    },
+    /// The nightly bot simulation: eight bots (alice, bob, bot1 to bot6) log in through dex's
+    /// password grant, join, and play valid and invalid commands for MINUTES of wall time, checking
+    /// every view and answer. Needs a fresh universe on the fast rules with eight free homeworlds.
+    /// Prints `@nightly-sim <json>` on stdout at the end.
+    #[command(after_help = EXIT_CODES)]
+    Sim {
+        /// The API's base URL.
+        #[arg(long, env = "VOIDFORGE_API", default_value = "http://127.0.0.1:8080")]
+        api: String,
+        /// dex's issuer URL.
+        #[arg(
+            long,
+            env = "VOIDFORGE_ISSUER",
+            default_value = "http://localhost:5556/dex"
+        )]
+        issuer: String,
+        /// A tag unique to this run, in every idempotency key.
+        #[arg(long, value_parser = run_tag)]
+        run: String,
+        /// The bots' seed: their choices, reproducible (their timing isn't).
+        #[arg(long)]
+        seed: u64,
+        /// How long they play, in wall minutes (1 to 360); on the fast rules a minute is 60 v0 hours.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=360))]
+        minutes: u64,
     },
     /// Logs in through dex's device code flow: shows a link and a code to approve in a browser,
     /// waits, then saves the login (valid for dex's 24 hours) for the other commands.
@@ -248,6 +278,16 @@ fn main() -> ExitCode {
                 }
                 code
             }
+            Command::Sim {
+                api,
+                issuer,
+                run,
+                seed,
+                minutes,
+            } => {
+                let span = tracing::info_span!("sim", binary = SERVICE, run = %run, seed);
+                span.in_scope(|| sim(&api, &issuer, &run, seed, Duration::from_secs(minutes * 60)))
+            }
             Command::Login { issuer } => {
                 terminal(|http, file| async move { terminal::login(&http, &issuer, &file).await })
             }
@@ -301,6 +341,39 @@ where
         Ok(()) => 0,
         Err(failure) => {
             eprintln!("{SERVICE}: {failure}");
+            failure.exit()
+        }
+    }
+}
+
+/// Runs the simulation and prints its tally. The exit code is the failure's (1 a check failed; 3
+/// not ready; 4 a login or transport error).
+fn sim(api: &str, issuer: &str, run: &str, seed: u64, wall: Duration) -> u8 {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        tracing::error!("can't start the runtime");
+        return 4;
+    };
+    let Ok(http) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    else {
+        tracing::error!("can't build the HTTP client");
+        return 4;
+    };
+    match runtime.block_on(sim::run(&http, api, issuer, run, seed, wall)) {
+        Ok(tally) => {
+            let mut line = serde_json::to_value(&tally).unwrap_or_default();
+            line["commands_per_second"] = serde_json::json!(tally.commands_per_second());
+            println!("@nightly-sim {line}");
+            tracing::info!("sim PASSED: {line}");
+            0
+        }
+        Err(failure) => {
+            tracing::error!("sim {failure}");
+            eprintln!("sim {failure}");
             failure.exit()
         }
     }

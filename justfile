@@ -79,6 +79,15 @@ migrate:
 determinism:
     .github/scripts/determinism.sh
 
+# Eight bots play through the API against serve on the fast rules, in a voidforge_nightly_* database
+# of the stack's Postgres only, never voidforge; then the log is replayed from its snapshots, the
+# core's invariants are checked after every record, and the step latency is read through Grafana.
+# Needs a password-grant dex: E2E_ISSUER=http://localhost:5563/dex (a throwaway CI-config dex).
+# SIM_MINUTES (30), SIM_SEED; SIM_STEP_P99_MAX and SIM_APPEND_P99_MAX (seconds) bound the latency.
+# The nightly's bot simulation (Technical Plan P5.3, D-066).
+nightly-sim:
+    .github/scripts/nightly-sim.sh
+
 # The file-store seeds run in their own nightly-file-<seed> directories, then the Postgres seeds
 # through the database stage: only voidforge_test and its _sqlx_test_* databases, never voidforge.
 # VOIDFORGE_CRASH_SEED_BASE (1000), VOIDFORGE_CRASH_SEEDS (1000) and VOIDFORGE_CRASH_PG_SEEDS (100)

@@ -33,6 +33,38 @@ staticPasswords:
     userID: 7d4e3f2a-1b0c-4d9e-8f7a-6b5c4d3e2f1a
     # password: bob-local-test-password
     hash: "$2y$10$4oJw.MHtDYGkf1atOwyhqeUQEy.SiU2398nVfIh7QtzbIIC4CfC2."
+  # bot1 to bot6: the nightly bot simulation's players (P5.3, D-066). TEST-ONLY passwords. They need
+  # the password grant, so they log in only where it's on (config.ci.yaml); here they're inert.
+  - email: bot1@voidforge.test
+    username: bot1
+    userID: 3f1a2b4c-5d6e-4f70-8a91-b2c3d4e5f601
+    # password: bot1-local-test-password
+    hash: "$2y$10$CLsehEaRF9rhrqkWN0h29.Qkk2jXI1ncwPk40ACJXU4weRsFxP/5K"
+  - email: bot2@voidforge.test
+    username: bot2
+    userID: 4a2b3c4d-6e7f-4081-9ba2-c3d4e5f60712
+    # password: bot2-local-test-password
+    hash: "$2y$10$0uqluUb7Q/z/Y5yV4bonRuphcCBimf9NyEN23.d9TzaIdb.Oq03zm"
+  - email: bot3@voidforge.test
+    username: bot3
+    userID: 5b3c4d5e-7f80-4192-acb3-d4e5f6071823
+    # password: bot3-local-test-password
+    hash: "$2y$10$T7nfStwyZ.zgQI9kX.NqCeTrs62xXUZD1nVJj1K16x338nQ2dX3OK"
+  - email: bot4@voidforge.test
+    username: bot4
+    userID: 6c4d5e6f-8091-42a3-bdc4-e5f607182934
+    # password: bot4-local-test-password
+    hash: "$2y$10$9GDSDCDYtWgFZmJXcPW39OsocqWWqq31IPOEsASRu6MG3sUN0j80u"
+  - email: bot5@voidforge.test
+    username: bot5
+    userID: 7d5e6f70-91a2-43b4-ced5-f60718293a45
+    # password: bot5-local-test-password
+    hash: "$2y$10$mJli/VDejVD8lE.QnD8.9.dAclswSMCKmknwLO4n4WL6SZbsu5fta"
+  - email: bot6@voidforge.test
+    username: bot6
+    userID: 8e6f7081-a2b3-44c5-dfe6-0718293a4b56
+    # password: bot6-local-test-password
+    hash: "$2y$10$SXcEGU0B1EGHCGu2GpAeH.t7k5M3mW3Ln8F9BCFcG.5F6CKMCm44G"
 
 staticClients:
   # Web frontend: confidential client, authorization code with PKCE.
