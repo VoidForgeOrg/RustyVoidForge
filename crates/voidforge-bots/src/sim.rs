@@ -687,6 +687,7 @@ impl Bot {
                     ..
                 } => {
                     let colony = ships.iter().any(|s| s.ship_type == ShipType::ColonyShip);
+                    let cargo_vessel = ships.iter().any(|s| s.ship_type == ShipType::CargoVessel);
                     let owned: Vec<PlanetId> = seen
                         .me
                         .planet_ids
@@ -697,7 +698,14 @@ impl Bot {
                     let target = if colony && !self.free.is_empty() {
                         rng.pick(&self.free).map(|t| (*t, Mission::Colonize))
                     } else if !owned.is_empty() {
-                        rng.pick(&owned).map(|t| (*t, Mission::Transport))
+                        // A Transport needs a Cargo Vessel; without one, the fleet moves (the first
+                        // full runs sent 1,165 transports the game refused for want of one).
+                        let mission = if cargo_vessel {
+                            Mission::Transport
+                        } else {
+                            Mission::Move
+                        };
+                        rng.pick(&owned).map(|t| (*t, mission))
                     } else {
                         self.free
                             .iter()
@@ -974,16 +982,22 @@ pub async fn run(
         tally.rate_limited += bot.player.rate_limited();
     }
     tally.wall_seconds = started.elapsed().as_secs_f64();
-    if tally.rate_limited > 0 {
-        return Err(fail(
-            "sim",
-            format!(
-                "{} requests met a 429: serve's defaults must leave the bots margin (D-054)",
-                tally.rate_limited
-            ),
-        ));
-    }
+    judge_rate(tally.rate_limited).map_err(|e| fail("sim", e))?;
     Ok(tally)
+}
+
+/// Any 429 fails the run: serve's defaults must leave eight bots their margin (D-054).
+///
+/// # Errors
+/// How many requests met one.
+pub fn judge_rate(rate_limited: u64) -> Result<(), String> {
+    if rate_limited == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "{rate_limited} requests met a 429: serve's defaults must leave the bots margin (D-054)"
+        ))
+    }
 }
 
 #[cfg(test)]

@@ -45,6 +45,7 @@ lint:
     python3 .github/scripts/check-nightly.py
     python3 .github/scripts/check-nightly.py --self-test
     .github/scripts/test-nightly-issue.sh
+    python3 .github/scripts/test-nightly-latency.py
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     python3 tests/guardrails/check_no_floats.py

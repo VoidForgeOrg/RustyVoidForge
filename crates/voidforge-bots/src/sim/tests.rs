@@ -239,3 +239,9 @@ fn the_players_are_the_ci_dex_config_s_static_users() {
     }
     assert_eq!(names.len(), 8);
 }
+
+#[test]
+fn any_429_fails_the_run() {
+    assert_eq!(judge_rate(0), Ok(()));
+    assert!(judge_rate(1).unwrap_err().contains("1 requests met a 429"));
+}

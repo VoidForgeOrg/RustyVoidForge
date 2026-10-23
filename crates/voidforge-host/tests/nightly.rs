@@ -81,7 +81,8 @@ fn stocks_within_caps(w: &World) {
     }
 }
 
-fn invariants(w: &World, rules: &Rules, seq: i64) {
+fn invariants(w: &World, rules: &Rules, seq: i64, checked_states: &mut u64) {
+    *checked_states += 1;
     let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert_transition_invariants(w, rules);
         assert_fleet_invariants(w, rules);
@@ -124,7 +125,8 @@ async fn nightly_invariants() {
     )
     .expect("the first snapshot decodes under v0-fast")
     .world;
-    invariants(&world, &rules, row.seq);
+    let mut checked = 0;
+    invariants(&world, &rules, row.seq, &mut checked);
     let records = store.records_after(row.seq).await.unwrap();
     let mut last = row.seq;
     for record in &records {
@@ -137,12 +139,13 @@ async fn nightly_invariants() {
         )
         .unwrap_or_else(|e| panic!("record {} doesn't replay: {e}", record.seq));
         last = record.seq;
-        invariants(&world, &rules, last);
+        invariants(&world, &rules, last, &mut checked);
     }
     println!(
         "@nightly-invariants {}",
         serde_json::json!({
             "database": name, "from_snapshot": row.seq, "records": records.len(), "head": last,
+            "checked": checked,
             "snapshots": index.len(), "game_time_ms": world.time_ms
         })
     );

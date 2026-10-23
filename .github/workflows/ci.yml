@@ -49,6 +49,7 @@ jobs:
           python3 .github/scripts/check-nightly.py
           python3 .github/scripts/check-nightly.py --self-test
           .github/scripts/test-nightly-issue.sh
+          python3 .github/scripts/test-nightly-latency.py
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors

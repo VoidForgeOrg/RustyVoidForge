@@ -177,12 +177,17 @@ def sim(outcome, log_dir, why):
     snaps = None
     if inspect and inspect.get("sources"):
         snaps = len(inspect["sources"][0].get("snapshots", []))
+    late = load(f"{log_dir}/replay-latest.json")
     if early:
         src = (early.get("sources") or [early])[0]
+        tail = "then from its last snapshot before serve's shutdown one"
+        if late:
+            lsrc = (late.get("sources") or [late])[0]
+            first = lsrc.get("last_seq", 0) - lsrc.get("records", 0)
+            tail += f", seq {first} ({lsrc.get('records', '?')} records)"
         out.append(f"- Self-consistency replays (no blessed hash: the replay agrees with itself): the "
                    f"sim log, {src.get('records', '?')} records, replayed from its earliest snapshot "
-                   f"and checked against {snaps if snaps is not None else '?'} snapshots; then from "
-                   f"its latest.")
+                   f"and checked against {snaps if snaps is not None else '?'} snapshots; {tail}.")
     keys = keys_lookup(f"{log_dir}/keys-explain.log")
     if keys:
         out.append(f"- The keyed-submission lookup on the final log (D-037; reported, not bounded): "

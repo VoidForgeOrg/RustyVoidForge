@@ -30,6 +30,7 @@ on:
       - .github/workflows/nightly.yml
       - .github/scripts/nightly-*
       - .github/scripts/test-nightly-issue.sh
+      - .github/scripts/test-nightly-latency.py
       - .github/scripts/check-nightly.py
       - crates/voidforge-host/tests/crash.rs
       - crates/voidforge-host/tests/nightly.rs

@@ -10,7 +10,7 @@
 #   5. runs `voidforge-bots sim` for SIM_MINUTES (default 30: about 10.7 v0 weeks);
 #   6. stops serve with one SIGTERM, which must exit 0;
 #   7. verifies the log with `voidforge-replay postgres` from the earliest snapshot (every later
-#      snapshot must equal the replay up to it) and from the latest;
+#      snapshot must equal the replay up to it) and from the last before serve's shutdown snapshot;
 #   8. checks the core's invariants after every record (nightly_invariants);
 #   9. reads the step and append latency through Grafana's Prometheus (nightly-latency.py), bounded
 #      by SIM_STEP_P99_MAX and SIM_APPEND_P99_MAX in seconds when set;
@@ -163,18 +163,30 @@ esac
 url="$url_base/$db"
 "$bin/voidforge-replay" inspect postgres --database-url "$url" --json > "$log_dir/inspect.json" \
     2>> "$log_dir/replay.log" || finish failed "replay inspect failed (see $log_dir/replay.log)"
-latest=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1]))["sources"][0]["snapshots"]; print(s[-1]["seq"])' "$log_dir/inspect.json")
+# "The latest" is the last snapshot before serve's shutdown one, which sits at the head: from that
+# one, nothing would replay.
+latest=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1]))["sources"][0]["snapshots"]; print(s[-2]["seq"] if len(s) > 1 else "")' "$log_dir/inspect.json")
+[ -n "$latest" ] || finish failed "the log has only one snapshot (see $log_dir/inspect.json): serve's periodic snapshots never ran"
 "$bin/voidforge-replay" postgres --database-url "$url" --rules rules/v0-fast.toml --json \
     > "$log_dir/replay-earliest.json" 2>> "$log_dir/replay.log" \
     || finish failed "the log doesn't replay from its earliest snapshot (see $log_dir/replay-earliest.json)"
 "$bin/voidforge-replay" postgres --database-url "$url" --rules rules/v0-fast.toml --from "$latest" --json \
     > "$log_dir/replay-latest.json" 2>> "$log_dir/replay.log" \
     || finish failed "the log doesn't replay from its latest snapshot, seq $latest (see $log_dir/replay-latest.json)"
+python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["sources"][0]["records"] > 0 else 1)' \
+    "$log_dir/replay-latest.json" || finish failed "the replay from seq $latest replayed no records"
 
 # 8. The core's invariants after every record.
 VOIDFORGE_NIGHTLY_DATABASE_URL="$url" cargo nextest run --cargo-profile release -p voidforge-host \
     --test nightly --locked --run-ignored only --no-capture -E 'test(=nightly_invariants)' \
     > "$log_dir/invariants.log" 2>&1 || finish failed "an invariant broke (see $log_dir/invariants.log)"
+# Every state was checked: the snapshot's, then one after each record.
+python3 -c '
+import json, sys
+line = next(l for l in open(sys.argv[1]) if l.startswith("@nightly-invariants "))
+r = json.loads(line.split(" ", 1)[1])
+sys.exit(0 if r["checked"] == r["records"] + 1 else 1)' "$log_dir/invariants.log" \
+    || finish failed "the invariants weren't checked after every record (see $log_dir/invariants.log)"
 
 # 9. Step latency, from serve's own histograms.
 bounds=()
