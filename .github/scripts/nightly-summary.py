@@ -34,8 +34,8 @@ def crash(outcome, logs):
             pass
     out = [f"## Crash and retry: {HEADLINE[outcome]}", ""]
     out.append("Checked: the host killed at seeded points; every command retried with its key ends "
-               "with exactly one outcome; every kill point was reached (and a kill inside a "
-               "multi-command turn, on the file store).")
+               "with exactly one outcome; every kill point was reached. Kills inside a "
+               "multi-command turn are counted, not required.")
     out.append("")
     if not nights:
         out.append("No run reported its numbers (see the log).")

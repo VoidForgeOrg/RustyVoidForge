@@ -1003,33 +1003,28 @@ fn the_nightly_never_shares_a_scratch_directory_with_the_per_pr_runs() {
     }
 }
 
-/// The night's coverage over all its seeds (P5.3, D-066): every kill point was reached, and so was
-/// a kill inside a multi-command turn, or the night proves less than it says. Each seed's own
-/// checks (exactly one outcome per command) already ran in `run_seed`.
-fn assert_covered(seen: &Seen, points: &[&str], multi_command_turns: bool) {
+/// The night's coverage over all its seeds (P5.3, D-066): every kill point was reached, or the
+/// night proves less than it says. Each seed's own checks (exactly one outcome per command) already
+/// ran in `run_seed`. A kill inside a multi-command turn is reported, not required: its rate varies
+/// too much between seed ranges (28 in seeds 1000..2000, 1 in 31000..32000) to bound, and a red
+/// night must mean a defect. The per-PR test requires one on its fixed seeds.
+fn assert_covered(seen: &Seen, points: &[&str]) {
     let want: BTreeSet<String> = points.iter().map(|p| (*p).to_owned()).collect();
     let reached = seen.points();
     let missed: Vec<&String> = want.difference(&reached).collect();
     assert!(missed.is_empty(), "kill points never reached: {missed:?}");
-    if multi_command_turns {
-        assert!(seen.mid_turn > 0, "no kill inside a multi-command turn");
-    }
 }
 
 #[test]
-fn a_night_that_misses_a_kill_point_or_a_multi_command_turn_fails() {
+fn a_night_that_misses_a_kill_point_fails() {
     let mut seen = Seen::default();
     for p in &FILE_POINTS[1..] {
         seen.kills.insert((*p).to_owned(), 1);
     }
-    seen.mid_turn = 1;
-    let missed = std::panic::catch_unwind(|| assert_covered(&seen, &FILE_POINTS, true));
+    let missed = std::panic::catch_unwind(|| assert_covered(&seen, &FILE_POINTS));
     assert!(missed.is_err(), "append.before was never reached");
     seen.kills.insert(FILE_POINTS[0].to_owned(), 1);
-    assert_covered(&seen, &FILE_POINTS, true);
-    seen.mid_turn = 0;
-    let flat = std::panic::catch_unwind(|| assert_covered(&seen, &FILE_POINTS, true));
-    assert!(flat.is_err(), "no multi-command turn");
+    assert_covered(&seen, &FILE_POINTS);
 }
 
 /// The night's numbers for the job summary: one line, `@nightly-crash <json>`.
@@ -1041,7 +1036,7 @@ fn summary(store: &str, base: u64, seeds: u64, seen: &Seen) {
 
 /// The nightly shape (P5.3, D-066): seeds from VOIDFORGE_CRASH_SEED_BASE, VOIDFORGE_CRASH_SEEDS of
 /// them, VOIDFORGE_CRASH_COMMANDS each, in the nightly's own scratch directories. A failure names
-/// its seed; then the night must have reached every kill point and a multi-command turn.
+/// its seed; then the night must have reached every kill point.
 #[tokio::test]
 #[ignore = "nightly: VOIDFORGE_CRASH_SEED_BASE, VOIDFORGE_CRASH_SEEDS, VOIDFORGE_CRASH_COMMANDS"]
 async fn crash_nightly() {
@@ -1054,7 +1049,7 @@ async fn crash_nightly() {
     )
     .await;
     summary("file", base, n, &seen);
-    assert_covered(&seen, &FILE_POINTS, true);
+    assert_covered(&seen, &FILE_POINTS);
 }
 
 /// The test database's URL: the stage's `DATABASE_URL` with this test's database.
@@ -1126,5 +1121,5 @@ async fn crash_nightly_postgres(pool: sqlx::PgPool) {
     )
     .await;
     summary("postgres", base, n, &seen);
-    assert_covered(&seen, &PG_POINTS, false);
+    assert_covered(&seen, &PG_POINTS);
 }
