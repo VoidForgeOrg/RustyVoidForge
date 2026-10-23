@@ -112,8 +112,17 @@ impl LogStore for GatedLog {
         &mut self,
         keys: &[(PlayerId, IdempotencyKey)],
     ) -> Result<Vec<LogRecord>, LogError> {
-        tokio::time::sleep(self.lookup_delay).await;
-        self.inner.find_keys(keys).await
+        // A span of the store's own, as a real store's queries have: a test sees whose child the
+        // lookup ran as.
+        let span = tracing::info_span!("test.store.find_keys");
+        tracing::Instrument::instrument(
+            async {
+                tokio::time::sleep(self.lookup_delay).await;
+                self.inner.find_keys(keys).await
+            },
+            span,
+        )
+        .await
     }
 
     async fn keyed_since(&mut self, since: i64) -> Result<Vec<LogRecord>, LogError> {

@@ -277,7 +277,8 @@ async fn a_replayed_key_has_a_command_span_and_no_step_or_append() {
 }
 
 /// P5.1 QA's N3 (D-066): the turn's key lookup has a span of its own, the turn's child, and it
-/// encloses the lookup: a lookup held 200 ms shows as a span of at least that, inside the turn.
+/// encloses the lookup: a lookup held 200 ms shows as a span of at least that, inside the turn,
+/// and the store's own span is its child.
 #[tokio::test]
 async fn the_turn_s_key_lookup_has_its_own_span_around_the_lookup() {
     const HELD: Duration = Duration::from_millis(200);
@@ -328,6 +329,11 @@ async fn the_turn_s_key_lookup_has_its_own_span_around_the_lookup() {
         keys.parent_span_id,
         id(&turn),
         "the lookup is the turn's child"
+    );
+    assert_eq!(
+        one(&spans, "test.store.find_keys").parent_span_id,
+        id(keys),
+        "the store's lookup runs inside the span"
     );
     assert_eq!(attr(keys, "misses").as_deref(), Some("1"));
     assert_eq!(attr(keys, "found").as_deref(), Some("0"));
