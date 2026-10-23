@@ -10,11 +10,18 @@
 #   5. two runs of this script at once both pass: each has its own scratch lock, so concurrent
 #      `just db-test` runs reach the real lock instead of breaking each other's self-test (phase 2
 #      gate round 3). A nested run (LOCK_TEST_NESTED set) skips this case.
+#   6. the sweep (P5.3, D-066; Phase 3 gate R1-G5): a SIGKILLed run never reaches its EXIT trap and
+#      leaves its voidforge_test_lock_selftest_<pid> behind. Every run sweeps first: it drops one
+#      whose pid is gone, lists one whose pid is alive with the command that drops it, and never
+#      touches a name of any other shape. Planted cases: a dead pid, a live pid, an odd name. A
+#      nested run skips this case.
 # Every worker runs under a hard timeout (LOCK_TEST_TIMEOUT seconds, default 60), so a lock that
 # deadlocks or never returns fails its case by timeout, never hangs the run (a mutant that let a
 # second worker in once deadlocked an earlier version of this test).
 # Environment: PSQL, a psql command for the server (as for database.sh). The CI database job and
-# just db-test run this before database.sh. It touches only its own voidforge_test_lock_selftest_*.
+# just db-test run this before database.sh. It touches only voidforge_test_lock_selftest_* databases:
+# its own, and the sweep's (pids are this host's: the CI job and the local stack run their checks on
+# the server's host).
 set -euo pipefail
 limit=${LOCK_TEST_TIMEOUT:-60}
 # A live holder must never be waited for here: case 2 checks the wait's end with no wait at all.
@@ -67,6 +74,30 @@ fi
 sql() { real_sql "$1"; }
 # shellcheck source=database-lock.sh
 . "$(dirname "$0")/database-lock.sh"
+
+# Leftovers of runs that never reached their EXIT trap: drop those whose pid is gone, list those
+# whose pid is alive, and leave any other name alone. Never this run's own.
+sweep() {
+    local old pid out
+    for old in $(real_sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\_test\_lock\_selftest\_%' ORDER BY 1"); do
+        [ "$old" = "$lock_db" ] && continue
+        if ! [[ $old =~ ^voidforge_test_lock_selftest_[0-9]+$ ]]; then
+            echo "sweep: $old has an unexpected name; not touching it"
+            continue
+        fi
+        pid=${old##*_}
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "sweep: $old: pid $pid is alive (another run?); if it isn't, drop it with:"
+            echo "  $PSQL -d postgres -c 'DROP DATABASE \"$old\"'"
+        elif out=$(real_sql "DROP DATABASE IF EXISTS \"$old\"" 2>&1); then
+            echo "sweep: dropped $old (pid $pid is gone)"
+        else
+            echo "sweep: couldn't drop $old (pid $pid is gone; in use?): $out"
+        fi
+    done
+}
+sweep
+
 scratch=$(mktemp -d)
 trap 'real_sql "DROP DATABASE IF EXISTS $lock_db" > /dev/null; rm -rf "$scratch"' EXIT
 real_sql "DROP DATABASE IF EXISTS $lock_db"
@@ -143,6 +174,27 @@ if [ -z "${LOCK_TEST_NESTED:-}" ]; then
     wait "$n2" && c2=0 || c2=$?
     check "both exit 0" "$c1 $c2" "0 0"
     [ "$c1 $c2" = "0 0" ] || grep -h FAIL "$scratch/n1.log" "$scratch/n2.log" || true
+fi
+
+if [ -z "${LOCK_TEST_NESTED:-}" ]; then
+    echo "--- 6. the sweep drops a dead run's leftover, lists a live one's, leaves odd names alone"
+    sh -c 'exit 0' & dead_pid=$!
+    wait "$dead_pid"
+    sleep 300 & live_pid=$!
+    dead_db=voidforge_test_lock_selftest_$dead_pid
+    live_db=voidforge_test_lock_selftest_$live_pid
+    odd_db=voidforge_test_lock_selftest_${$}odd
+    planted=("$dead_db" "$live_db" "$odd_db")
+    for db in "${planted[@]}"; do real_sql "CREATE DATABASE \"$db\""; done
+    sweep > "$scratch/sweep.log"
+    gone() { real_sql "SELECT count(*) FROM pg_database WHERE datname = '$1'"; }
+    check "a dead run's leftover is dropped" "$(gone "$dead_db")" 0
+    check "and the sweep says so" "$(grep -c "dropped $dead_db" "$scratch/sweep.log")" 1
+    check "a live run's is kept" "$(gone "$live_db")" 1
+    check "and listed with its drop command" "$(grep -c "DROP DATABASE \\\"$live_db" "$scratch/sweep.log")" 1
+    check "an odd name is left alone" "$(gone "$odd_db")" 1
+    kill "$live_pid" 2> /dev/null || true
+    for db in "${planted[@]}"; do real_sql "DROP DATABASE IF EXISTS \"$db\""; done
 fi
 
 [ "$bad" -eq 0 ] && echo "ok: every database-lock case passed"

@@ -44,6 +44,11 @@ jobs:
         run: python3 .github/scripts/test-web-login-ready.py
       - name: The images' pins and their compose project (P5.2, D-065)
         run: python3 .github/scripts/check-images.py --static
+      - name: The nightly's permissions and report path, and their regression cases (P5.3, D-066)
+        run: |
+          python3 .github/scripts/check-nightly.py
+          python3 .github/scripts/check-nightly.py --self-test
+          .github/scripts/test-nightly-issue.sh
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors

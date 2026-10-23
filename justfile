@@ -1,7 +1,7 @@
 # Voidforge task runner (Technical Plan, Tech stack and CI/CD). The lint, supply-chain and test
 # recipes run the same commands as the CI jobs of the same name, so a red check reproduces here.
 # db-test and migrate arrived with P2.1 (D-034), bless with P2.6 (D-040), replay with P2.7 (D-041), seed and seed-reset with
-# P2.9 (D-043), openapi with P3.1 (D-045), dex-test with P3.2 (D-046), serve with P3.4s (D-050), e2e with P3.6 (D-052), images, images-up, images-down and smoke-images with P5.2 (D-065). Recipes appear with the packages that implement them (decision log D-014).
+# P2.9 (D-043), openapi with P3.1 (D-045), dex-test with P3.2 (D-046), serve with P3.4s (D-050), e2e with P3.6 (D-052), images, images-up, images-down and smoke-images with P5.2 (D-065), nightly-crash and nightly-golden with P5.3 (D-066). Recipes appear with the packages that implement them (decision log D-014).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -42,6 +42,9 @@ lint:
     .github/scripts/test-check-dex-parity.sh
     python3 .github/scripts/test-web-login-ready.py
     python3 .github/scripts/check-images.py --static
+    python3 .github/scripts/check-nightly.py
+    python3 .github/scripts/check-nightly.py --self-test
+    .github/scripts/test-nightly-issue.sh
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     python3 tests/guardrails/check_no_floats.py
@@ -75,6 +78,21 @@ migrate:
 # The CI determinism job: the suite, then the two-process double run (decision log D-024).
 determinism:
     .github/scripts/determinism.sh
+
+# The file-store seeds run in their own nightly-file-<seed> directories, then the Postgres seeds
+# through the database stage: only voidforge_test and its _sqlx_test_* databases, never voidforge.
+# VOIDFORGE_CRASH_SEED_BASE (1000), VOIDFORGE_CRASH_SEEDS (1000) and VOIDFORGE_CRASH_PG_SEEDS (100)
+# as in CI; a red seed reruns alone with VOIDFORGE_CRASH_SEED_BASE=<seed> VOIDFORGE_CRASH_SEEDS=1.
+# The nightly's crash-and-retry run (Technical Plan P5.3, D-066).
+nightly-crash:
+    DATABASE_URL={{test_db_url}} PSQL="{{compose}} exec -T postgres psql -U voidforge" \
+        .github/scripts/nightly-crash.sh
+
+# The three golden checks every PR runs, in a release build. It never blesses: tests/golden must
+# be unchanged afterwards.
+# The nightly's golden replays (Technical Plan P5.3, D-066).
+nightly-golden:
+    .github/scripts/nightly-golden.sh
 
 # The replay tool (decision log D-041), for example `just replay golden tests/golden` or
 # `just replay postgres --rules rules/v0.toml --build <id>`. Exit codes: 0 verified, 1 diverged,

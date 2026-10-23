@@ -46,6 +46,8 @@ pub struct GatedLog {
     /// How long each snapshot write takes: a turn that snapshots stays open this long after its
     /// replies.
     snapshot_delay: Duration,
+    /// How long each key lookup takes.
+    lookup_delay: Duration,
 }
 
 impl GatedLog {
@@ -56,7 +58,14 @@ impl GatedLog {
             gate: Arc::new(Semaphore::new(0)),
             entered: Arc::new(watch::Sender::new(0)),
             snapshot_delay: Duration::ZERO,
+            lookup_delay: Duration::ZERO,
         }
+    }
+
+    /// Each key lookup takes `delay`.
+    pub fn slow_key_lookups(mut self, delay: Duration) -> Self {
+        self.lookup_delay = delay;
+        self
     }
 
     /// Each snapshot write takes `delay`.
@@ -103,6 +112,7 @@ impl LogStore for GatedLog {
         &mut self,
         keys: &[(PlayerId, IdempotencyKey)],
     ) -> Result<Vec<LogRecord>, LogError> {
+        tokio::time::sleep(self.lookup_delay).await;
         self.inner.find_keys(keys).await
     }
 

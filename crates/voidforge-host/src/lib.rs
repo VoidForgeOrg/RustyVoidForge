@@ -630,11 +630,23 @@ impl<S: LogStore, C: Clock> Host<S, C> {
         misses.dedup();
         if !misses.is_empty() {
             self.stats.key_lookups.fetch_add(1, Ordering::Relaxed);
+            // The lookup's own span, inside the turn's (P5.1 QA's N3, D-066): its time was
+            // invisible in the turn's.
+            let lookup = tracing::info_span!(
+                "host.keys",
+                misses = misses.len(),
+                found = tracing::field::Empty
+            );
             let found = self
                 .store
                 .find_keys(&misses)
+                .instrument(lookup.clone())
                 .await
                 .and_then(|records| records.iter().map(known).collect::<Result<Vec<_>, _>>());
+            if let Ok(entries) = &found {
+                lookup.record("found", entries.len());
+            }
+            drop(lookup);
             match found {
                 Ok(entries) => self.keys.extend(entries),
                 Err(e) => {

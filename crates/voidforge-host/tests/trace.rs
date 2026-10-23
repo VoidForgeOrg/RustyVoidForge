@@ -275,3 +275,65 @@ async fn a_replayed_key_has_a_command_span_and_no_step_or_append() {
     drop(handle);
     task.join().unwrap();
 }
+
+/// P5.1 QA's N3 (D-066): the turn's key lookup has a span of its own, the turn's child, and it
+/// encloses the lookup: a lookup held 200 ms shows as a span of at least that, inside the turn.
+#[tokio::test]
+async fn the_turn_s_key_lookup_has_its_own_span_around_the_lookup() {
+    const HELD: Duration = Duration::from_millis(200);
+    let captured = capture();
+    let (world, home, _) = world();
+    let log = GatedLog::closed(MemoryLog::new()).slow_key_lookups(HELD);
+    log.release(16);
+    let (handle, task) = voidforge_host::spawn(
+        world,
+        v0_rules(),
+        {
+            let log = log.clone();
+            move || log
+        },
+        clock_at(MS_PER_HOUR),
+        config(),
+    )
+    .unwrap();
+    let request = tracing::info_span!("test.request");
+    let trace = voidforge_telemetry::trace_id(&request).expect("exported");
+    in_time(
+        handle
+            .submit_with_key(drill(ALICE, home), IdempotencyKey::new("n3-keys").unwrap())
+            .instrument(request.clone()),
+    )
+    .await
+    .unwrap();
+    drop(request);
+    let linked = |s: &SpanData| {
+        s.name == "host.turn"
+            && s.links
+                .iter()
+                .any(|l| l.span_context.trace_id().to_string() == trace)
+    };
+    let turn: SpanData = in_time(async {
+        loop {
+            if let Some(turn) = captured.spans().into_iter().find(linked) {
+                break turn;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let turn_trace = turn.span_context.trace_id().to_string();
+    let spans = captured.trace(&turn_trace);
+    let keys = one(&spans, "host.keys");
+    assert_eq!(
+        keys.parent_span_id,
+        id(&turn),
+        "the lookup is the turn's child"
+    );
+    assert_eq!(attr(keys, "misses").as_deref(), Some("1"));
+    assert_eq!(attr(keys, "found").as_deref(), Some("0"));
+    let took = keys.end_time.duration_since(keys.start_time).unwrap();
+    assert!(took >= HELD, "the span encloses the held lookup: {took:?}");
+    assert!(keys.start_time >= turn.start_time && keys.end_time <= turn.end_time);
+    drop(handle);
+    task.join().unwrap();
+}
