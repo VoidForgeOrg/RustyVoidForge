@@ -46,6 +46,12 @@ const NO_SUCH_ID: u64 = 1 << 52;
 /// how many are sent again with their key.
 const INVALID_PER_MILLE: u64 = 150;
 const RETRY_PER_MILLE: u64 = 100;
+/// Per tick, the chance (per 1,000) that an undo (a cancel or a recall) is offered at all. Offered
+/// every tick, an undo wins whenever it's a bot's only option: the first runs recalled 70 of 71
+/// fleets sent and cancelled 31 of 49 ship builds, so few missions ever arrived.
+const UNDO_PER_MILLE: u64 = 5;
+/// Ship builds a Shipyard may hold at once before the bots stop queueing.
+const BUILDS_PER_SHIPYARD: usize = 2;
 
 /// The bots' test users: the nightly's 8 players (deploy/dex/config.ci.yaml). TEST-ONLY.
 pub const PLAYERS: [TestUser; 8] = [
@@ -102,6 +108,8 @@ pub struct Tally {
     pub invalid: BTreeMap<String, u64>,
     pub retried: u64,
     pub rate_limited: u64,
+    /// The most planets any one bot held: colonies landed, or not.
+    pub most_planets: usize,
 }
 
 impl Tally {
@@ -121,6 +129,7 @@ impl Tally {
             *self.invalid.entry(code.clone()).or_default() += n;
         }
         self.retried += other.retried;
+        self.most_planets = self.most_planets.max(other.most_planets);
     }
 
     /// Commands a second, every kind: the load the D-037 measurement is recorded at.
@@ -489,6 +498,7 @@ impl Bot {
         let name = self.player.name;
         let me = view(name, "GET /players/me", self.player.me().await?)?;
         check_player(&me).map_err(|e| fail(name, e))?;
+        self.tally.most_planets = self.tally.most_planets.max(me.planet_ids.len());
         let mut ids = vec![me.homeworld_id];
         let mut rest: Vec<PlanetId> = me
             .planet_ids
@@ -578,11 +588,20 @@ impl Bot {
             }
             for b in &p.buildings {
                 match b {
+                    // At most two builds per Shipyard: a ship costs nothing up front, so an open
+                    // queue grows every tick and its builds starve each other of ingots (the
+                    // first runs queued 1,320 ships and assembled 22 fleets).
                     BuildingView::Operational {
                         id,
                         building_type: BuildingType::Shipyard,
                         ..
-                    } => {
+                    } if p
+                        .ship_builds
+                        .iter()
+                        .filter(|s| s.shipyard_id == *id)
+                        .count()
+                        < BUILDS_PER_SHIPYARD =>
+                    {
                         let ship_type = [ShipType::ColonyShip, ShipType::CargoVessel][rng.below(2)];
                         options.push((
                             30,
@@ -602,7 +621,7 @@ impl Bot {
                             CommandRequest::DemolishBuilding(BuildingRef { building_id: *id }),
                         ));
                     }
-                    BuildingView::UnderConstruction { id, .. } if rng.chance(20) => {
+                    BuildingView::UnderConstruction { id, .. } if rng.chance(UNDO_PER_MILLE) => {
                         options.push((
                             1,
                             CommandRequest::CancelConstruction(BuildingRef { building_id: *id }),
@@ -611,7 +630,7 @@ impl Bot {
                     _ => {}
                 }
             }
-            if let Some(build) = p.ship_builds.first().filter(|_| rng.chance(20)) {
+            if let Some(build) = p.ship_builds.first().filter(|_| rng.chance(UNDO_PER_MILLE)) {
                 options.push((
                     1,
                     CommandRequest::CancelShipBuild(CancelShipBuild {
@@ -700,7 +719,7 @@ impl Bot {
                         ));
                     }
                 }
-                FleetView::InTransit { fleet_id, .. } => {
+                FleetView::InTransit { fleet_id, .. } if rng.chance(UNDO_PER_MILLE) => {
                     options.push((
                         2,
                         CommandRequest::RecallFleet(FleetRef {
@@ -708,7 +727,7 @@ impl Bot {
                         }),
                     ));
                 }
-                FleetView::Returning { .. } => {}
+                FleetView::InTransit { .. } | FleetView::Returning { .. } => {}
             }
         }
         let total: u64 = options.iter().map(|(w, _)| w).sum();
@@ -846,9 +865,16 @@ impl Bot {
         let key = self.key();
         let reply = self.player.command(&command, &key).await?;
         self.tally.valid_sent += 1;
+        // A send by its mission too (send_fleet:colonize), so the summary shows which ran.
         let kind = serde_json::to_value(&command)
             .ok()
-            .and_then(|v| v["type"].as_str().map(str::to_owned))
+            .and_then(|v| {
+                let kind = v["type"].as_str()?.to_owned();
+                Some(match v["mission"].as_str() {
+                    Some(m) => format!("{kind}:{m}"),
+                    None => kind,
+                })
+            })
             .unwrap_or_default();
         *self.tally.valid_by_type.entry(kind).or_default() += 1;
         match judge_valid(&reply).map_err(|e| fail(name, format!("{command:?}: {e}")))? {

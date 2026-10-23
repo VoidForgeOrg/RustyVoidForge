@@ -14,7 +14,8 @@
 #   8. checks the core's invariants after every record (nightly_invariants);
 #   9. reads the step and append latency through Grafana's Prometheus (nightly-latency.py), bounded
 #      by SIM_STEP_P99_MAX and SIM_APPEND_P99_MAX in seconds when set;
-#  10. drops the database and writes the summary.
+#  10. plans and times the keyed-submission lookup on the final log (D-037; reported);
+#  11. drops the database and writes the summary.
 # It never touches voidforge or any database but its own.
 #
 # Environment: SIM_MINUTES (30), SIM_SEED (default: the time), E2E_ISSUER (default
@@ -184,4 +185,13 @@ case $? in
     3) finish infra "the collector's Prometheus went away (see $log_dir/latency.log)" ;;
     *) finish failed "step latency (see $log_dir/latency.log)" ;;
 esac
+# 10. D-037: the keyed-submission lookup (find_keys' query, voidforge-store's log.rs), planned and
+# timed on the log at its final size, for the last key stored. Reported, not bounded.
+last="(SELECT %s FROM log_records WHERE idempotency_key IS NOT NULL ORDER BY seq DESC LIMIT 1)"
+# shellcheck disable=SC2059
+explain="EXPLAIN (ANALYZE, BUFFERS) SELECT seq FROM log_records WHERE (player_id, idempotency_key) IN
+    (SELECT p::uuid, k FROM unnest(ARRAY[$(printf "$last" player_id::text)], ARRAY[$(printf "$last" idempotency_key)]) AS u(p, k))
+    ORDER BY seq"
+"${psql[@]:0:${#psql[@]}-1}" "$db" -c "$explain" < /dev/null > "$log_dir/keys-explain.log" 2>&1 \
+    || say "the key lookup's EXPLAIN failed (see $log_dir/keys-explain.log): reported, not a verdict"
 finish passed "the bots played $minutes min; the log replays from its snapshots; every invariant held"

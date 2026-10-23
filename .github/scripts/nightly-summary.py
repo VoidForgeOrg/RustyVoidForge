@@ -13,6 +13,7 @@ the database stage wasn't ready, not a verdict on the code).
 """
 
 import json
+import re
 import sys
 
 HEADLINE = {
@@ -127,6 +128,20 @@ def ms(seconds):
     return "–" if seconds is None else f"{seconds * 1000:.2f} ms"
 
 
+def keys_lookup(path):
+    """The find_keys EXPLAIN's execution time and whether it used the unique index, or None."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return None
+    m = re.search(r"Execution Time: ([0-9.]+) ms", text)
+    if not m:
+        return None
+    index = "log_records_player_key_unique" in text
+    return f"{m.group(1)} ms, {'by' if index else 'NOT by'} the (player_id, idempotency_key) index"
+
+
 def sim(outcome, log_dir, why):
     out = [f"## Bot simulation: {HEADLINE[outcome]}", ""]
     if why:
@@ -150,6 +165,9 @@ def sim(outcome, log_dir, why):
                f"{t.get('retried')} sent again with their key. "
                f"{t.get('commands_per_second', 0):.2f} commands a second; 429s: {t.get('rate_limited')}.")
     out.append(f"- Views read and checked: {t.get('views_checked')} over {t.get('ticks')} bot ticks.")
+    by_type = ", ".join(f"{k} {n}" for k, n in sorted(t.get("valid_by_type", {}).items())) or "none"
+    out.append(f"- Valid commands by type: {by_type}. The most planets one bot held: "
+               f"{t.get('most_planets', '?')}.")
     inv = tagged(f"{log_dir}/invariants.log", "@nightly-invariants")
     if inv:
         out.append(f"- Invariants after every record: {inv['records']} records from the snapshot at "
@@ -165,6 +183,10 @@ def sim(outcome, log_dir, why):
                    f"sim log, {src.get('records', '?')} records, replayed from its earliest snapshot "
                    f"and checked against {snaps if snaps is not None else '?'} snapshots; then from "
                    f"its latest.")
+    keys = keys_lookup(f"{log_dir}/keys-explain.log")
+    if keys:
+        out.append(f"- The keyed-submission lookup on the final log (D-037; reported, not bounded): "
+                   f"{keys}.")
     lat = tagged(f"{log_dir}/latency.log", "@nightly-latency")
     if lat and "step" in lat:
         out.append("")
