@@ -173,8 +173,13 @@ latest=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1]))["sources"][
 "$bin/voidforge-replay" postgres --database-url "$url" --rules rules/v0-fast.toml --from "$latest" --json \
     > "$log_dir/replay-latest.json" 2>> "$log_dir/replay.log" \
     || finish failed "the log doesn't replay from its latest snapshot, seq $latest (see $log_dir/replay-latest.json)"
-python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["sources"][0]["records"] > 0 else 1)' \
-    "$log_dir/replay-latest.json" || finish failed "the replay from seq $latest replayed no records"
+# It started where it was told and replayed something: from the head, nothing would replay.
+python3 -c '
+import json, sys
+s = json.load(open(sys.argv[1]))["sources"][0]
+sys.exit(0 if s["records"] > 0 and s["last_seq"] - s["records"] == int(sys.argv[2]) else 1)' \
+    "$log_dir/replay-latest.json" "$latest" \
+    || finish failed "the replay from seq $latest didn't start there, or replayed no records (see $log_dir/replay-latest.json)"
 
 # 8. The core's invariants after every record.
 VOIDFORGE_NIGHTLY_DATABASE_URL="$url" cargo nextest run --cargo-profile release -p voidforge-host \

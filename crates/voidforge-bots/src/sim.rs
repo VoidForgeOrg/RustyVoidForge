@@ -626,7 +626,10 @@ impl Bot {
                                     && kind(o) == *building_type
                             })
                             .count()
-                            > 1 =>
+                            > 1
+                        // Nor a Shipyard the bot can see has builds: the game refuses it, and the
+                        // first full runs spent 1,153 commands a night on that refusal.
+                        && !p.ship_builds.iter().any(|s| s.shipyard_id == *id) =>
                     {
                         options.push((
                             2,
@@ -890,7 +893,7 @@ impl Bot {
             .ok()
             .and_then(|v| {
                 let kind = v["type"].as_str()?.to_owned();
-                Some(match v["mission"].as_str() {
+                Some(match v["payload"]["mission"].as_str() {
                     Some(m) => format!("{kind}:{m}"),
                     None => kind,
                 })
