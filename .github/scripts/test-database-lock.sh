@@ -91,6 +91,9 @@ start_holder() {
 held() {
     real_sql "SELECT count(*) FROM pg_stat_activity WHERE application_name = '$1' OR datname = '$1'"
 }
+# A predicate await can call again: its query runs on every try (an argument like
+# "$(held …)" would be read once, before the first).
+holding() { [ "$(held "$1")" != 0 ]; }
 end_holder() {
     real_sql "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE application_name = '$1'" > /dev/null || true
     kill "$2" 2> /dev/null || true
@@ -117,7 +120,7 @@ sweep() {
     done
 }
 own_holder=$(start_holder "$lock_db")
-await test "$(held "$lock_db")" != 0 || fail "this run's holder session never appeared"
+await holding "$lock_db" || fail "this run's holder session never appeared"
 sweep
 
 scratch=$(mktemp -d)
@@ -210,7 +213,7 @@ if [ -z "${LOCK_TEST_NESTED:-}" ]; then
     planted=("$held_db" "$unheld_db" "$odd_db")
     for db in "${planted[@]}"; do real_sql "CREATE DATABASE \"$db\""; done
     holder=$(start_holder "$held_db")
-    await test "$(held "$held_db")" != 0 || fail "the planted holder never appeared"
+    await holding "$held_db" || fail "the planted holder never appeared"
     sweep > "$scratch/sweep.log"
     check "an unheld leftover is dropped" "$(gone "$unheld_db")" 0
     check "a held one is kept, though ps says its pid is dead" "$(gone "$held_db")" 1
