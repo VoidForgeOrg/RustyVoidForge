@@ -15,7 +15,7 @@
 #      verified against every snapshot up to B, the same last seq and the same end hash; the
 #      tables compare equal up to B (the log, the snapshots, the accounts, the epoch);
 #  10. starts serve on the restored database (it must recover to seq B), lets the bots play a
-#      minute on it, stops it, and replays the restored log again: verified, past B;
+#      minute on it, stops it, and replays the restored log again: verified, with commands past B;
 #  11. the negatives, each through the same check as the clean run: a truncated dump must fail
 #      pg_restore; a restored log with one record tampered must fail the replay and the tables'
 #      comparison; the source's hash halfway to B must differ from B's; its URL check must refuse
@@ -230,7 +230,7 @@ src_fp=$(fingerprint src) || finish infra "can't read the source's tables"
 dst_fp=$(fingerprint dst) || finish infra "can't read the restored tables"
 same_tables "$src_fp" "$dst_fp" || finish failed "the tables differ up to seq $B (records|snapshots|accounts|epoch): source $src_fp, restored $dst_fp"
 
-# 10. The restored server: it recovers to B, the bots play a minute, and the log goes past B.
+# 10. The restored server: it recovers to B, the bots play a minute, and their commands are logged past B.
 start_serve restored "$dst_url"
 [ "$serve_ready_seq" = "$B" ] || finish failed "serve on the restored database recovered to seq ${serve_ready_seq:-?}, not $B"
 "$bin/voidforge-bots" sim --api "http://$serve_addr" --issuer "$issuer" --run "drillr$$" --seed 25 \
@@ -242,6 +242,10 @@ stop_serve restored
     || finish failed "the restored log doesn't verify after the bots' minute (see $log_dir/replay-restored-after.json)"
 after_seq=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sources"][0]["last_seq"])' "$log_dir/replay-restored-after.json")
 [ "$after_seq" -gt "$B" ] || finish failed "the restored server appended nothing (head $after_seq, B $B)"
+# The host also logs time-only advances, so a head past B alone doesn't show the bots' commands.
+after_commands=$(psql_in dst "$db" -c "SELECT count(*) FROM log_records WHERE seq > $B AND kind = 'command'") \
+    || finish infra "can't read the restored log"
+[ "$after_commands" -gt 0 ] || finish failed "the restored server logged no command past B $B (head $after_seq): the bots' minute didn't reach it"
 
 # 11. The negatives, from the same backup. Each must fail; if one passes, its check is broken.
 psql_in dst "$db" -c "CREATE DATABASE ${db}_truncated" > /dev/null
@@ -288,6 +292,6 @@ summary_line "- Source: 8 bots on the fast rules; backed up live ($size bytes) w
 summary_line "- Restored head B = $B (snapshots: $(python3 -c 'import json,sys; print(",".join(str(x["seq"]) for x in json.load(open(sys.argv[1]))["sources"][0]["snapshots"]))' "$log_dir/inspect-restored.json"))."
 summary_line "- State hash at seq $B, by voidforge-replay on both sides: restored $restored_hash, source $source_hash (equal)."
 summary_line "- Tables up to seq $B, equal (records|snapshots at $snapshot_seqs|accounts|epoch): $dst_fp."
-summary_line "- The restored server recovered to seq $B; the bots played a minute on it; its log verifies to seq $after_seq."
+summary_line "- The restored server recovered to seq $B; the bots played a minute on it; its log verifies to seq $after_seq, with $after_commands commands past B."
 summary_line "- Negatives: a truncated backup failed pg_restore ($(grep -m1 -i error "$log_dir/negative-truncated.log" | cut -c1-100)); a restored log with seq $tampered tampered diverged (exit 1), and its tables compare unequal; the source's hash at seq $half differs from B's; the drill's URL check refuses port 5432; a backup taken before any periodic snapshot is refused."
 finish passed "the restored state hash at seq $B matches the source's"

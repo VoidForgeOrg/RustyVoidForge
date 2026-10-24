@@ -35,7 +35,7 @@ refused "$base/voidforge?application_name=/voidforge_e2e_1" voidforge_dev 'voidf
 refused "$base/%76oidforge" voidforge_dev 'voidforge_e2e_*' '*voidforge'
 refused "$base/voidforge_e2e_%31" voidforge_dev 'voidforge_e2e_*'
 # A fragment.
-refused "$base/voidforge_dev#x" voidforge_dev 'voidforge_e2e_*'
+refused "$base/voidforge_e2e_1#x" voidforge_dev 'voidforge_e2e_*'
 # Not an allowed name, no name, not a postgres URL, no pattern.
 refused "$base/voidforge" voidforge_dev 'voidforge_e2e_*'
 refused "$base/voidforge_test" voidforge_dev 'voidforge_e2e_*'
