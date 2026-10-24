@@ -27,6 +27,14 @@ pub fn v0_rules() -> Rules {
     voidforge_rules::parse(V0_RULES).expect("rules/v0.toml is valid")
 }
 
+/// The text of `rules/v0-fast.toml`: the end-to-end and nightly runs' rules.
+pub const V0_FAST_RULES: &str = include_str!("../../../rules/v0-fast.toml");
+
+/// Rules v0-fast, parsed and validated: the nightly simulation's universe runs on them (D-066).
+pub fn v0_fast_rules() -> Rules {
+    voidforge_rules::parse(V0_FAST_RULES).expect("rules/v0-fast.toml is valid")
+}
+
 /// Builds worlds for tests. See the crate documentation.
 #[derive(Debug, Clone)]
 pub struct WorldBuilder {

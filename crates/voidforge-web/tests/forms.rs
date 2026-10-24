@@ -646,10 +646,12 @@ async fn an_expired_login_sends_nothing_and_says_so() {
     let w = World::start().await;
     reply(&w, "/planets/7", &home_planet(common::PLAYER));
     reply(&w, "/players/me/fleets", &my_fleets());
-    w.behave(|b| b.claims = json!({ "exp": now() + 1 }));
+    // `now()` is floored to the second, so `+ 1` left 0 to 1 s for the login and the first page,
+    // and a slow runner expired the token before any form was drawn (CI on 7b07f7a). 3 s leaves 2 s.
+    w.behave(|b| b.claims = json!({ "exp": now() + 3 }));
     let mut b = logged_in(&w).await;
     let key = key_of(&b.get("/planets/7").await.body);
-    tokio::time::sleep(Duration::from_millis(2100)).await;
+    tokio::time::sleep(Duration::from_millis(3100)).await;
     w.api.reply("/commands", accepted(&json!([])));
     let page = submit(&mut b, &build_fields(&key)).await;
     assert_eq!(page.status, 200);

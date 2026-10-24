@@ -681,7 +681,7 @@ fn next_of_planet(view: &PlanetView) -> Option<(Timestamp, Timestamp)> {
 /// The first call joins (D-047). Until dex's keys load the server answers 503 `unavailable`,
 /// which means not ready yet. Then: the homeworld is in the player's planets and owned by it,
 /// and a second call is the same player.
-async fn join(player: &Player) -> Result<PlayerView, Failure> {
+pub(crate) async fn join(player: &Player) -> Result<PlayerView, Failure> {
     let step = "join";
     let deadline = Instant::now() + READY_WITHIN;
     let me = wait::until("join: the server accepts tokens", deadline, || async {

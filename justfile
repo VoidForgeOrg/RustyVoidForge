@@ -1,7 +1,7 @@
 # Voidforge task runner (Technical Plan, Tech stack and CI/CD). The lint, supply-chain and test
 # recipes run the same commands as the CI jobs of the same name, so a red check reproduces here.
 # db-test and migrate arrived with P2.1 (D-034), bless with P2.6 (D-040), replay with P2.7 (D-041), seed and seed-reset with
-# P2.9 (D-043), openapi with P3.1 (D-045), dex-test with P3.2 (D-046), serve with P3.4s (D-050), e2e with P3.6 (D-052), images, images-up, images-down and smoke-images with P5.2 (D-065), nightly-crash and nightly-golden with P5.3 (D-066). Recipes appear with the packages that implement them (decision log D-014).
+# P2.9 (D-043), openapi with P3.1 (D-045), dex-test with P3.2 (D-046), serve with P3.4s (D-050), e2e with P3.6 (D-052), images, images-up, images-down and smoke-images with P5.2 (D-065), nightly-sim, nightly-crash and nightly-golden with P5.3 (D-066). Recipes appear with the packages that implement them (decision log D-014).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -45,6 +45,7 @@ lint:
     python3 .github/scripts/check-nightly.py
     python3 .github/scripts/check-nightly.py --self-test
     .github/scripts/test-nightly-issue.sh
+    python3 .github/scripts/test-nightly-latency.py
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     python3 tests/guardrails/check_no_floats.py
@@ -78,6 +79,17 @@ migrate:
 # The CI determinism job: the suite, then the two-process double run (decision log D-024).
 determinism:
     .github/scripts/determinism.sh
+
+# Eight bots play through the API against serve on the fast rules, in a voidforge_nightly_* database
+# of the stack's Postgres only, never voidforge; then the log is replayed from its snapshots, the
+# core's invariants are checked after every record, and the step latency is read through Grafana.
+# Needs a password-grant dex: E2E_ISSUER=http://localhost:5563/dex (a throwaway CI-config dex).
+# SIM_MINUTES (30), SIM_SEED; the latency's p99 bounds are the workflow's (0.05 s a step, 0.25 s an
+# append) unless SIM_STEP_P99_MAX or SIM_APPEND_P99_MAX says otherwise.
+# The nightly's bot simulation (Technical Plan P5.3, D-066).
+nightly-sim:
+    SIM_STEP_P99_MAX="${SIM_STEP_P99_MAX:-0.05}" SIM_APPEND_P99_MAX="${SIM_APPEND_P99_MAX:-0.25}" \
+        .github/scripts/nightly-sim.sh
 
 # The file-store seeds run in their own nightly-file-<seed> directories, then the Postgres seeds
 # through the database stage: only voidforge_test and its _sqlx_test_* databases, never voidforge.

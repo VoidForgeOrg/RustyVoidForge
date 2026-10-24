@@ -1,16 +1,21 @@
-# The nightly runs (Technical Plan P5.3; decision log D-066): crash-and-retry and the golden replays
-# in a release build, each with a job summary; then `report`, which opens or comments on one issue
-# per failing run kind (nightly-issue.sh). Not a required check: a red night opens an issue.
-# Every run also runs locally: `just nightly-crash`, `just nightly-golden`.
-# PR A of P5.3: no schedule yet, and no bot simulation (PR B adds both, so the gate's week starts
-# with the whole nightly). A pull request that changes the nightly's own files runs it on its head;
-# only a schedule or a manual dispatch ever reports to issues.
+# The nightly runs (Technical Plan P5.3; decision log D-066): the bot simulation, crash-and-retry
+# and the golden replays in a release build, each with a job summary; then `report`, which opens or
+# comments on one issue per failing run kind (nightly-issue.sh). Not a required check: a red night
+# opens an issue. Every run also runs locally: `just nightly-sim`, `just nightly-crash`,
+# `just nightly-golden`. A pull request that changes the nightly's own files runs it on its head;
+# only the schedule or a manual dispatch ever reports to issues.
 # Action and tool versions are pinned; see docs/versions.md and decision log D-007.
 name: Nightly
 
 on:
+  # 03:17 UTC, off the hour, when GitHub's scheduled queue is lightest.
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
+      sim_minutes:
+        description: The bot simulation's wall minutes, 1 to 150 (a minute plays 60 v0 hours)
+        default: "30"
       crash_seeds:
         description: File-store crash seeds (Postgres runs VOIDFORGE_CRASH_PG_SEEDS, default 100)
         default: "1000"
@@ -18,15 +23,19 @@ on:
         description: Fail one run on purpose, to prove the issue path (its issue title says so)
         type: choice
         default: none
-        options: [none, crash, golden]
+        options: [none, sim, crash, golden]
   pull_request:
     branches: [main]
     paths:
       - .github/workflows/nightly.yml
       - .github/scripts/nightly-*
       - .github/scripts/test-nightly-issue.sh
+      - .github/scripts/test-nightly-latency.py
       - .github/scripts/check-nightly.py
       - crates/voidforge-host/tests/crash.rs
+      - crates/voidforge-host/tests/nightly.rs
+      - crates/voidforge-bots/src/sim.rs
+      - crates/voidforge-bots/src/sim/**
 
 permissions:
   contents: read
@@ -42,6 +51,65 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Eight bots play through the API against serve on the fast rules (30 min: about 10.7 v0 weeks),
+  # then the log is replayed from its snapshots, the core's invariants are checked after every
+  # record, and the step latency is read from serve's histograms through Grafana's Prometheus.
+  sim:
+    name: sim
+    runs-on: ubuntu-24.04
+    # Fixed (GitHub's expressions can't compute it): sim_minutes is capped at 150, and the build and
+    # the post-run checks measured ~4 minutes, so even the longest manual run (A2) has ~50 minutes
+    # to spare and can't time out into a failed night (QA's B2).
+    timeout-minutes: 200
+    outputs:
+      started: ${{ steps.run.outputs.started || steps.forced.outputs.started }}
+      outcome: ${{ steps.run.outputs.outcome || steps.forced.outputs.outcome }}
+    env:
+      DEX_CONFIG: config.ci.yaml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: forced failure (workflow_dispatch input)
+        id: forced
+        if: github.event_name == 'workflow_dispatch' && inputs.force_fail == 'sim'
+        run: |
+          echo "started=1" >> "$GITHUB_OUTPUT"
+          echo "outcome=failed" >> "$GITHUB_OUTPUT"
+          echo "::error::forced failure: workflow_dispatch's force_fail is sim"
+          exit 1
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Postgres, dex (CI config) and the collector, healthy
+        id: stack
+        run: docker compose -f deploy/compose.yaml up --build --detach --wait --wait-timeout 300 postgres dex otel-lgtm
+      - name: Bot simulation
+        id: run
+        env:
+          SIM_MINUTES: ${{ inputs.sim_minutes || '30' }}
+          SIM_SEED: ${{ github.run_number }}
+          # p99 bounds in seconds (the lead's T3, D-066): ~10x the measured p99, with a floor. The
+          # step's measured p99 is the histograms' lowest bucket edge, so it guards large regressions only.
+          SIM_STEP_P99_MAX: "0.05"
+          SIM_APPEND_P99_MAX: "0.25"
+        run: |
+          echo "started=1" >> "$GITHUB_OUTPUT"
+          status=0
+          .github/scripts/nightly-sim.sh || status=$?
+          case "$status" in 0) outcome=passed ;; 3) outcome=infra ;; *) outcome=failed ;; esac
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      - name: On failure, the logs (the bots, serve, replay, invariants, latency)
+        if: failure() && steps.run.outcome == 'failure'
+        run: |
+          for f in target/nightly/sim/*.log target/nightly/sim/*.out; do
+            echo "::group::$f"
+            tail -200 "$f" 2>/dev/null || echo "(no $f)"
+            echo "::endgroup::"
+          done
+
   # The host killed at seeded points, retries converging to one outcome per command: the file
   # store's seeds, then Postgres's through the database stage (voidforge_test and _sqlx_test_* only).
   # Each night starts at a new seed base; a red seed reruns locally from the summary's numbers.
@@ -136,7 +204,7 @@ jobs:
   # Never for a pull request. The only job that may write issues.
   report:
     name: report
-    needs: [crash, golden]
+    needs: [sim, crash, golden]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -152,6 +220,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           # Only the kind a dispatch forced is a forced test; the others report to their real issues.
           FORCE_FAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.force_fail || 'none' }}
+          SIM: ${{ needs.sim.result }} ${{ needs.sim.outputs.started || '-' }} ${{ needs.sim.outputs.outcome || '-' }}
           CRASH: ${{ needs.crash.result }} ${{ needs.crash.outputs.started || '-' }} ${{ needs.crash.outputs.outcome || '-' }}
           GOLDEN: ${{ needs.golden.result }} ${{ needs.golden.outputs.started || '-' }} ${{ needs.golden.outputs.outcome || '-' }}
-        run: .github/scripts/nightly-report.sh crash golden
+        run: .github/scripts/nightly-report.sh sim crash golden

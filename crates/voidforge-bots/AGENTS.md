@@ -31,7 +31,7 @@ cargo nextest run -p voidforge-bots --locked   # the waits, the device flow agai
 just e2e   # the scenario and the terminal login; needs DEX_CONFIG=config.ci.yaml just up
 ```
 
-P3.6: bots log in through dex, then join, build, race to colonize and transport cargo, against the compose stack in CI (the `e2e` job, `.github/scripts/e2e.sh`). P3.7: a device code login yields a token the API accepts. P5.3: the nightly long simulation.
+P3.6: bots log in through dex, then join, build, race to colonize and transport cargo, against the compose stack in CI (the `e2e` job, `.github/scripts/e2e.sh`). P3.7: a device code login yields a token the API accepts. P5.3: the nightly long simulation, `voidforge-bots sim` (`src/sim.rs`): eight bots, each view checked by pure rules, invalid commands built for exact codes, retries compared with the stored answer ([D-066](../../docs/decision-log.md#d-066-the-nightly-runs)).
 
 ## Specs
 

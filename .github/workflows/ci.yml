@@ -49,6 +49,7 @@ jobs:
           python3 .github/scripts/check-nightly.py
           python3 .github/scripts/check-nightly.py --self-test
           .github/scripts/test-nightly-issue.sh
+          python3 .github/scripts/test-nightly-latency.py
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors
@@ -139,6 +140,11 @@ jobs:
         run: .github/scripts/test-check-migrations-only-add.sh
       - name: Database-stage lock regression cases
         run: .github/scripts/test-database-lock.sh
+        env:
+          PSQL: docker exec -i ${{ job.services.postgres.id }} psql -U voidforge
+      # On this job's own server only: the sweep reaches every voidforge_nightly_* database (D-066).
+      - name: The nightly sim's leftover sweep, regression cases
+        run: .github/scripts/test-nightly-sweep.sh
         env:
           PSQL: docker exec -i ${{ job.services.postgres.id }} psql -U voidforge
       - name: Migrations on an empty database twice, the sqlx metadata check, store tests

@@ -211,9 +211,11 @@ if [ -z "${LOCK_TEST_NESTED:-}" ]; then
     unheld_db=voidforge_test_lock_selftest_$(dead_pid)
     odd_db=voidforge_test_lock_selftest_${$}odd
     planted=("$held_db" "$unheld_db" "$odd_db")
-    for db in "${planted[@]}"; do real_sql "CREATE DATABASE \"$db\""; done
+    # Held before it exists, as this run's own lock database is, so another run's sweep can't drop
+    # it in between (QA's F2).
     holder=$(start_holder "$held_db")
     await holding "$held_db" || fail "the planted holder never appeared"
+    for db in "${planted[@]}"; do real_sql "CREATE DATABASE \"$db\""; done
     sweep > "$scratch/sweep.log"
     check "an unheld leftover is dropped" "$(gone "$unheld_db")" 0
     check "a held one is kept, though ps says its pid is dead" "$(gone "$held_db")" 1
