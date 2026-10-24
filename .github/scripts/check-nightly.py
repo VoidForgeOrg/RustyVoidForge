@@ -7,7 +7,8 @@ job. A finding is an error with the rule it breaks.
 - `report` never runs for a pull request: its `if` excludes the event.
 - A forced failure happens only on a manual dispatch: every step that reads `force_fail` is
   guarded by `github.event_name == 'workflow_dispatch'`.
-- Every job has a timeout, and every action is pinned to a full commit SHA.
+- Every job has a timeout, a whole number (GitHub's expressions can't compute one), and every
+  action is pinned to a full commit SHA.
 - Every run that reports shares one concurrency group, whatever its ref (R2-4): the group is a
   pull request's own, or else exactly 'nightly'.
 
@@ -49,6 +50,10 @@ def findings(doc):
             out.append(f"job {name} sets permissions: only report may")
         if "timeout-minutes" not in job:
             out.append(f"job {name} has no timeout-minutes")
+        elif type(job["timeout-minutes"]) is not int:
+            # GitHub's expressions have no arithmetic: a computed timeout made the whole file
+            # invalid, and an invalid file runs nothing, the schedule included (round 1 of PR B).
+            out.append(f"job {name}'s timeout-minutes must be a whole number, not {job['timeout-minutes']!r}")
         for step in job.get("steps") or []:
             uses = step.get("uses")
             if uses and not PINNED.match(uses.split(" ")[0]):
@@ -78,6 +83,7 @@ def self_test(doc):
         "another job writes issues": lambda d: first_job(d).__setitem__("permissions", {"issues": "write"}),
         "report on a pull request": lambda d: report(d).__setitem__("if", "always()"),
         "no timeout": lambda d: first_job(d).pop("timeout-minutes"),
+        "a computed timeout": lambda d: first_job(d).__setitem__("timeout-minutes", "${{ fromJSON(inputs.sim_minutes) + 50 }}"),
         "an unpinned action": lambda d: first_job(d)["steps"][0].__setitem__("uses", "actions/checkout@v7"),
         "forced outside a dispatch": lambda d: forced_step(d).__setitem__("if", "inputs.force_fail == 'crash'"),
         "a per-ref group": lambda d: d["concurrency"].__setitem__("group", "nightly-${{ github.ref }}"),

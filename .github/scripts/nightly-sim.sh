@@ -47,8 +47,8 @@ say() { echo "nightly-sim: $*" >&2; }
 # Usage errors first, before the EXIT trap: they print no summary.
 case "$db" in "$prefix"[0-9]*_[0-9]*) ;; *) say "refusing database $db"; exit 2 ;; esac
 case "$minutes" in ''|*[!0-9]*) say "SIM_MINUTES must be whole minutes"; exit 2 ;; esac
-# A hosted runner's job ends at 6 hours; the workflow's timeout is SIM_MINUTES + 50.
-[ "$minutes" -ge 1 ] && [ "$minutes" -le 300 ] || { say "SIM_MINUTES must be 1 to 300"; exit 2; }
+# The workflow's sim job has 200 minutes: 150 to play leaves ~50 over the build and checks.
+[ "$minutes" -ge 1 ] && [ "$minutes" -le 150 ] || { say "SIM_MINUTES must be 1 to 150"; exit 2; }
 mkdir -p "$log_dir"
 # Every file a run writes, so a failed night never reports an earlier run's numbers.
 rm -f "$log_dir"/*.log "$log_dir"/*.json "$log_dir"/*.out
