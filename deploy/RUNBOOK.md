@@ -56,9 +56,15 @@ voidforge-replay postgres --database-url "$TARGET_URL" --rules rules/<the univer
 
 ### 5. Start the server on it
 
-Start `serve` on the restored database (`just images-up` with `VOIDFORGE_DATABASE_URL` naming it, or the server binary). It must print `ready: listening on …, seq B`: the restored head, recovered from the latest snapshot at or below it.
+Start the server binary on the restored database, built from the same commit as the replay tool:
 
-- It refuses a database without its epoch (exit 3). That means the restore missed the `universe` table, so it was partial.
+```sh
+VOIDFORGE_DATABASE_URL="$TARGET_URL" voidforge-server serve --rules rules/<the universe's rules>.toml --bind <address> --issuer <the dex issuer>
+```
+
+It must print `ready: listening on …, seq B`: the restored head, recovered from the latest snapshot at or below it. (`just images-up` won't do here: it takes only the scratch databases `voidforge_dev` and `voidforge_e2e_*`.)
+
+- It refuses a database without its epoch (exit 3). That means the restore missed the `universe` table, so it was partial. Its message suggests re-seeding: **don't**, since a seed would replace the universe you're restoring. Restore again from the backup, into an empty database.
 - Players log in as before: their accounts came back with the universe.
 
 ### Rehearsal: `just backup-drill`
@@ -67,6 +73,6 @@ It runs steps 1 to 5 against two scratch stacks of its own (projects `voidforge-
 - The source is a universe the eight test bots play on. Its backup is taken while they play, after serve's first periodic snapshot.
 - The restore is checked by the hash at B and by every table up to B.
 - The restored server must recover to B, then the bots play a minute more on it.
-- A truncated backup and a tampered record must both fail.
+- A truncated backup, a tampered record and a restored copy that lost a snapshot must all fail, and serve must refuse a copy without its epoch.
 
 It needs a dex with the password grant (`E2E_ISSUER`; locally a throwaway CI-config dex). It takes about 8 minutes, and CI runs it on every pull request.

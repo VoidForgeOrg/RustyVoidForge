@@ -18,16 +18,18 @@
 #      minute on it, stops it, and replays the restored log again: verified, with commands past B;
 #  11. the negatives, each through the same check as the clean run: a truncated dump must fail
 #      pg_restore; a restored log with one record tampered must fail the replay and the tables'
-#      comparison; the source's hash halfway to B must differ from B's; its URL check must refuse
-#      port 5432; and a backup taken
-#      before any periodic snapshot must fail the snapshot check. If one passes, the drill fails.
+#      comparison; a restored copy without its oldest snapshot must fail the tables' comparison, and
+#      without its epoch serve must exit before ready; the source's hash halfway to B must differ
+#      from B's; its URL check must refuse port 5432; and a backup taken before any periodic
+#      snapshot must fail the snapshot check. If one passes, the drill fails.
 # It never names the stack's project, containers, port 5432 or the voidforge database.
 #
 # Environment: E2E_ISSUER (default http://localhost:5556/dex; it needs the password grant, so
 # locally a throwaway CI-config dex), DRILL_SOURCE_PORT (5441), DRILL_RESTORE_PORT (5442),
 # DRILL_SNAPSHOT_WAIT seconds (600), DRILL_LOG_DIR (target/drill).
-# Exit codes: 0 passed; 1 a check failed (a defect); 2 usage; 3 not ready (dex, Docker, the stacks,
-# serve, or no periodic snapshot within the wait): infrastructure, no verdict on the code.
+# Exit codes: 0 passed; 1 a check failed (a defect; serve exiting before ready on a restored
+# database is one); 2 usage; 3 not ready (dex, Docker, the stacks, serve on the source, or no
+# periodic snapshot within the wait): infrastructure, no verdict on the code.
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -110,9 +112,12 @@ src_url=$(url "$src_port" "$db") || exit 2
 dst_url=$(url "$dst_port" "$db") || exit 2
 say "source on :$src_port, restore on :$dst_port"
 
-# serve on a database: its pid in $serve_pid once it prints ready, its log in $1.
+# serve on a database: its pid in $serve_pid once it prints ready, its log in $1. If serve exits
+# before ready, it returns 1 with the exit code in $serve_exit, and the caller says what that means:
+# on a restored database, the restore isn't usable. Alive but not ready within the wait is infra.
 start_serve() {
     local name=$1 u=$2 addr=""
+    serve_exit=""
     VOIDFORGE_DATABASE_URL="$u" "$bin/voidforge-server" serve --rules rules/v0-fast.toml \
         --bind 127.0.0.1:0 --issuer "$issuer" > "$log_dir/serve-$name.log" 2>&1 &
     serve_pid=$!
@@ -123,7 +128,11 @@ start_serve() {
         kill -0 "$serve_pid" 2> /dev/null || break
         sleep 0.2
     done
-    [ -n "$addr" ] || finish infra "serve on the $name isn't ready (see $log_dir/serve-$name.log)"
+    if [ -z "$addr" ]; then
+        kill -0 "$serve_pid" 2> /dev/null && finish infra "serve on the $name isn't ready within 120 s (see $log_dir/serve-$name.log)"
+        wait "$serve_pid"; serve_exit=$?
+        return 1
+    fi
     serve_addr=$addr
     serve_ready_seq=$(sed -n 's/^ready: .*, seq \([0-9]*\)$/\1/p' "$log_dir/serve-$name.log")
 }
@@ -140,7 +149,7 @@ head_seq() { psql_in "$1" "$2" -c "SELECT coalesce(max(seq), 0) FROM log_records
 # 4. The source: a universe for eight bots, serve, and the bots playing.
 VOIDFORGE_DATABASE_URL="$src_url" "$bin/voidforge-server" seed --seed 20261024 --players 8 \
     --rules rules/v0-fast.toml > "$log_dir/seed.log" 2>&1 || finish failed "seed failed (see $log_dir/seed.log)"
-start_serve source "$src_url"
+start_serve source "$src_url" || finish infra "serve on the source exited $serve_exit before ready (see $log_dir/serve-source.log)"
 # A backup from before any periodic snapshot, for a negative: the check must refuse it.
 src exec -T postgres pg_dump -U voidforge --format=custom --no-owner -d "$db" > "$log_dir/early.dump" 2>> "$log_dir/pg_dump.log" \
     || finish failed "pg_dump failed (see $log_dir/pg_dump.log)"
@@ -204,6 +213,8 @@ has_periodic "$log_dir/inspect-restored.json" \
     || finish failed "the backup holds no periodic snapshot (only the seed's): it was taken too early"
 [ "$B" -gt 0 ] && [ "$B" -lt "$source_head" ] \
     || finish failed "the restored head $B isn't inside the source's log, which went on to $source_head after the backup"
+[ "$before" -le "$B" ] && [ "$B" -le "$after" ] \
+    || finish failed "the restored head $B is outside the source's heads around the backup ($before to $after): the restore lost the log's tail"
 "$bin/voidforge-replay" postgres --database-url "$dst_url" --rules rules/v0-fast.toml --json \
     > "$log_dir/replay-restored.json" 2>> "$log_dir/replay.log" \
     || finish failed "the restored log doesn't verify (see $log_dir/replay-restored.json)"
@@ -217,12 +228,17 @@ read -r source_seq source_hash < <(python3 -c 'import json,sys; s=json.load(open
 same_hash "$restored_hash" "$source_hash" \
     || finish failed "the state hash at seq $B differs: restored $restored_hash, source $source_hash"
 # Every table, up to B: the hash covers the log, not the accounts or the epoch. The snapshots are
-# compared at the seqs the backup holds: the source wrote more after it (its shutdown snapshot).
-snapshot_seqs=$(psql_in dst "$db" -c "SELECT coalesce(string_agg(seq::text, ',' ORDER BY seq), '-1') FROM snapshots")
+# compared below B on both sides, plus at B when the restored copy has one. serve awaits each
+# snapshot before the next turn's append (voidforge-host lib.rs), so every source snapshot below B
+# committed before record B and is in the backup. One at B may have come just after the backup, and
+# the source's later ones (its shutdown snapshot) did. The bound never comes from the restored list
+# alone, so a restore that lost a snapshot row compares unequal.
+snapshot_at_b=$(psql_in dst "$db" -c "SELECT count(*) FROM snapshots WHERE seq = $B") || finish infra "can't read the restored snapshots"
+snapshot_seqs=$(psql_in dst "$db" -c "SELECT coalesce(string_agg(seq::text, ',' ORDER BY seq), '-') FROM snapshots")
 fingerprint() {
     psql_in "$1" "${2:-$db}" -c "SELECT
         (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ',' ORDER BY seq), '')) FROM log_records t WHERE seq <= $B),
-        (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ',' ORDER BY seq), '')) FROM snapshots t WHERE seq IN ($snapshot_seqs)),
+        (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ',' ORDER BY seq), '')) FROM snapshots t WHERE seq < $B OR (seq = $B AND $snapshot_at_b > 0)),
         (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ',' ORDER BY player_id), '')) FROM accounts t),
         (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ','), '')) FROM universe t)"
 }
@@ -231,7 +247,8 @@ dst_fp=$(fingerprint dst) || finish infra "can't read the restored tables"
 same_tables "$src_fp" "$dst_fp" || finish failed "the tables differ up to seq $B (records|snapshots|accounts|epoch): source $src_fp, restored $dst_fp"
 
 # 10. The restored server: it recovers to B, the bots play a minute, and their commands are logged past B.
-start_serve restored "$dst_url"
+start_serve restored "$dst_url" \
+    || finish failed "serve on the restored database exited $serve_exit before ready: the restore isn't usable (see $log_dir/serve-restored.log)"
 [ "$serve_ready_seq" = "$B" ] || finish failed "serve on the restored database recovered to seq ${serve_ready_seq:-?}, not $B"
 "$bin/voidforge-bots" sim --api "http://$serve_addr" --issuer "$issuer" --run "drillr$$" --seed 25 \
     --minutes 1 > "$log_dir/bots-restored.out" 2> "$log_dir/bots-restored.log" \
@@ -269,6 +286,21 @@ tampered_code=$?
 # The tables' comparison tells the tampered copy from the source.
 tampered_fp=$(fingerprint dst "${db}_tampered") || finish infra "can't read the tampered copy's tables"
 ! same_tables "$src_fp" "$tampered_fp" || finish failed "the tampered copy's tables compare equal to the source's: the tables' check is broken"
+# A restored copy that lost a snapshot row compares unequal; without its epoch, serve exits before ready.
+psql_in dst "$db" -c "CREATE DATABASE ${db}_partial" > /dev/null
+dst exec -T postgres pg_restore -U voidforge --exit-on-error --single-transaction --no-owner -d "${db}_partial" \
+    < "$log_dir/drill.dump" > "$log_dir/negative-partial-restore.log" 2>&1 || finish failed "the clean backup didn't restore for the partial case"
+lost=$(psql_in dst "${db}_partial" -c "DELETE FROM snapshots WHERE seq = (SELECT min(seq) FROM snapshots) RETURNING seq")
+[ -n "$lost" ] || finish failed "no snapshot to delete in the backup"
+partial_fp=$(fingerprint dst "${db}_partial") || finish infra "can't read the partial copy's tables"
+! same_tables "$src_fp" "$partial_fp" || finish failed "a restored copy without its snapshot at seq $lost compares equal to the source's: the tables' check is broken"
+psql_in dst "${db}_partial" -c "DELETE FROM universe" > /dev/null
+partial_url=$(url "$dst_port" "${db}_partial") || exit 2
+if start_serve partial "$partial_url"; then
+    stop_serve partial
+    finish failed "serve started on a restored copy without its epoch: the restored server's check is broken"
+fi
+[ "$serve_exit" = 3 ] || finish failed "serve on a restored copy without its epoch exited $serve_exit, not 3 (see $log_dir/serve-partial.log)"
 # The hash comparison tells two worlds apart: the source halfway to B isn't the restored one.
 # Halfway, not one record back: a record can leave the world as it was (a refused command, as on
 # CI's first run, where seq B and B-1 hashed alike), but hundreds of accepted ones can't.
@@ -293,5 +325,5 @@ summary_line "- Restored head B = $B (snapshots: $(python3 -c 'import json,sys; 
 summary_line "- State hash at seq $B, by voidforge-replay on both sides: restored $restored_hash, source $source_hash (equal)."
 summary_line "- Tables up to seq $B, equal (records|snapshots at $snapshot_seqs|accounts|epoch): $dst_fp."
 summary_line "- The restored server recovered to seq $B; the bots played a minute on it; its log verifies to seq $after_seq, with $after_commands commands past B."
-summary_line "- Negatives: a truncated backup failed pg_restore ($(grep -m1 -i error "$log_dir/negative-truncated.log" | cut -c1-100)); a restored log with seq $tampered tampered diverged (exit 1), and its tables compare unequal; the source's hash at seq $half differs from B's; the drill's URL check refuses port 5432; a backup taken before any periodic snapshot is refused."
+summary_line "- Negatives: a truncated backup failed pg_restore ($(grep -m1 -i error "$log_dir/negative-truncated.log" | cut -c1-100)); a restored log with seq $tampered tampered diverged (exit 1), and its tables compare unequal; a restored copy without its snapshot at seq $lost compares unequal, and without its epoch serve exits 3 before ready; the source's hash at seq $half differs from B's; the drill's URL check refuses port 5432; a backup taken before any periodic snapshot is refused."
 finish passed "the restored state hash at seq $B matches the source's"
