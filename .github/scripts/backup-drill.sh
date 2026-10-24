@@ -232,18 +232,25 @@ same_hash "$restored_hash" "$source_hash" \
 # snapshot before the next turn's append (voidforge-host lib.rs), so every source snapshot below B
 # committed before record B and is in the backup. One at B may have come just after the backup, and
 # the source's later ones (its shutdown snapshot) did. The bound never comes from the restored list
-# alone, so a restore that lost a snapshot row compares unequal.
-snapshot_at_b=$(psql_in dst "$db" -c "SELECT count(*) FROM snapshots WHERE seq = $B") || finish infra "can't read the restored snapshots"
+# alone, so a restore that lost a snapshot row compares unequal. The bound is taken per restored
+# database, in table_pair, which the clean run and the negatives all call.
 snapshot_seqs=$(psql_in dst "$db" -c "SELECT coalesce(string_agg(seq::text, ',' ORDER BY seq), '-') FROM snapshots")
 fingerprint() {
     psql_in "$1" "${2:-$db}" -c "SELECT
         (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ',' ORDER BY seq), '')) FROM log_records t WHERE seq <= $B),
-        (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ',' ORDER BY seq), '')) FROM snapshots t WHERE seq < $B OR (seq = $B AND $snapshot_at_b > 0)),
+        (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ',' ORDER BY seq), '')) FROM snapshots t WHERE $snapshot_bound),
         (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ',' ORDER BY player_id), '')) FROM accounts t),
         (SELECT count(*) || ':' || md5(coalesce(string_agg(t::text, ','), '')) FROM universe t)"
 }
-src_fp=$(fingerprint src) || finish infra "can't read the source's tables"
-dst_fp=$(fingerprint dst) || finish infra "can't read the restored tables"
+# The source's tables and a restored database's ($1), on that database's bound: in $pair_src and $pair_dst.
+table_pair() {
+    local restored=$1 at_b
+    at_b=$(psql_in dst "$restored" -c "SELECT count(*) FROM snapshots WHERE seq = $B") || return 1
+    snapshot_bound="seq < $B OR (seq = $B AND $at_b > 0)"
+    pair_src=$(fingerprint src "$db") && pair_dst=$(fingerprint dst "$restored")
+}
+table_pair "$db" || finish infra "can't read the source's or the restored tables"
+src_fp=$pair_src dst_fp=$pair_dst
 same_tables "$src_fp" "$dst_fp" || finish failed "the tables differ up to seq $B (records|snapshots|accounts|epoch): source $src_fp, restored $dst_fp"
 
 # 10. The restored server: it recovers to B, the bots play a minute, and their commands are logged past B.
@@ -284,16 +291,16 @@ tampered_url=$(url "$dst_port" "${db}_tampered") || exit 2
 tampered_code=$?
 [ "$tampered_code" = 1 ] || finish failed "a restored log with seq $tampered tampered replayed with exit $tampered_code, not 1 (diverged): the hash check is broken"
 # The tables' comparison tells the tampered copy from the source.
-tampered_fp=$(fingerprint dst "${db}_tampered") || finish infra "can't read the tampered copy's tables"
-! same_tables "$src_fp" "$tampered_fp" || finish failed "the tampered copy's tables compare equal to the source's: the tables' check is broken"
+table_pair "${db}_tampered" || finish infra "can't read the tampered copy's tables"
+! same_tables "$pair_src" "$pair_dst" || finish failed "the tampered copy's tables compare equal to the source's: the tables' check is broken"
 # A restored copy that lost a snapshot row compares unequal; without its epoch, serve exits before ready.
 psql_in dst "$db" -c "CREATE DATABASE ${db}_partial" > /dev/null
 dst exec -T postgres pg_restore -U voidforge --exit-on-error --single-transaction --no-owner -d "${db}_partial" \
     < "$log_dir/drill.dump" > "$log_dir/negative-partial-restore.log" 2>&1 || finish failed "the clean backup didn't restore for the partial case"
 lost=$(psql_in dst "${db}_partial" -c "DELETE FROM snapshots WHERE seq = (SELECT min(seq) FROM snapshots) RETURNING seq")
 [ -n "$lost" ] || finish failed "no snapshot to delete in the backup"
-partial_fp=$(fingerprint dst "${db}_partial") || finish infra "can't read the partial copy's tables"
-! same_tables "$src_fp" "$partial_fp" || finish failed "a restored copy without its snapshot at seq $lost compares equal to the source's: the tables' check is broken"
+table_pair "${db}_partial" || finish infra "can't read the partial copy's tables"
+! same_tables "$pair_src" "$pair_dst" || finish failed "a restored copy without its snapshot at seq $lost compares equal to the source's: the tables' check is broken"
 psql_in dst "${db}_partial" -c "DELETE FROM universe" > /dev/null
 partial_url=$(url "$dst_port" "${db}_partial") || exit 2
 if start_serve partial "$partial_url"; then
