@@ -2,6 +2,8 @@
 
 Postgres, dex and Grafana otel-lgtm for local runs and CI ([Technical Plan, Local development](../docs/Voidforge%20Technical%20Plan.md#local-development); decision log [D-014](../docs/decision-log.md#d-014-local-stack) and [D-015](../docs/decision-log.md#d-015-one-dex-issuer-for-the-browser-the-host-and-containers)).
 
+Backing up and restoring a universe, step by step: [RUNBOOK.md](RUNBOOK.md#backup-and-restore), rehearsed by `just backup-drill`.
+
 ```sh
 just up                               # build, start, wait until healthy, verify by effect
 DEX_CONFIG=config.ci.yaml just up     # the same with the CI dex config (password grant on)

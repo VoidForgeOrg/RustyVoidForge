@@ -1,0 +1,29 @@
+# The backup and restore drill's Postgres (Technical Plan P5.4; decision log D-067; deploy/RUNBOOK.md).
+# One file, two projects: `just backup-drill` brings it up as voidforge-drill-source and as
+# voidforge-drill-restore, each with its own port, volume and container, and takes both down with
+# their volumes when it ends. It has no `name:` on purpose: every command names its project with
+# -p, so it can never land in the stack's `voidforge` project (P5.2 R1-1). Nothing here names the
+# stack's containers, its port 5432 or its `voidforge` database. Values here are TEST-ONLY.
+services:
+  postgres:
+    # The stack's pin (deploy/compose.yaml): the drill restores into the version it backs up from.
+    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    environment:
+      POSTGRES_USER: voidforge
+      POSTGRES_PASSWORD: voidforge-local-test-password
+      POSTGRES_DB: voidforge_drill
+    ports:
+      - "127.0.0.1:${DRILL_PG_PORT:?the drill names each project's port}:5432"
+    volumes:
+      - drill-data:/var/lib/postgresql
+    healthcheck:
+      # On 127.0.0.1, not the socket: the image's first-start init runs a socket-only server and
+      # restarts it, and that one must not count as ready.
+      test: ["CMD", "pg_isready", "--host=127.0.0.1", "--username=voidforge", "--dbname=voidforge_drill"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  drill-data:

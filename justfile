@@ -1,7 +1,7 @@
 # Voidforge task runner (Technical Plan, Tech stack and CI/CD). The lint, supply-chain and test
 # recipes run the same commands as the CI jobs of the same name, so a red check reproduces here.
 # db-test and migrate arrived with P2.1 (D-034), bless with P2.6 (D-040), replay with P2.7 (D-041), seed and seed-reset with
-# P2.9 (D-043), openapi with P3.1 (D-045), dex-test with P3.2 (D-046), serve with P3.4s (D-050), e2e with P3.6 (D-052), images, images-up, images-down and smoke-images with P5.2 (D-065), nightly-sim, nightly-crash and nightly-golden with P5.3 (D-066). Recipes appear with the packages that implement them (decision log D-014).
+# P2.9 (D-043), openapi with P3.1 (D-045), dex-test with P3.2 (D-046), serve with P3.4s (D-050), e2e with P3.6 (D-052), images, images-up, images-down and smoke-images with P5.2 (D-065), nightly-sim, nightly-crash and nightly-golden with P5.3 (D-066), backup-drill with P5.4 (D-067). Recipes appear with the packages that implement them (decision log D-014).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -46,6 +46,7 @@ lint:
     python3 .github/scripts/check-nightly.py --self-test
     .github/scripts/test-nightly-issue.sh
     python3 .github/scripts/test-nightly-latency.py
+    .github/scripts/test-scratch-db.sh
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     python3 tests/guardrails/check_no_floats.py
@@ -86,6 +87,15 @@ determinism:
 # Needs a password-grant dex: E2E_ISSUER=http://localhost:5563/dex (a throwaway CI-config dex).
 # SIM_MINUTES (30), SIM_SEED; the latency's p99 bounds are the workflow's (0.05 s a step, 0.25 s an
 # append) unless SIM_STEP_P99_MAX or SIM_APPEND_P99_MAX says otherwise.
+# The backup and restore drill (Technical Plan P5.4, D-067; deploy/RUNBOOK.md): two scratch Postgres
+# stacks of their own (compose projects voidforge-drill-source and voidforge-drill-restore, ports
+# 5441 and 5442, taken down with their volumes), never the stack's. A live backup of a universe
+# with history, a restore into the fresh stack, the state hash compared at the restored head, the
+# restored server playing on, and a truncated and a tampered backup that must fail. Needs a
+# password-grant dex: E2E_ISSUER=http://localhost:5563/dex for a throwaway one. About 8 minutes.
+backup-drill:
+    .github/scripts/backup-drill.sh
+
 # The nightly's bot simulation (Technical Plan P5.3, D-066).
 nightly-sim:
     SIM_STEP_P99_MAX="${SIM_STEP_P99_MAX:-0.05}" SIM_APPEND_P99_MAX="${SIM_APPEND_P99_MAX:-0.25}" \
@@ -158,8 +168,7 @@ images jobs="2":
 # voidforge above all, is refused.
 # Exports to the stack's collector unless OTEL_EXPORTER_OTLP_ENDPOINT says otherwise.
 images-up:
-    db="${VOIDFORGE_DATABASE_URL:?name a seeded scratch database}"; db="${db##*/}"; db="${db%%\?*}"; \
-    case "$db" in voidforge_dev|voidforge_e2e_*) ;; *) echo "error: refusing database $db (voidforge_dev or voidforge_e2e_* only)" >&2; exit 2 ;; esac
+    .github/scripts/scratch-db.sh "${VOIDFORGE_DATABASE_URL:?name a seeded scratch database}" voidforge_dev 'voidforge_e2e_*' > /dev/null
     VOIDFORGE_WEB_CLIENT_SECRET=voidforge-web-local-test-secret \
     OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT-http://localhost:4318}" \
         docker compose -f deploy/compose.images.yaml -p voidforge-images up --no-build --detach --wait --wait-timeout 360

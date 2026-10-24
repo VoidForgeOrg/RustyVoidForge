@@ -2,7 +2,8 @@
 # D-052). All six are required checks on main: the ruleset "main: required CI checks" names lint,
 # supply-chain, test, determinism, database and e2e (read 2026-10-21 for P4.5, D-062). The e2e job
 # includes the smoke test (`just smoke`'s web walk, P4.5). The images job (P5.2, D-065) runs on every
-# PR and isn't required yet: adding it to the ruleset is the owner's change.
+# PR and isn't required yet: adding it to the ruleset is the owner's change. The drill job (P5.4,
+# D-067) runs on every PR and main push and isn't required either.
 # Every command here also runs locally from the repository root; see AGENTS.md, Commands.
 # Action and tool versions are pinned; see docs/versions.md and decision log D-007.
 name: CI
@@ -50,6 +51,8 @@ jobs:
           python3 .github/scripts/check-nightly.py --self-test
           .github/scripts/test-nightly-issue.sh
           python3 .github/scripts/test-nightly-latency.py
+      - name: The scratch-database guard's regression cases (P5.4, D-067)
+        run: .github/scripts/test-scratch-db.sh
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy, warnings as errors
@@ -237,3 +240,32 @@ jobs:
           echo "::group::dex and Postgres"
           docker compose -f deploy/compose.yaml logs --no-color dex postgres
           echo "::endgroup::"
+
+  # The backup and restore drill (P5.4, D-067; deploy/RUNBOOK.md): a live backup of a universe with
+  # history, restored into a fresh Postgres, the state hash compared at the restored head, the
+  # restored server playing on, and a truncated and a tampered backup that must fail. Its two
+  # Postgres stacks are its own compose projects; only dex comes from the stack's file.
+  drill:
+    name: drill
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DEX_CONFIG: config.ci.yaml
+      DRILL_LOG_DIR: ${{ github.workspace }}/target/drill
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: dex (CI config), healthy
+        run: docker compose -f deploy/compose.yaml up --build --detach --wait --wait-timeout 300 dex
+      - name: The drill
+        run: .github/scripts/backup-drill.sh
+      - name: On failure, the logs (serve, the bots, pg_dump, pg_restore, the replays)
+        if: failure()
+        run: |
+          for f in target/drill/*.log target/drill/*.json; do
+            echo "::group::$f"
+            tail -200 "$f" 2>/dev/null || echo "(no $f)"
+            echo "::endgroup::"
+          done
