@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Regression cases for nightly-latency.py (P5.3, D-066), against a stub Prometheus: a read within
-its bounds passes; a p99 over its bound fails while the p50 is under it; a run with no samples
-fails instead of reading as fast; an unreachable Prometheus is exit 3 (infrastructure).
+its bounds passes; a p99 over its bound fails while the p50 is under it; a run with no samples,
+or with samples but a missing quantile series, fails instead of reading as fast; an unreachable
+Prometheus is exit 3 (infrastructure).
 
 Usage: test-nightly-latency.py
 Exit codes: 0 every case passed; 1 one failed.
@@ -86,7 +87,13 @@ CASES = [
      with_(append__p99=0.3), BOUNDS, 1, "append p99"),
     ("no command samples fails, not fast", with_(steps={"advance": 400}), BOUNDS, 1, "no step or append samples"),
     ("no appends fails, not fast", with_(appends=0), BOUNDS, 1, "no step or append samples"),
-    ("a NaN p99 under a bound fails", with_(step__command__p99="NaN"), BOUNDS, 1, "step command p99 None"),
+    ("a NaN p99 under a bound fails", with_(step__command__p99="NaN"), BOUNDS, 1, "no quantile for step command"),
+    # R2-B2: counts arrived but a quantile series didn't; absent must not pass.
+    ("no step quantiles at all fails", with_(step={}), BOUNDS, 1, "no quantile for step advance, step command"),
+    ("a kind with samples but no quantile fails", with_(step={"advance": GOOD["step"]["advance"]}), BOUNDS, 1,
+     "no quantile for step command"),
+    ("a missing quantile fails without bounds too", with_(step={}), [], 1, "no quantile for step"),
+    ("no append quantile fails", with_(append={"p50": "NaN", "p99": "NaN"}), BOUNDS, 1, "append p50, append p99"),
 ]
 
 

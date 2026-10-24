@@ -6,7 +6,8 @@ turns into the `instance` label).
 
 It waits, bounded, for the run's samples to arrive (the collector's export and scrape lag), reads
 the raw bucket counts first so a run with no samples fails loudly instead of reading as fast, then
-p50 and p99 of a step by kind and of the append. Bounds are checked when given.
+p50 and p99 of a step by kind and of the append, waiting (within the same bound) until every kind
+with samples has both: an incomplete read fails. Bounds are checked when given.
 
 Usage: nightly-latency.py <instance> <window> [--step-p99-max S] [--append-p99-max S]
   <window>  the PromQL range covering the run, for example 35m
@@ -14,7 +15,8 @@ Environment: NIGHTLY_PROMETHEUS (default
   http://localhost:3000/api/datasources/proxy/uid/prometheus), NIGHTLY_SAMPLES_WAIT seconds
   (default 180).
 Prints one line, `@nightly-latency <json>`.
-Exit codes: 0 read (and within the bounds given); 1 over a bound, or no samples after the wait;
+Exit codes: 0 read (and within the bounds given); 1 over a bound, or no samples or no quantiles
+after the wait;
 2 usage; 3 Prometheus not reachable.
 """
 
@@ -83,13 +85,30 @@ def main(argv):
                       file=sys.stderr)
                 return 1
             time.sleep(5)
-        result = {"instance": instance, "window": window, "steps": steps, "appends": appended,
-                  "step": {}, "append": {}}
-        for q in ("0.5", "0.99"):
-            for s in query(f"histogram_quantile({q}, sum by (le, kind) (rate({STEP}_bucket{{{sel}}}[{window}])))"):
-                result["step"].setdefault(s["metric"].get("kind", "?"), {})[f"p{int(float(q) * 100)}"] = value(s)
-            r = query(f"histogram_quantile({q}, sum by (le) (rate({APPEND}_bucket{{{sel}}}[{window}])))")
-            result["append"][f"p{int(float(q) * 100)}"] = value(r[0]) if r else None
+        # Then the quantiles, until every kind with samples (always command) and the append has
+        # finite p50 and p99: a missing series must not pass a bound by being absent (R2-B2).
+        need = {k for k, n in steps.items() if n > 0} | {"command"}
+        while True:
+            result = {"instance": instance, "window": window, "steps": steps, "appends": appended,
+                      "step": {}, "append": {}}
+            for q in ("0.5", "0.99"):
+                for s in query(f"histogram_quantile({q}, sum by (le, kind) (rate({STEP}_bucket{{{sel}}}[{window}])))"):
+                    result["step"].setdefault(s["metric"].get("kind", "?"), {})[f"p{int(float(q) * 100)}"] = value(s)
+                r = query(f"histogram_quantile({q}, sum by (le) (rate({APPEND}_bucket{{{sel}}}[{window}])))")
+                result["append"][f"p{int(float(q) * 100)}"] = value(r[0]) if r else None
+            missing = sorted(f"step {k}" for k in need
+                             if any(result["step"].get(k, {}).get(p) is None for p in ("p50", "p99")))
+            missing += [f"append {p}" for p in ("p50", "p99") if result["append"].get(p) is None]
+            if not missing:
+                break
+            if time.monotonic() > deadline:
+                result["error"] = "incomplete"
+                result["missing"] = missing
+                print(f"@nightly-latency {json.dumps(result)}")
+                print(f"error: no quantile for {', '.join(missing)} for instance {instance} after "
+                      f"{WAIT:.0f} s", file=sys.stderr)
+                return 1
+            time.sleep(5)
     except Unreachable as e:
         print(f"error: Prometheus isn't reachable at {BASE}: {e}", file=sys.stderr)
         return 3

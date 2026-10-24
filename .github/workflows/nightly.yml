@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       sim_minutes:
-        description: The bot simulation's wall minutes (a minute plays 60 v0 hours)
+        description: The bot simulation's wall minutes, 1 to 300 (a minute plays 60 v0 hours)
         default: "30"
       crash_seeds:
         description: File-store crash seeds (Postgres runs VOIDFORGE_CRASH_PG_SEEDS, default 100)
@@ -57,7 +57,9 @@ jobs:
   sim:
     name: sim
     runs-on: ubuntu-24.04
-    timeout-minutes: 80
+    # The play time plus ~50 minutes for the build and the post-run checks (~4 measured), so a longer
+    # manual run (A2) doesn't time out and read as a failed night (QA's B2). 80 for the default 30.
+    timeout-minutes: ${{ fromJSON(inputs.sim_minutes || '30') + 50 }}
     outputs:
       started: ${{ steps.run.outputs.started || steps.forced.outputs.started }}
       outcome: ${{ steps.run.outputs.outcome || steps.forced.outputs.outcome }}

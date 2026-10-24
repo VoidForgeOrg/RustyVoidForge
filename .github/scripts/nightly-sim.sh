@@ -4,7 +4,7 @@
 #   1. checks dex grants bot1 a token, Postgres answers, and the collector's Prometheus answers;
 #   2. builds serve, the bots and the replay tool (release, against .sqlx/, never a database);
 #   3. creates this run's scratch database, voidforge_nightly_<time>_<pid> (only that prefix; a
-#      leftover from a killed run is dropped only when the pid in its name is dead), and seeds a
+#      leftover is dropped only when no session on the server holds it or uses it), and seeds a
 #      universe for eight players on the fast rules;
 #   4. starts serve on it (exporting to the collector as service.instance.id=<run>);
 #   5. runs `voidforge-bots sim` for SIM_MINUTES (default 30: about 10.7 v0 weeks);
@@ -21,7 +21,8 @@
 # Environment: SIM_MINUTES (30), SIM_SEED (default: the time), E2E_ISSUER (default
 # http://localhost:5556/dex; it needs the password grant, so locally a throwaway CI-config dex),
 # OTEL_EXPORTER_OTLP_ENDPOINT (default http://localhost:4318), NIGHTLY_PROMETHEUS (see
-# nightly-latency.py), NIGHTLY_LOG_DIR (default target/nightly/sim), GITHUB_STEP_SUMMARY.
+# nightly-latency.py), NIGHTLY_LOG_DIR (default target/nightly/sim), GITHUB_STEP_SUMMARY;
+# NIGHTLY_PSQL (a psql command for the server, instead of the stack's), NIGHTLY_SWEEP_ONLY.
 # Exit codes: 0 passed; 1 a check failed (a defect); 3 not ready (dex, Postgres, the collector or
 # serve): infrastructure, no verdict on the code.
 set -uo pipefail
@@ -43,8 +44,14 @@ psql=(docker compose -f deploy/compose.yaml exec -T postgres psql -U voidforge -
 [ -n "${NIGHTLY_PSQL:-}" ] && read -r -a psql <<< "$NIGHTLY_PSQL -X -q -v ON_ERROR_STOP=1 -At -d postgres"
 sql() { "${psql[@]}" -c "$1" < /dev/null; }
 say() { echo "nightly-sim: $*" >&2; }
+# Usage errors first, before the EXIT trap: they print no summary.
+case "$db" in "$prefix"[0-9]*_[0-9]*) ;; *) say "refusing database $db"; exit 2 ;; esac
+case "$minutes" in ''|*[!0-9]*) say "SIM_MINUTES must be whole minutes"; exit 2 ;; esac
+# A hosted runner's job ends at 6 hours; the workflow's timeout is SIM_MINUTES + 50.
+[ "$minutes" -ge 1 ] && [ "$minutes" -le 300 ] || { say "SIM_MINUTES must be 1 to 300"; exit 2; }
 mkdir -p "$log_dir"
-rm -f "$log_dir"/*.log "$log_dir"/*.json
+# Every file a run writes, so a failed night never reports an earlier run's numbers.
+rm -f "$log_dir"/*.log "$log_dir"/*.json "$log_dir"/*.out
 outcome=failed
 why=""
 
@@ -59,6 +66,9 @@ summary() {
 
 serve_pid=
 created=0
+holder_pid=
+# A session that holds a nightly database's name as its application_name, or is connected to it.
+held() { sql "SELECT count(*) FROM pg_stat_activity WHERE application_name = '$1' OR datname = '$1'"; }
 cleanup() {
     local code=$?
     if [ -n "$serve_pid" ] && kill -0 "$serve_pid" 2> /dev/null; then
@@ -73,33 +83,51 @@ cleanup() {
             [ "$code" != 0 ] || code=1
         fi
     fi
-    summary
+    if [ -n "$holder_pid" ]; then
+        sql "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE application_name = '$db'" > /dev/null 2>&1 || true
+        kill "$holder_pid" 2> /dev/null || true
+    fi
+    [ -n "${NIGHTLY_SWEEP_ONLY:-}" ] || summary
     exit "$code"
 }
 trap cleanup EXIT
 finish() { outcome=$1; why=$2; say "$outcome: $why"; case "$outcome" in passed) exit 0 ;; infra) exit 3 ;; *) exit 1 ;; esac; }
 
-case "$db" in "$prefix"[0-9]*_[0-9]*) ;; *) say "refusing database $db"; exit 2 ;; esac
-case "$minutes" in ''|*[!0-9]*) say "SIM_MINUTES must be whole minutes"; exit 2 ;; esac
 
 # 1. The stack.
+sql "SELECT 1" > /dev/null 2>&1 || finish infra "can't reach the stack's Postgres"
+# This run's claim on the shared server, before its database exists and for its whole length, the
+# connection-free phases too (after CREATE, while the invariants build): a session named after the
+# database, ended on exit. Another seat's sweep reads liveness here, never from ps: seats run in
+# separate PID namespaces (R2-B1, as PR A's R2-2). A run killed outright leaves it sleeping for
+# SIM_MINUTES + 60 minutes at most; until then its leftover is kept, late but never early.
+"${psql[@]:0:${#psql[@]}-1}" "dbname=postgres application_name=$db" \
+    -c "SELECT pg_sleep($(( (minutes + 60) * 60 )))" < /dev/null > /dev/null 2>&1 &
+holder_pid=$!
+for _ in $(seq 1 60); do [ "$(held "$db")" != 0 ] && break; sleep 0.5; done
+[ "$(held "$db")" != 0 ] || finish infra "this run's holder session never appeared on the server"
+say "claimed $db on the server (a session named after it, held until this run ends)"
+# Leftovers of runs that never reached their EXIT trap: drop those no session holds or uses (DROP
+# without FORCE refuses one that gains a connection meanwhile), list those held, and leave any
+# other name alone. Never this run's own.
+for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\_nightly\_%' ORDER BY 1"); do
+    [ "$old" = "$db" ] && continue
+    case "$old" in "$prefix"[0-9]*_[0-9]*) ;; *) say "leftover $old has an unexpected name; not touching it"; continue ;; esac
+    if [ "$(held "$old")" != 0 ]; then
+        say "leftover $old is held by a live run's session; if that run is gone, drop it with: ${psql[*]} -c 'DROP DATABASE \"$old\"'"
+    elif out=$(sql "DROP DATABASE IF EXISTS \"$old\"" 2>&1); then
+        say "dropped leftover $old (no session holds it)"
+    else
+        say "leftover $old couldn't be dropped (in use?): ${out//$'\n'/ }"
+    fi
+done
+# NIGHTLY_SWEEP_ONLY: the claim and the sweep, then stop (test-nightly-sweep.sh, in the database job).
+[ -n "${NIGHTLY_SWEEP_ONLY:-}" ] && exit 0
 grant=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
     -d 'grant_type=password&username=bot1%40voidforge.test&password=bot1-local-test-password&client_id=voidforge-cli&scope=openid' \
     || true)
 [ "$grant" = 200 ] || finish infra "dex at $issuer doesn't grant bot1 a token (HTTP $grant): it needs deploy/dex/config.ci.yaml (locally, a throwaway dex on its own port: E2E_ISSUER)"
-sql "SELECT 1" > /dev/null 2>&1 || finish infra "can't reach the stack's Postgres"
 curl -sf -o /dev/null "$prometheus/api/v1/query?query=up" || finish infra "the collector's Prometheus isn't reachable at $prometheus"
-for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\_nightly\_%' ORDER BY 1"); do
-    case "$old" in "$prefix"[0-9]*_[0-9]*) ;; *) say "leftover $old has an unexpected name; not touching it"; continue ;; esac
-    pid="${old##*_}"
-    if ps -p "$pid" > /dev/null 2>&1; then
-        say "leftover $old: pid $pid is alive (another run?); not touching it"
-    elif sql "DROP DATABASE IF EXISTS \"$old\"" > /dev/null 2>&1; then
-        say "dropped leftover $old (pid $pid is gone)"
-    else
-        say "leftover $old: pid $pid is gone, but it couldn't be dropped"
-    fi
-done
 
 # 2. The binaries.
 cargo build -q --release --locked -p voidforge-server -p voidforge-bots -p voidforge-replay \

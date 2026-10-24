@@ -146,11 +146,14 @@ def sim(outcome, log_dir, why):
     out = [f"## Bot simulation: {HEADLINE[outcome]}", ""]
     if why:
         out += [why, ""]
-    out.append("Checked: eight bots played through the API on the fast rules; every view kept its "
-               "rules; every invalid command got exactly its code; every command sent again with its "
-               "key got exactly the stored answer; serve stopped cleanly; the log replays and agrees "
-               "with every snapshot; the core's invariants held after every record.")
-    out.append("")
+    # Only a passed night checked all of it; a failed or infrastructure one says what it got to.
+    if outcome == "passed":
+        out.append("Checked: eight bots played through the API on the fast rules; every view kept "
+                   "its rules; every invalid command got exactly its code; every command sent again "
+                   "with its key got exactly the stored answer; serve stopped cleanly; the log "
+                   "replays and agrees with every snapshot; the core's invariants held after every "
+                   "record.")
+        out.append("")
     t = tagged(f"{log_dir}/sim.out", "@nightly-sim")
     if not t:
         out.append("The bots reported no numbers (see the log).")

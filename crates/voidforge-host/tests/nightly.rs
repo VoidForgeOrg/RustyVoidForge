@@ -9,29 +9,36 @@
 //! It reads only a `voidforge_nightly_*` database, named by VOIDFORGE_NIGHTLY_DATABASE_URL, and
 //! never writes.
 
+use std::str::FromStr;
+
+use sqlx::postgres::PgConnectOptions;
 use voidforge_core::rules::Rules;
 use voidforge_core::state::World;
 use voidforge_store::log::{LogStore, PgLog};
 use voidforge_store::replay;
 use voidforge_store::snapshot::{self, EngineBuild, Expected};
 use voidforge_testkit::determinism::{assert_fleet_invariants, assert_transition_invariants};
-use voidforge_testkit::v0_fast_rules;
+use voidforge_testkit::{busy_world, v0_fast_rules};
 
 const PREFIX: &str = "voidforge_nightly_";
 
-/// The database a URL names, if it is a nightly scratch database: `voidforge_nightly_` and then
-/// digits and underscores only, with no query (sqlx honours `?dbname=`, which would name another).
-fn nightly_database(url: &str) -> Result<&str, String> {
-    let (_, tail) = url.rsplit_once('/').ok_or("not a database URL")?;
-    if tail.contains('?') {
-        return Err("a query in the URL could name another database".to_owned());
-    }
-    match tail.strip_prefix(PREFIX) {
+/// The database sqlx will connect to for this URL, if it is a nightly scratch database:
+/// `voidforge_nightly_` and then digits and underscores only. It's read from the parsed options,
+/// never from the URL's text: a query can name another database (`?dbname=`, P5.2 QA's F2) or
+/// hide one behind a `/` (`.../voidforge_test?application_name=/voidforge_nightly_1`, R2-B4).
+fn nightly_database(url: &str) -> Result<String, String> {
+    let options =
+        PgConnectOptions::from_str(url).map_err(|e| format!("not a Postgres URL: {e}"))?;
+    let name = options
+        .get_database()
+        .ok_or("the URL names no database")?
+        .to_owned();
+    match name.strip_prefix(PREFIX) {
         Some(rest) if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'_') => {
-            Ok(tail)
+            Ok(name)
         }
         _ => Err(format!(
-            "refusing database {tail}: only {PREFIX}<time>_<pid>"
+            "refusing database {name}: only {PREFIX}<time>_<pid>"
         )),
     }
 }
@@ -41,7 +48,7 @@ fn only_a_nightly_scratch_database_is_read() {
     let base = "postgres://voidforge:pw@localhost:5432/";
     assert_eq!(
         nightly_database(&format!("{base}voidforge_nightly_20261023180000_123")),
-        Ok("voidforge_nightly_20261023180000_123")
+        Ok("voidforge_nightly_20261023180000_123".to_owned())
     );
     for refused in [
         "voidforge",
@@ -50,7 +57,9 @@ fn only_a_nightly_scratch_database_is_read() {
         "voidforge_nightly_",
         "voidforge_nightly_x",
         "voidforge_e2e_20261023_1",
+        // A query that names another database, or hides one behind a `/` (R2-B4).
         "voidforge_nightly_1?dbname=voidforge",
+        "voidforge_test?application_name=/voidforge_nightly_123",
     ] {
         assert!(
             nightly_database(&format!("{base}{refused}")).is_err(),
@@ -78,6 +87,29 @@ fn stocks_within_caps(w: &World) {
             p.id.0,
             w.time_ms
         );
+    }
+}
+
+/// QA's B4 on e82382e: the stock check fails a World it should, not only passes good ones.
+#[test]
+fn a_stock_over_its_cap_breaks_the_stock_check() {
+    stocks_within_caps(&busy_world());
+    for ore in [true, false] {
+        let mut w = busy_world();
+        let t = w.time_ms;
+        let p = w
+            .planets
+            .values_mut()
+            .find(|p| if ore { &p.ore } else { &p.ingots }.value_at(t).unwrap() > 0)
+            .expect("a planet with some of the stock");
+        if ore {
+            p.ore_cap_g = p.ore.value_at(t).unwrap() - 1;
+        } else {
+            p.ingot_cap_g = p.ingots.value_at(t).unwrap() - 1;
+        }
+        let broken =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stocks_within_caps(&w)));
+        assert!(broken.is_err(), "a stock over its cap passed (ore: {ore})");
     }
 }
 

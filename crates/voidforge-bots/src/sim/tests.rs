@@ -176,6 +176,10 @@ fn a_valid_command_is_accepted_or_refused_by_a_game_rule_and_nothing_else() {
     assert!(judge_valid(&refused(404, ErrorCode::NotFound)).is_err());
     assert!(judge_valid(&refused(400, ErrorCode::MalformedBody)).is_err());
     assert!(judge_valid(&refused(503, ErrorCode::NotFound)).is_err());
+    // R2-B3: a 422 counts only with a game rule's code. A reused key with another command is a
+    // protocol error, and a malformed body is the request's fault.
+    assert!(judge_valid(&refused(422, ErrorCode::IdempotencyKeyConflict)).is_err());
+    assert!(judge_valid(&refused(422, ErrorCode::MalformedBody)).is_err());
 }
 
 #[test]
@@ -191,6 +195,13 @@ fn an_invalid_command_gets_exactly_its_status_and_code() {
 fn a_retry_gets_exactly_the_stored_answer() {
     judge_retry(&accepted(3), &accepted(3)).unwrap();
     assert!(judge_retry(&accepted(3), &accepted(4)).is_err());
+    // R2-B3: the same record, but other own events, isn't the stored answer.
+    let with_event: Reply<CommandAccepted> = Ok(serde_json::from_value(json!({
+        "seq": 3, "game_time": AS_OF,
+        "events": [{"type": "building_completed", "planet_id": 1, "building_id": 2, "building_type": "drill"}]
+    }))
+    .unwrap());
+    assert!(judge_retry(&accepted(3), &with_event).is_err());
     judge_retry(
         &refused(422, ErrorCode::NoFreeSlot),
         &refused(422, ErrorCode::NoFreeSlot),

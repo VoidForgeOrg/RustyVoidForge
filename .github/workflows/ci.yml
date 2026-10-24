@@ -142,6 +142,11 @@ jobs:
         run: .github/scripts/test-database-lock.sh
         env:
           PSQL: docker exec -i ${{ job.services.postgres.id }} psql -U voidforge
+      # On this job's own server only: the sweep reaches every voidforge_nightly_* database (D-066).
+      - name: The nightly sim's leftover sweep, regression cases
+        run: .github/scripts/test-nightly-sweep.sh
+        env:
+          PSQL: docker exec -i ${{ job.services.postgres.id }} psql -U voidforge
       - name: Migrations on an empty database twice, the sqlx metadata check, store tests
         run: .github/scripts/database.sh
         env:

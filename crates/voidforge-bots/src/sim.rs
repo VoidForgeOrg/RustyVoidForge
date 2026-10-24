@@ -360,15 +360,16 @@ pub fn check_player(v: &PlayerView) -> Result<(), String> {
 
 // --- The answers to commands.
 
-/// What a valid command's answer means: accepted, or refused by a game rule (422, counted).
-/// Anything else (a 400, 401, 404, 409 or 5xx) is a defect.
+/// What a valid command's answer means: accepted, or refused by a game rule (a 422 whose code is
+/// one, counted). Anything else is a defect: a 400, 401, 404, 409 or 5xx, and a 422 with a code
+/// that isn't a game rule, such as `idempotency_key_conflict` (R2-B3).
 ///
 /// # Errors
 /// The answer, when it is neither.
 pub fn judge_valid(reply: &Reply<CommandAccepted>) -> Result<Option<String>, String> {
     match reply {
         Ok(_) => Ok(None),
-        Err(r) if r.status == 422 => Ok(Some(code_name(r.body.code))),
+        Err(r) if r.status == 422 && r.body.code.is_game_rule() => Ok(Some(code_name(r.body.code))),
         Err(r) => Err(format!(
             "a valid command got {} {}: {}",
             r.status,
@@ -402,8 +403,9 @@ pub fn judge_invalid(want: (u16, ErrorCode), reply: &Reply<CommandAccepted>) -> 
     }
 }
 
-/// A command sent again with its key gets exactly the stored answer: the same record, or the same
-/// refusal (D-037).
+/// A command sent again with its key gets exactly the stored answer (D-037): the same record with
+/// the same own events, or the same refusal's status and code (a message isn't part of the
+/// stable contract, D-045).
 ///
 /// # Errors
 /// The two answers, when they differ.
@@ -412,7 +414,7 @@ pub fn judge_retry(
     again: &Reply<CommandAccepted>,
 ) -> Result<(), String> {
     let same = match (first, again) {
-        (Ok(a), Ok(b)) => a.seq == b.seq && a.game_time == b.game_time,
+        (Ok(a), Ok(b)) => a == b,
         (Err(a), Err(b)) => a.status == b.status && a.body.code == b.body.code,
         _ => false,
     };
