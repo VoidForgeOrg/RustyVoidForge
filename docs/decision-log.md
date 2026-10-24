@@ -1887,6 +1887,12 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Units:** the form parser and every success and event line (`src/forms.rs`), the key store (`src/session.rs`), `parse_tonnes` and `per_hour` (`src/format.rs`).
   - **End to end** (`web-login.py`, e2e step 5c): the MVP loop through the web's forms on v0-fast, paced under D-054 and each step checked against the API's JSON with alice's own token: build a Shipyard (a double submit says "already submitted" and a forged key is "expired", and neither builds twice), queue both ships, assemble with 1 t of ingots, colonize an unowned neighbour, disband there, assemble with 0.5 t and Transport it home.
 - Where it's recorded: `crates/voidforge-web/src/forms.rs`, `src/routes.rs`, `src/pages.rs`, `src/session.rs`, `src/format.rs`, `crates/voidforge-web/AGENTS.md`, `phase4-ux.md` §5.
+- Corrected on 2026-10-24 (slice 52, the P4.4 follow-up), from dev-design's review of P4.4's rendered forms (findings 1 and 2), with `phase4-ux.md` §5.5 and §4.3 corrected to match:
+  - **The retry page's heading and title say whether the order could have run.** Before, both always said `Not sent yet`, even where the body says the order "may or may not have gone through". At the Phase 4 gate (capture 27) the order had applied. A player who trusted the heading and used a fresh form (a new key) could run it twice. Now `messages::order_retry_heading` gives:
+    - `Not sent yet` for a 429 or 503 refusal (`rate_limited`, `busy`, `unavailable`), which never reaches the host;
+    - `Not confirmed yet` for a 500, an unreachable API, or an unexpected status or body.
+    It judges by the code's own status, as the kind is (R1-G3). A unit test checks every retry-class code's heading against its own copy ("wasn't sent" or "may or may not"). The router tests check each outcome's h1 and title. The body, Try again and the back link are unchanged.
+  - **Fleets carries the mission hint under each fleet's Send form,** word for word the planet page's (`pages::MISSION_HINT`, shared).
 
 ### D-062: The smoke test is the e2e job's web walk, by name
 

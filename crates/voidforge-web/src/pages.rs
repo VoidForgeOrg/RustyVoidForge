@@ -813,11 +813,14 @@ pub fn planet(
                     (mission_radios())
                     p { button type="submit" { "Send" } }
                 }))
-                p { "Colonize needs a Colony Ship and an unowned planet. Transport needs a Cargo Vessel and one of your planets. Move goes anywhere." }
+                p { (MISSION_HINT) }
             }
         },
     )
 }
+
+/// The line under every Send form: the planet page's (§4.2) and each fleet's on Fleets (§4.3).
+const MISSION_HINT: &str = "Colonize needs a Colony Ship and an unowned planet. Transport needs a Cargo Vessel and one of your planets. Move goes anywhere.";
 
 /// The three missions as radios, none preselected (§5.3).
 fn mission_radios() -> Markup {
@@ -958,6 +961,7 @@ fn fleet(f: &FleetView, me: &PlayerView, as_of: &Timestamp, acts: &Acts<'_>) -> 
                         (mission_radios())
                         p { button type="submit" { "Send" } }
                     }))
+                    p { (MISSION_HINT) }
                     @if has_cargo(cargo) {
                         @if me.planet_ids.contains(at_planet_id) {
                             (act_form(acts.key, acts.here, "trigger_unload", &[
@@ -1191,15 +1195,22 @@ pub fn retry_page(frame: Frame<'_>, m: &Message, again: &str) -> Markup {
     )
 }
 
-/// §5.5 for a submitted order: the copy and code, **Try again** posting the identical fields
-/// with the same key, and a link back to `return_to` that sends nothing (P4.4's D1 labels it).
+/// §5.5 for a submitted order: the heading (`messages::order_retry_heading`: whether the order
+/// could have run), the copy and code, **Try again** posting the identical fields with the same
+/// key, and a link back to `return_to` that sends nothing (P4.4's D1 labels it).
 #[must_use]
-pub fn command_retry(frame: Frame<'_>, m: &Message, posted: &Posted, return_to: &str) -> Markup {
+pub fn command_retry(
+    frame: Frame<'_>,
+    heading: &str,
+    m: &Message,
+    posted: &Posted,
+    return_to: &str,
+) -> Markup {
     layout(
-        "Not sent yet",
+        heading,
         frame,
         html! {
-            h1 { "Not sent yet" }
+            h1 { (heading) }
             p { (m.copy) (code(m)) }
             form method="post" action="/act" {
                 @for (name, value) in &posted.pairs {

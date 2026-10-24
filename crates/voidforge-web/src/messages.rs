@@ -67,6 +67,22 @@ pub const UNEXPECTED_PAGE: &str =
 /// §6.2 (P4.2's D2): the same after an order, which may have been applied.
 pub const UNEXPECTED_COMMAND: &str = "The game server answered something unexpected, so your order may or may not have gone through. Trying again is safe: it won't run twice. This is a bug; please report it.";
 
+/// §5.5's heading (and title) for an order's retry page when the order surely didn't run.
+pub const RETRY_NOT_SENT: &str = "Not sent yet";
+/// §5.5's heading when the order may have run (slice 52; the P4.4 forms review's finding 1).
+pub const RETRY_NOT_CONFIRMED: &str = "Not confirmed yet";
+
+/// §5.5's heading for an order's retry page, by the split the copy makes: a 429 or 503 refusal
+/// never reached the host, so the order wasn't sent; a 500, an unreachable API or an unexpected
+/// answer may have run it. By the code's own status, as the kind is (R1-G3).
+#[must_use]
+pub fn order_retry_heading(e: &ApiError) -> &'static str {
+    match *e {
+        ApiError::Refused { code, .. } if matches!(code.status(), 429 | 503) => RETRY_NOT_SENT,
+        _ => RETRY_NOT_CONFIRMED,
+    }
+}
+
 /// The message for a failed call.
 #[must_use]
 pub fn for_error(e: &ApiError, ctx: Context, fill: Fill) -> Message {
@@ -401,6 +417,49 @@ mod tests {
                 "{e:?}"
             );
             assert!(!page.copy.contains("order"), "{e:?}");
+        }
+    }
+
+    /// Slice 52: an order's retry heading says what its copy says. "Not sent yet" only where the
+    /// copy says the order wasn't sent; "Not confirmed yet" where it may have gone through. For
+    /// every retry-class code, so a code added later can't get a heading its copy contradicts.
+    #[test]
+    fn an_order_s_retry_heading_agrees_with_its_copy() {
+        let mut retried = Vec::new();
+        for code in ErrorCode::ALL {
+            let e = refused(code, None);
+            let m = for_error(&e, Context::Command, Fill::default());
+            if !matches!(m.kind, Kind::Retry { .. }) {
+                continue;
+            }
+            let heading = order_retry_heading(&e);
+            if m.copy.contains("your order wasn't sent") {
+                assert_eq!(heading, "Not sent yet", "{code:?}");
+            } else {
+                assert!(
+                    m.copy.contains("may or may not have gone through"),
+                    "{code:?}"
+                );
+                assert_eq!(heading, "Not confirmed yet", "{code:?}");
+            }
+            retried.push((code, heading));
+        }
+        assert_eq!(
+            retried,
+            [
+                (ErrorCode::RateLimited, "Not sent yet"),
+                (ErrorCode::Internal, "Not confirmed yet"),
+                (ErrorCode::Busy, "Not sent yet"),
+                (ErrorCode::Unavailable, "Not sent yet"),
+            ]
+        );
+        for e in [
+            ApiError::Unreachable(Unreachable::Connect),
+            ApiError::Unreachable(Unreachable::Timeout),
+            ApiError::UnexpectedStatus(418),
+            ApiError::Undecodable { status: 200 },
+        ] {
+            assert_eq!(order_retry_heading(&e), "Not confirmed yet", "{e:?}");
         }
     }
 
