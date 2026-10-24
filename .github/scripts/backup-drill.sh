@@ -18,7 +18,8 @@
 #      minute on it, stops it, and replays the restored log again: verified, past B;
 #  11. the negatives, each through the same check as the clean run: a truncated dump must fail
 #      pg_restore; a restored log with one record tampered must fail the replay and the tables'
-#      comparison; the source's hash one record earlier must differ from B's; and a backup taken
+#      comparison; the source's hash halfway to B must differ from B's; its URL check must refuse
+#      port 5432; and a backup taken
 #      before any periodic snapshot must fail the snapshot check. If one passes, the drill fails.
 # It never names the stack's project, containers, port 5432 or the voidforge database.
 #
@@ -264,11 +265,16 @@ tampered_code=$?
 # The tables' comparison tells the tampered copy from the source.
 tampered_fp=$(fingerprint dst "${db}_tampered") || finish infra "can't read the tampered copy's tables"
 ! same_tables "$src_fp" "$tampered_fp" || finish failed "the tampered copy's tables compare equal to the source's: the tables' check is broken"
-# The hash comparison tells two worlds apart: the source one record earlier isn't the restored one.
-"$bin/voidforge-replay" postgres --database-url "$src_url" --rules rules/v0-fast.toml --to "$(( B - 1 ))" --json \
-    > "$log_dir/negative-earlier.json" 2>> "$log_dir/replay.log" || finish failed "the source's log doesn't verify to seq $(( B - 1 ))"
+# The hash comparison tells two worlds apart: the source halfway to B isn't the restored one.
+# Halfway, not one record back: a record can leave the world as it was (a refused command, as on
+# CI's first run, where seq B and B-1 hashed alike), but hundreds of accepted ones can't.
+half=$(( B / 2 ))
+"$bin/voidforge-replay" postgres --database-url "$src_url" --rules rules/v0-fast.toml --to "$half" --json \
+    > "$log_dir/negative-earlier.json" 2>> "$log_dir/replay.log" || finish failed "the source's log doesn't verify to seq $half"
 earlier_hash=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sources"][0]["end_hash"])' "$log_dir/negative-earlier.json")
-! same_hash "$restored_hash" "$earlier_hash" || finish failed "the hashes at seq $B and seq $(( B - 1 )) compare equal: the hash check is broken"
+! same_hash "$restored_hash" "$earlier_hash" || finish failed "the hashes at seq $B and seq $half compare equal: the hash check is broken"
+# The drill's own guard refuses the stack's port.
+( url 5432 "$db" ) > /dev/null 2>&1 && finish failed "the drill's URL check accepted port 5432: it's broken"
 # A backup from before the first periodic snapshot is refused.
 psql_in dst "$db" -c "CREATE DATABASE ${db}_early" > /dev/null
 dst exec -T postgres pg_restore -U voidforge --exit-on-error --single-transaction --no-owner -d "${db}_early" \
@@ -283,5 +289,5 @@ summary_line "- Restored head B = $B (snapshots: $(python3 -c 'import json,sys; 
 summary_line "- State hash at seq $B, by voidforge-replay on both sides: restored $restored_hash, source $source_hash (equal)."
 summary_line "- Tables up to seq $B, equal (records|snapshots at $snapshot_seqs|accounts|epoch): $dst_fp."
 summary_line "- The restored server recovered to seq $B; the bots played a minute on it; its log verifies to seq $after_seq."
-summary_line "- Negatives: a truncated backup failed pg_restore ($(grep -m1 -i error "$log_dir/negative-truncated.log" | cut -c1-100)); a restored log with seq $tampered tampered diverged (exit 1), and its tables compare unequal; the source's hash at seq $(( B - 1 )) differs from B's; a backup taken before any periodic snapshot is refused."
+summary_line "- Negatives: a truncated backup failed pg_restore ($(grep -m1 -i error "$log_dir/negative-truncated.log" | cut -c1-100)); a restored log with seq $tampered tampered diverged (exit 1), and its tables compare unequal; the source's hash at seq $half differs from B's; the drill's URL check refuses port 5432; a backup taken before any periodic snapshot is refused."
 finish passed "the restored state hash at seq $B matches the source's"

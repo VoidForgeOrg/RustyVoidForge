@@ -2060,7 +2060,8 @@ Each entry records its date, the package that made it, the decision, the reasons
   - **Negatives, each through the check the clean run uses** (one shared function per comparison), so a broken check fails the drill. Each must fail:
     - the backup cut in half must fail `pg_restore`;
     - a restored copy with one record's events emptied must diverge in the replay and compare unequal on its tables;
-    - the source's hash one record before B must differ from B's;
+    - the source's hash halfway to B must differ from B's. Halfway, not one record back: a record can leave the world unchanged (a refused command), and on CI's first run seq B and B−1 hashed alike, which failed the drill with no defect;
+    - the drill's URL check must refuse port 5432;
     - a backup taken right after the seed, before any periodic snapshot, must fail the snapshot check.
   - **The runbook is `deploy/RUNBOOK.md`** (the advisor's ruling: beside the compose files it names; `deploy/README.md` points to it). It has the same steps for a person, each with its command and what failure looks like.
   - **CI: a `drill` job** on every pull request and push to main, not a required check (the lead's T1; making it required would be a ruleset change for Tom). It runs the stack's dex (CI config), a debug build of server, bots and replay, and the drill. MINUTES_TBD.
