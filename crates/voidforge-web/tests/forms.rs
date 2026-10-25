@@ -22,6 +22,9 @@ use voidforge_web::pages::RENEWED;
 use voidforge_web::session::MAX_FORM_KEYS;
 
 const AS_OF: &str = "2026-10-20T18:04:12.000Z";
+/// §5.5's two headings, as the player reads them (literal, so the source's constants are checked).
+const NOT_SENT: &str = "Not sent yet";
+const NOT_CONFIRMED: &str = "Not confirmed yet";
 
 async fn logged_in(w: &World) -> Browser {
     let mut b = w.browser();
@@ -505,15 +508,17 @@ async fn a_400_is_a_bug_s_banner_and_doesn_t_mark_the_key() {
 }
 
 /// §5.5: a retryable failure is the retry page at the API's status, re-posting the identical
-/// fields and key; the key isn't marked, so Try again shows the real outcome, plainly.
-async fn retried(reply: Reply, status: u16, copy: &str, code: Option<&str>) {
+/// fields and key; the key isn't marked, so Try again shows the real outcome, plainly. Its
+/// heading and title say whether the order could have run (slice 52).
+async fn retried(reply: Reply, status: u16, heading: &str, copy: &str, code: Option<&str>) {
     let (w, mut b) = world().await;
     w.api.reply("/commands", reply);
     let key = fresh_key(&mut b).await;
     let fields = build_fields(&key);
     let page = submit(&mut b, &fields).await;
     assert_eq!(page.status, status, "{}", page.body);
-    has(&page.body, "<h1>Not sent yet</h1>");
+    has(&page.body, &format!("<h1>{heading}</h1>"));
+    has(&page.body, &format!("<title>{heading} – Voidforge</title>"));
     has(&page.body, copy);
     match code {
         Some(c) => has(&page.body, &format!("(<code>{c}</code>)")),
@@ -548,6 +553,7 @@ async fn a_rate_limit_is_the_retry_page_at_429_with_retry_after() {
     retried(
         Reply::error(429, "rate_limited").header("retry-after", "4"),
         429,
+        NOT_SENT,
         "Too many requests at once. Try again in 4 seconds; your order wasn't sent.",
         Some("rate_limited"),
     )
@@ -575,6 +581,7 @@ async fn busy_unavailable_and_internal_are_retry_pages_at_their_status() {
     retried(
         Reply::error(503, "busy"),
         503,
+        NOT_SENT,
         "The game is busy. Try again in a moment; your order wasn't sent.",
         Some("busy"),
     )
@@ -582,12 +589,14 @@ async fn busy_unavailable_and_internal_are_retry_pages_at_their_status() {
     retried(
         Reply::error(503, "unavailable"),
         503,
+        NOT_SENT,
         "The game is starting up or catching up. Try again in a moment; your order wasn't sent.",
         Some("unavailable"),
     )
     .await;
-    retried(Reply::error(500, "internal"), 500, "Something went wrong on the game server. Your order may or may not have gone through. Trying again is safe: it won't run twice.", Some("internal")).await;
-    retried(Reply::raw(StatusCode::IM_A_TEAPOT, "{}"), 502, "The game server answered something unexpected, so your order may or may not have gone through.", None).await;
+    retried(Reply::error(500, "internal"), 500, NOT_CONFIRMED, "Something went wrong on the game server. Your order may or may not have gone through. Trying again is safe: it won't run twice.", Some("internal")).await;
+    retried(Reply::raw(StatusCode::IM_A_TEAPOT, "{}"), 502, NOT_CONFIRMED, "The game server answered something unexpected, so your order may or may not have gone through.", None).await;
+    retried(Reply::raw(StatusCode::OK, "not json"), 502, NOT_CONFIRMED, "The game server answered something unexpected, so your order may or may not have gone through.", None).await;
 }
 
 #[tokio::test]
@@ -606,6 +615,10 @@ async fn an_unreachable_api_is_the_retry_page_at_502() {
     let key = fresh_key(&mut b).await;
     let page = submit(&mut b, &build_fields(&key)).await;
     assert_eq!(page.status, 502, "{}", page.body);
+    // The order may have run (the Phase 4 gate's capture 27), so the heading can't say it wasn't sent.
+    has(&page.body, "<h1>Not confirmed yet</h1>");
+    has(&page.body, "<title>Not confirmed yet – Voidforge</title>");
+    lacks(&page.body, "Not sent yet");
     has(&page.body, UNREACHABLE_COMMAND);
     assert_eq!(
         hidden_fields(&page.body)

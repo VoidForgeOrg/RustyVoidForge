@@ -941,7 +941,13 @@ async fn act(State(s): State<AppState>, session: Session, body: Bytes) -> Respon
             retry(
                 status,
                 retry_after,
-                &pages::command_retry(frame, &m, &posted, &return_to),
+                &pages::command_retry(
+                    frame,
+                    messages::order_retry_heading(&error),
+                    &m,
+                    &posted,
+                    &return_to,
+                ),
             )
         }
         Kind::Banner | Kind::UniverseFull => {
