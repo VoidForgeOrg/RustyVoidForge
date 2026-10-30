@@ -103,6 +103,8 @@ finish() { outcome=$1; why=$2; say "$outcome: $why"; case "$outcome" in passed) 
 postgres_answers() { timeout 15 "${psql[@]}" -c "SELECT 1" < /dev/null > /dev/null 2>&1; }
 ready_within "$ready_wait" 2 postgres_answers \
     || finish infra "can't reach the stack's Postgres (waited $waited s)"
+# Each wait's length on success too (QA's A2): how close the nights come to the bound.
+say "Postgres answered after $waited s"
 # This run's claim on the shared server, before its database exists and for its whole length, the
 # connection-free phases too (after CREATE, while the invariants build): a session named after the
 # database, ended on exit. Another seat's sweep reads liveness here, never from ps: seats run in
@@ -114,7 +116,7 @@ holder_pid=$!
 claim_held() { [ "$(held "$db")" != 0 ]; }
 ready_within 30 0.5 claim_held \
     || finish infra "this run's holder session never appeared on the server (waited $waited s)"
-say "claimed $db on the server (a session named after it, held until this run ends)"
+say "claimed $db on the server after $waited s (a session named after it, held until this run ends)"
 # Leftovers of runs that never reached their EXIT trap: drop those no session holds or uses (DROP
 # without FORCE refuses one that gains a connection meanwhile), list those held, and leave any
 # other name alone. Never this run's own.
@@ -140,9 +142,15 @@ dex_grants() {
 }
 ready_within "$ready_wait" 2 dex_grants \
     || finish infra "dex at $issuer doesn't grant bot1 a token (HTTP $grant, waited $waited s): it needs deploy/dex/config.ci.yaml (locally, a throwaway dex on its own port: E2E_ISSUER)"
-prometheus_answers() { curl -sf -m 10 -o /dev/null "$prometheus/api/v1/query?query=up"; }
+say "dex granted bot1 a token after $waited s"
+answer=
+prometheus_answers() {
+    answer=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$prometheus/api/v1/query?query=up" || true)
+    [ "$answer" = 200 ]
+}
 ready_within "$ready_wait" 2 prometheus_answers \
-    || finish infra "the collector's Prometheus isn't reachable at $prometheus (waited $waited s)"
+    || finish infra "the collector's Prometheus isn't reachable at $prometheus (HTTP $answer, waited $waited s)"
+say "the collector's Prometheus answered after $waited s"
 
 # 2. The binaries.
 cargo build -q --release --locked -p voidforge-server -p voidforge-bots -p voidforge-replay \
@@ -171,7 +179,7 @@ serve_answers() {
     return 1
 }
 ready_within "$serve_wait" 0.2 serve_answers || finish infra "serve isn't ready (waited $waited s; see $log_dir/serve.log)"
-say "serve is ready on $addr (pid $serve_pid); the bots play for $minutes min, seed $seed"
+say "serve is ready on $addr after $waited s (pid $serve_pid); the bots play for $minutes min, seed $seed"
 started=$(date +%s)
 
 # 5. The bots.

@@ -62,6 +62,7 @@ if ! ready_within "$ready_wait" 2 postgres_answers; then
     say "Postgres isn't reachable through PSQL (waited $waited s)"
     pg_status=2
 else
+    say "Postgres answered after $waited s"
     say "Postgres: seeds $VOIDFORGE_CRASH_SEED_BASE..$((VOIDFORGE_CRASH_SEED_BASE + VOIDFORGE_CRASH_PG_SEEDS))"
     "$here/database.sh" --nightly-crash 2>&1 | tee "$log_dir/postgres.log"
     pg_status=${PIPESTATUS[0]}

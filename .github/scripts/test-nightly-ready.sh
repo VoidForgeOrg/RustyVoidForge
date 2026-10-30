@@ -117,6 +117,13 @@ sim late 3 1 3 3 2
 check "sim: every service late, the run reaches the bots (exit 1, their fake)" "$code" 1
 check "sim: and says why" "$(grep -c 'nightly-sim: failed: the bots exited 1: sim FAILED' "$tmp/late.log")" 1
 check "sim: past serve's wait" "$(grep -c 'nightly-sim: serve is ready on' "$tmp/late.log")" 1
+# Each wait's length on success (QA's A2): the late services took at least their lateness.
+ready_after() { sed -n "s/^$2 after \([0-9]*\) s.*/\1/p" "$tmp/$1.log" | head -1; }
+check "sim: Postgres's wait, said" "$(within "$(ready_after late 'nightly-sim: Postgres answered')" 3 20)" yes
+check "sim: the holder's wait, said" "$(within "$(ready_after late 'nightly-sim: claimed [a-z0-9_]* on the server')" 1 20)" yes
+check "sim: dex's wait, said" "$(within "$(ready_after late 'nightly-sim: dex granted bot1 a token')" 3 20)" yes
+check "sim: Prometheus's wait, said" "$(within "$(ready_after late "nightly-sim: the collector's Prometheus answered")" 3 20)" yes
+check "sim: serve's wait, said" "$(within "$(ready_after late 'nightly-sim: serve is ready on [0-9.:]*')" 2 20)" yes
 [ "$code" = 1 ] || tail -5 "$tmp/late.log"
 
 sim pg-never 1000 0 0 0 0 NIGHTLY_READY_WAIT=4
@@ -136,7 +143,7 @@ check "sim: with dex's last answer" "$(grep -c "nightly-sim: infra: dex at .* do
 sim prometheus-never 0 0 0 1000 0 NIGHTLY_READY_WAIT=4
 check "sim: Prometheus never answers: infra" "$code" 3
 check "sim: after its bound, said" "$(within "$(waited "$tmp/prometheus-never.log")" 4 20)" yes
-check "sim: and why" "$(grep -c "nightly-sim: infra: the collector's Prometheus isn't reachable" "$tmp/prometheus-never.log")" 1
+check "sim: with Prometheus's last answer" "$(grep -c "nightly-sim: infra: the collector's Prometheus isn't reachable at .* (HTTP 503, waited" "$tmp/prometheus-never.log")" 1
 
 sim serve-never 0 0 0 0 1000 NIGHTLY_SERVE_WAIT=4
 check "sim: serve never answers: infra" "$code" 3
@@ -158,6 +165,7 @@ crash() {
 crash crash-late 3
 check "crash: Postgres late, the run reaches the database stage and passes" "$code" 0
 check "crash: past the probe" "$(grep -c 'database.sh (fake): passed' "$tmp/crash-late.log")" 1
+check "crash: its wait, said" "$(within "$(ready_after crash-late 'nightly-crash: Postgres answered')" 3 20)" yes
 [ "$code" = 0 ] || tail -5 "$tmp/crash-late.log"
 crash crash-never 1000 NIGHTLY_READY_WAIT=4
 check "crash: Postgres never answers: infra" "$code" 3
