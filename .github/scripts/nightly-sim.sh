@@ -24,7 +24,8 @@
 # nightly-latency.py), NIGHTLY_LOG_DIR (default target/nightly/sim), GITHUB_STEP_SUMMARY;
 # NIGHTLY_PSQL (a psql command for the server, instead of the stack's), NIGHTLY_SWEEP_ONLY.
 # Exit codes: 0 passed; 1 a check failed (a defect); 3 not ready (dex, Postgres, the collector or
-# serve): infrastructure, no verdict on the code.
+# serve): infrastructure, no verdict on the code. Each readiness probe waits, bounded
+# (nightly-ready.sh): the services NIGHTLY_READY_WAIT seconds (120), serve NIGHTLY_SERVE_WAIT (60).
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -47,6 +48,10 @@ say() { echo "nightly-sim: $*" >&2; }
 # Usage errors first, before the EXIT trap: they print no summary.
 case "$db" in "$prefix"[0-9]*_[0-9]*) ;; *) say "refusing database $db"; exit 2 ;; esac
 case "$minutes" in ''|*[!0-9]*) say "SIM_MINUTES must be whole minutes"; exit 2 ;; esac
+# shellcheck source=nightly-ready.sh
+. "$here/nightly-ready.sh"
+serve_wait="${NIGHTLY_SERVE_WAIT:-60}"
+case "$serve_wait" in ''|*[!0-9]*) say "NIGHTLY_SERVE_WAIT must be whole seconds"; exit 2 ;; esac
 # The workflow's sim job has 200 minutes: 150 to play leaves ~50 over the build and checks.
 [ "$minutes" -ge 1 ] && [ "$minutes" -le 150 ] || { say "SIM_MINUTES must be 1 to 150"; exit 2; }
 mkdir -p "$log_dir"
@@ -94,8 +99,12 @@ trap cleanup EXIT
 finish() { outcome=$1; why=$2; say "$outcome: $why"; case "$outcome" in passed) exit 0 ;; infra) exit 3 ;; *) exit 1 ;; esac; }
 
 
-# 1. The stack.
-sql "SELECT 1" > /dev/null 2>&1 || finish infra "can't reach the stack's Postgres"
+# 1. The stack. Each probe waits, bounded: compose's healthy can come seconds before an answer.
+postgres_answers() { timeout 15 "${psql[@]}" -c "SELECT 1" < /dev/null > /dev/null 2>&1; }
+ready_within "$ready_wait" 2 postgres_answers \
+    || finish infra "can't reach the stack's Postgres (waited $waited s)"
+# Each wait's length on success too (QA's A2): how close the nights come to the bound.
+say "Postgres answered after $waited s"
 # This run's claim on the shared server, before its database exists and for its whole length, the
 # connection-free phases too (after CREATE, while the invariants build): a session named after the
 # database, ended on exit. Another seat's sweep reads liveness here, never from ps: seats run in
@@ -104,9 +113,10 @@ sql "SELECT 1" > /dev/null 2>&1 || finish infra "can't reach the stack's Postgre
 "${psql[@]:0:${#psql[@]}-1}" "dbname=postgres application_name=$db" \
     -c "SELECT pg_sleep($(( (minutes + 60) * 60 )))" < /dev/null > /dev/null 2>&1 &
 holder_pid=$!
-for _ in $(seq 1 60); do [ "$(held "$db")" != 0 ] && break; sleep 0.5; done
-[ "$(held "$db")" != 0 ] || finish infra "this run's holder session never appeared on the server"
-say "claimed $db on the server (a session named after it, held until this run ends)"
+claim_held() { [ "$(held "$db")" != 0 ]; }
+ready_within 30 0.5 claim_held \
+    || finish infra "this run's holder session never appeared on the server (waited $waited s)"
+say "claimed $db on the server after $waited s (a session named after it, held until this run ends)"
 # Leftovers of runs that never reached their EXIT trap: drop those no session holds or uses (DROP
 # without FORCE refuses one that gains a connection meanwhile), list those held, and leave any
 # other name alone. Never this run's own.
@@ -123,11 +133,24 @@ for old in $(sql "SELECT datname FROM pg_database WHERE datname LIKE 'voidforge\
 done
 # NIGHTLY_SWEEP_ONLY: the claim and the sweep, then stop (test-nightly-sweep.sh, in the database job).
 [ -n "${NIGHTLY_SWEEP_ONLY:-}" ] && exit 0
-grant=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
-    -d 'grant_type=password&username=bot1%40voidforge.test&password=bot1-local-test-password&client_id=voidforge-cli&scope=openid' \
-    || true)
-[ "$grant" = 200 ] || finish infra "dex at $issuer doesn't grant bot1 a token (HTTP $grant): it needs deploy/dex/config.ci.yaml (locally, a throwaway dex on its own port: E2E_ISSUER)"
-curl -sf -o /dev/null "$prometheus/api/v1/query?query=up" || finish infra "the collector's Prometheus isn't reachable at $prometheus"
+grant=
+dex_grants() {
+    grant=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST "$issuer/token" \
+        -d 'grant_type=password&username=bot1%40voidforge.test&password=bot1-local-test-password&client_id=voidforge-cli&scope=openid' \
+        || true)
+    [ "$grant" = 200 ]
+}
+ready_within "$ready_wait" 2 dex_grants \
+    || finish infra "dex at $issuer doesn't grant bot1 a token (HTTP $grant, waited $waited s): it needs deploy/dex/config.ci.yaml (locally, a throwaway dex on its own port: E2E_ISSUER)"
+say "dex granted bot1 a token after $waited s"
+answer=
+prometheus_answers() {
+    answer=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$prometheus/api/v1/query?query=up" || true)
+    [ "$answer" = 200 ]
+}
+ready_within "$ready_wait" 2 prometheus_answers \
+    || finish infra "the collector's Prometheus isn't reachable at $prometheus (HTTP $answer, waited $waited s)"
+say "the collector's Prometheus answered after $waited s"
 
 # 2. The binaries.
 cargo build -q --release --locked -p voidforge-server -p voidforge-bots -p voidforge-replay \
@@ -148,14 +171,15 @@ OTEL_RESOURCE_ATTRIBUTES="service.instance.id=$run" VOIDFORGE_DATABASE_URL="$url
     > "$log_dir/serve.log" 2>&1 &
 serve_pid=$!
 addr=
-for _ in $(seq 1 300); do
+# Ready: its line in the log, then an answer on that address; serve exiting ends the wait.
+serve_answers() {
     addr=$(sed -n 's/^ready: listening on \([^,]*\),.*/\1/p' "$log_dir/serve.log")
-    [ -n "$addr" ] && break
-    kill -0 "$serve_pid" 2> /dev/null || break
-    sleep 0.2
-done
-[ -n "$addr" ] && curl -sf -o /dev/null "http://$addr/openapi.json" || finish infra "serve isn't ready (see $log_dir/serve.log)"
-say "serve is ready on $addr (pid $serve_pid); the bots play for $minutes min, seed $seed"
+    [ -n "$addr" ] && curl -sf -m 10 -o /dev/null "http://$addr/openapi.json" && return 0
+    kill -0 "$serve_pid" 2> /dev/null || return 125
+    return 1
+}
+ready_within "$serve_wait" 0.2 serve_answers || finish infra "serve isn't ready (waited $waited s; see $log_dir/serve.log)"
+say "serve is ready on $addr after $waited s (pid $serve_pid); the bots play for $minutes min, seed $seed"
 started=$(date +%s)
 
 # 5. The bots.

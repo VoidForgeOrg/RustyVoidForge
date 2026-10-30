@@ -9,6 +9,10 @@ the raw bucket counts first so a run with no samples fails loudly instead of rea
 p50 and p99 of a step by kind and of the append, waiting (within the same bound) until every kind
 with samples has both: an incomplete read fails. Bounds are checked when given.
 
+A query that fails (refused, an HTTP error, a cut-off or unreadable answer: Grafana's proxy
+restarting, as on night 7, slice 53) is retried within the same deadline, then is exit 3. Only
+reading is retried; the bounds are compared once, on a complete read.
+
 Usage: nightly-latency.py <instance> <window> [--step-p99-max S] [--append-p99-max S]
   <window>  the PromQL range covering the run, for example 35m
 Environment: NIGHTLY_PROMETHEUS (default
@@ -17,9 +21,10 @@ Environment: NIGHTLY_PROMETHEUS (default
 Prints one line, `@nightly-latency <json>`.
 Exit codes: 0 read (and within the bounds given); 1 over a bound, or no samples or no quantiles
 after the wait;
-2 usage; 3 Prometheus not reachable.
+2 usage; 3 Prometheus not reachable, or its answers unreadable, until the deadline.
 """
 
+import http.client
 import json
 import os
 import sys
@@ -38,16 +43,30 @@ class Unreachable(Exception):
     pass
 
 
-def query(q):
+def ask(q):
     url = f"{BASE}/api/v1/query?" + urllib.parse.urlencode({"query": q})
     try:
         with urllib.request.urlopen(url, timeout=15) as resp:
             body = json.load(resp)
-    except OSError as e:
-        raise Unreachable(str(e)) from e
-    if body.get("status") != "success":
-        raise Unreachable(f"query failed: {body}")
-    return body["data"]["result"]
+        if body.get("status") != "success":
+            raise Unreachable(f"query failed: {body}")
+        return body["data"]["result"]
+    # Every transport and parse failure is the collector's, never a verdict (R1-1): a refused or
+    # HTTP-error answer (OSError), a cut-off body or bad status line (HTTPException), and a body
+    # that isn't the API's JSON (ValueError, or the wrong shape).
+    except (OSError, http.client.HTTPException, ValueError, AttributeError, KeyError, TypeError) as e:
+        raise Unreachable(f"{type(e).__name__}: {e}") from e
+
+
+def query(q, deadline):
+    """ask(q), retried every 5 s while the deadline lasts (QA's A1); Unreachable past it."""
+    while True:
+        try:
+            return ask(q)
+        except Unreachable:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(5)
 
 
 def value(series):
@@ -73,8 +92,8 @@ def main(argv):
         # The raw counts first: a run whose samples never arrived must not read as fast.
         deadline = time.monotonic() + WAIT
         while True:
-            counts = query(f"sum by (kind) (increase({STEP}_count{{{sel}}}[{window}]))")
-            appends = query(f"sum(increase({APPEND}_count{{{sel}}}[{window}]))")
+            counts = query(f"sum by (kind) (increase({STEP}_count{{{sel}}}[{window}]))", deadline)
+            appends = query(f"sum(increase({APPEND}_count{{{sel}}}[{window}]))", deadline)
             steps = {s["metric"].get("kind", "?"): value(s) or 0 for s in counts}
             appended = value(appends[0]) if appends else 0
             if steps.get("command", 0) > 0 and (appended or 0) > 0:
@@ -92,9 +111,9 @@ def main(argv):
             result = {"instance": instance, "window": window, "steps": steps, "appends": appended,
                       "step": {}, "append": {}}
             for q in ("0.5", "0.99"):
-                for s in query(f"histogram_quantile({q}, sum by (le, kind) (rate({STEP}_bucket{{{sel}}}[{window}])))"):
+                for s in query(f"histogram_quantile({q}, sum by (le, kind) (rate({STEP}_bucket{{{sel}}}[{window}])))", deadline):
                     result["step"].setdefault(s["metric"].get("kind", "?"), {})[f"p{int(float(q) * 100)}"] = value(s)
-                r = query(f"histogram_quantile({q}, sum by (le) (rate({APPEND}_bucket{{{sel}}}[{window}])))")
+                r = query(f"histogram_quantile({q}, sum by (le) (rate({APPEND}_bucket{{{sel}}}[{window}])))", deadline)
                 result["append"][f"p{int(float(q) * 100)}"] = value(r[0]) if r else None
             missing = sorted(f"step {k}" for k in need
                              if any(result["step"].get(k, {}).get(p) is None for p in ("p50", "p99")))
@@ -110,7 +129,8 @@ def main(argv):
                 return 1
             time.sleep(5)
     except Unreachable as e:
-        print(f"error: Prometheus isn't reachable at {BASE}: {e}", file=sys.stderr)
+        print(f"error: Prometheus isn't reachable at {BASE} (retried for {WAIT:.0f} s): {e}",
+              file=sys.stderr)
         return 3
     over = []
     step_max = bounds.get("--step-p99-max")

@@ -45,12 +45,13 @@ jobs:
         run: python3 .github/scripts/test-web-login-ready.py
       - name: The images' pins and their compose project (P5.2, D-065)
         run: python3 .github/scripts/check-images.py --static
-      - name: The nightly's permissions and report path, and their regression cases (P5.3, D-066)
+      - name: The nightly's permissions, report path and readiness waits, and their regression cases (P5.3, D-066)
         run: |
           python3 .github/scripts/check-nightly.py
           python3 .github/scripts/check-nightly.py --self-test
           .github/scripts/test-nightly-issue.sh
           python3 .github/scripts/test-nightly-latency.py
+          .github/scripts/test-nightly-ready.sh
       - name: The scratch-database guard's regression cases (P5.4, D-067)
         run: .github/scripts/test-scratch-db.sh
       - name: Format

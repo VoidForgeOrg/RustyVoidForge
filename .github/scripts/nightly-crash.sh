@@ -13,6 +13,7 @@
 #   DATABASE_URL, PSQL          as database.sh: the voidforge_test database, and psql for its server
 #   NIGHTLY_LOG_DIR             where the logs go (default target/nightly/crash)
 #   GITHUB_STEP_SUMMARY         the job summary to append to (default: stdout)
+#   NIGHTLY_READY_WAIT          seconds Postgres may take to answer (default 120; nightly-ready.sh)
 # Exit codes: 0 passed; 1 a check failed (a defect, or the build failed); 3 Postgres or the database
 # stage wasn't ready (infrastructure: no verdict on the code).
 set -uo pipefail
@@ -31,6 +32,8 @@ log_dir="${NIGHTLY_LOG_DIR:-target/nightly/crash}"
 mkdir -p "$log_dir"
 rm -f "$log_dir/file.log" "$log_dir/postgres.log"
 say() { echo "nightly-crash: $*" >&2; }
+# shellcheck source=nightly-ready.sh
+. "$here/nightly-ready.sh"
 
 finish() {
     local outcome=$1 code=$2
@@ -52,10 +55,14 @@ file_status=${PIPESTATUS[0]}
 
 # Both stores run even when the first fails: the night reports everything it can. A defect in
 # either outranks Postgres not being ready.
-if ! "${psql[@]}" -X -q -At -d postgres -c 'SELECT 1' < /dev/null > /dev/null; then
-    say "Postgres isn't reachable through PSQL"
+# Readiness waits, bounded (nightly-ready.sh): the service is healthy before the job's steps, but a
+# night never rests on one probe.
+postgres_answers() { timeout 15 "${psql[@]}" -X -q -At -d postgres -c 'SELECT 1' < /dev/null > /dev/null; }
+if ! ready_within "$ready_wait" 2 postgres_answers; then
+    say "Postgres isn't reachable through PSQL (waited $waited s)"
     pg_status=2
 else
+    say "Postgres answered after $waited s"
     say "Postgres: seeds $VOIDFORGE_CRASH_SEED_BASE..$((VOIDFORGE_CRASH_SEED_BASE + VOIDFORGE_CRASH_PG_SEEDS))"
     "$here/database.sh" --nightly-crash 2>&1 | tee "$log_dir/postgres.log"
     pg_status=${PIPESTATUS[0]}
